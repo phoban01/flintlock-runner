@@ -1,0 +1,4 @@
+reports/
+# Regenerated from docs/requirements on every `duvet report`.
+requirements/
+specifications/

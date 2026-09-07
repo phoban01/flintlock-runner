@@ -1,0 +1,68 @@
+# duvet configuration — see docs/requirements/README.md
+# Schema reference: https://awslabs.github.io/duvet/config.html
+'$schema' = "https://awslabs.github.io/duvet/config/v0.4.0.json"
+
+# All Go sources. Test files are matched by this same glob, so tests mark
+# themselves with an explicit `//= type=test` line (a second [[source]] with
+# `type = "test"` would scan _test.go files twice, once as implementation).
+[[source]]
+pattern = "cmd/**/*.go"
+
+[[source]]
+pattern = "internal/**/*.go"
+
+[[source]]
+pattern = "pkg/**/*.go"
+
+[[specification]]
+source = "docs/requirements/01-gitlab-protocol.md"
+format = "markdown"
+
+[[specification]]
+source = "docs/requirements/02-executor.md"
+format = "markdown"
+
+[[specification]]
+source = "docs/requirements/03-scheduler.md"
+format = "markdown"
+
+[[specification]]
+source = "docs/requirements/04-pool-manager.md"
+format = "markdown"
+
+[[specification]]
+source = "docs/requirements/05-orchestrator.md"
+format = "markdown"
+
+[[specification]]
+source = "docs/requirements/06-fleet.md"
+format = "markdown"
+
+[[specification]]
+source = "docs/requirements/07-configuration.md"
+format = "markdown"
+
+[[specification]]
+source = "docs/requirements/08-observability.md"
+format = "markdown"
+
+[[specification]]
+source = "docs/requirements/09-security.md"
+format = "markdown"
+
+[report.html]
+enabled = true
+path = ".duvet/reports/report.html"
+blob-link = "${{ DUVET_BLOB_LINK || '' }}"
+issue-link = "${{ DUVET_ISSUE_LINK || '' }}"
+
+[report.json]
+enabled = true
+path = ".duvet/reports/report.json"
+
+# The snapshot is committed. `duvet report --ci` fails when coverage changes
+# without the snapshot being regenerated, which keeps requirement coverage
+# from regressing silently.
+[report.snapshot]
+enabled = true
+path = ".duvet/snapshot.txt"
