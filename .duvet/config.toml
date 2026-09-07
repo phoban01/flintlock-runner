@@ -53,8 +53,8 @@ format = "markdown"
 [report.html]
 enabled = true
 path = ".duvet/reports/report.html"
-blob-link = "${{ DUVET_BLOB_LINK || '' }}"
-issue-link = "${{ DUVET_ISSUE_LINK || '' }}"
+blob-link = "${{ DUVET_BLOB_LINK || 'https://github.com/phoban01/flintlock-runner/blob/main' }}"
+issue-link = "${{ DUVET_ISSUE_LINK || 'https://github.com/phoban01/flintlock-runner/issues' }}"
 
 [report.json]
 enabled = true
