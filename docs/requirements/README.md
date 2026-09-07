@@ -14,9 +14,9 @@ the coverage report.
 | `00-glossary.md` | – | Defined terms used by every other document (non-normative) |
 | `01-gitlab-protocol.md` | `GL` | How the Runner speaks to GitLab, built on the gitlab-runner Go packages |
 | `02-executor.md` | `EX` | The flintlock executor and the Guest Transport that runs stages in a microVM |
-| `03-scheduler.md` | `SC` | The scheduling component: capacity, profiles, allocation, placement, cleanup |
+| `03-scheduler.md` | `SC` | The scheduling component: capacity, profiles, claims, placement, leases |
 | `04-pool-manager.md` | `PL` | Integration with the flintlock warm pool manager (battery) |
-| `05-orchestrator.md` | `BR` | Integration with flintlock hosts directly and through the orchestrator (brigade) |
+| `05-hosts.md` | `HO` | The flintlock host client used for the guest transport and placement lookup |
 | `06-fleet.md` | `FL` | Standing up and operating a fleet of EC2 bare-metal hosts |
 | `07-configuration.md` | `CF` | The configuration surface |
 | `08-observability.md` | `OB` | Logging, metrics, health, job-log annotations |
@@ -56,7 +56,9 @@ Scheduler, the Guest Transport, the Fleet Controller).
    pandoc-style attribute such as `## Job acquisition {#job-acquisition}`.
    Annotations target `docs/requirements/<file>.md#<id>`, so renaming a
    heading without keeping its id breaks every citation under it.
-5. **Identifiers are never reused.** When a requirement is retired, mark it
+5. **Identifiers are never reused once cited.** Until the first code citation
+   lands, documents may be renumbered wholesale. After that, when a
+   requirement is retired, mark it
    `(withdrawn)` and keep the number; the next requirement takes the next
    free number in that prefix.
 6. **Explanatory prose is separate.** Rationale, examples and background go

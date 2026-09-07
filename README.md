@@ -1,14 +1,13 @@
 # flintlock-runner
 
 A GitLab CI runner that runs every job in its own Firecracker/Cloud Hypervisor
-microVM on a fleet of bare-metal EC2 hosts. Built on three liquidmetal
+microVM on a fleet of bare-metal EC2 hosts. Built on two liquidmetal
 components: [flintlock](https://github.com/liquidmetal-dev/flintlock) runs
-the microVMs, [brigade](https://github.com/liquidmetal-dev/brigade) places
-them across the fleet, and [battery](https://github.com/liquidmetal-dev/battery)
-keeps warm pools of them ready to lease. The runner itself is built from the
-gitlab-runner Go packages with a scheduling component inserted at the
-executor boundary; it never talks to a host to create a microVM and never
-chooses a host itself.
+the microVMs and [battery](https://github.com/liquidmetal-dev/battery) keeps
+warm pools of them on the hosts and leases them out. The runner itself is
+built from the gitlab-runner Go packages with a scheduling component
+inserted at the executor boundary; it never creates, places or deletes a
+microVM, it only claims and releases them.
 
 The project is currently at the specification stage. There is no Go code
 yet; what exists is:
@@ -40,10 +39,10 @@ make duvet-ci         # fails if .duvet/snapshot.txt is stale
 ```
 cmd/flintlock-runner/   main: run, config show, fleet {provision,verify,drain,teardown,emit-userdata}
 internal/executor/      common.ExecutorProvider + common.Executor ("flintlock")
-internal/scheduler/     capacity, profiles, allocation, placement resolution, GC, lease keep-alive
+internal/scheduler/     capacity, profiles, claims, placement resolution, lease keep-alive
 internal/transport/     Guest Transport: exec (MicroVMExec), ssh (MicroVMSSHProxy / TCP)
-internal/flintlock/     gRPC client for hosts and brigade, plus fakes
-internal/poolmgr/       gRPC client for battery, plus fake
-internal/fleet/         EC2 discovery, SSM/SSH execution, host provisioning, inventory
+internal/flintlock/     gRPC client for hosts (exec, ssh proxy, GetMicroVM, ServerInfo)
+internal/poolmgr/       gRPC client for battery, plus an in-process fake that is itself a minimal pool manager
+internal/fleet/         EC2 discovery, SSM/SSH execution, host provisioning, host services, inventory
 internal/config/        YAML schema, validation, RunnerConfig translation
 ```

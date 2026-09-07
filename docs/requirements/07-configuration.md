@@ -1,8 +1,7 @@
 # Configuration {#configuration}
 
 This document specifies the Runner's configuration surface. One YAML file
-describes GitLab access, the Inventory, the Orchestrator, the Pool Manager,
-the Profiles, the Scheduler limits and the Fleet Controller inputs.
+describes GitLab access, the Inventory, the Pool Manager, the Profiles, the Scheduler limits and the Fleet Controller inputs.
 The Runner translates that file into the `RunnerConfig` structure the
 gitlab-runner packages expect, so operators never write a `config.toml`.
 
@@ -22,8 +21,8 @@ gitlab-runner packages expect, so operators never write a `config.toml`.
   the first invalid field and the reason.
 - **CF-005** The Runner SHALL apply documented defaults to every optional
   field so that a minimal configuration contains only the GitLab URL, the
-  runner token, the Orchestrator endpoint, the Pool Manager endpoint, one
-  Host and one Profile with a Pool size.
+  runner token, the Pool Manager endpoint, one Host and one Profile with a
+  Pool size.
 - **CF-006** The Runner SHALL provide a `config show` command that prints the
   effective configuration with every secret value redacted.
 - **CF-007** When the Runner receives `SIGHUP`, the Runner SHALL reload the
@@ -39,8 +38,9 @@ gitlab-runner packages expect, so operators never write a `config.toml`.
   certificate authority, client certificate and client key paths.
 - **CF-011** The Runner SHALL map the GitLab section onto the `RunnerConfig`
   and `Config` structures of the gitlab-runner `common` package.
-- **CF-012** The Runner SHALL default the concurrency limit to the sum of the
-  declared Pool sizes plus the maximum number of Overflow MicroVMs.
+- **CF-012** The Runner SHALL default the concurrency limit to twice the sum
+  of the declared Pool sizes, because immediate-on-lease replenishment keeps
+  Jobs flowing beyond the idle Pool size.
 
 ## Profiles section {#profiles-section}
 
@@ -51,14 +51,13 @@ gitlab-runner packages expect, so operators never write a `config.toml`.
 - **CF-021** A Profile MAY declare image names and image glob patterns that
   map Job Images onto it, a kernel command line, an initrd image, additional
   volumes, a hypervisor provider, cloud-init user-data, a Guest Transport, a
-  user, a ready timeout, a Host selector, Orchestrator scheduling
-  constraints, an exhaustion policy, a maximum number of Overflow MicroVMs
-  and a maximum concurrency.
+  user, a ready timeout, a Host selector and a maximum concurrency.
 - **CF-022** Exactly one Profile MAY be marked as the Default Profile.
 - **CF-023** If two Profiles declare the same image name, then the Runner
   SHALL reject the configuration.
-- **CF-024** A Profile's exhaustion policy SHALL be either `overflow` or
-  `wait` and SHALL default to `overflow`.
+- **CF-024** A Profile's Host selector SHALL be expressed as label
+  requirements matched against Inventory labels and SHALL determine the
+  Pool's host list.
 - **CF-025** A Profile's pool settings SHALL contain the Pool size and MAY
   contain the Pool name and namespace, replenishment strategy, minimum size,
   create hooks, pre-lease hooks, hook failure policy, heartbeat interval and
@@ -76,44 +75,77 @@ gitlab-runner packages expect, so operators never write a `config.toml`.
 
 - **CF-030** An Inventory entry SHALL contain a Host name, a `flintlockd`
   gRPC endpoint, an architecture, a vCPU capacity and a memory capacity, and
-  MAY contain an Orchestrator endpoint, labels, a basic auth token, TLS
-  settings and installed version information.
+  MAY contain labels, a basic auth token, TLS settings, Host Service
+  addresses and installed version information.
+- **CF-032** The Host name in an Inventory entry SHALL be the name the Pool
+  Manager uses for that Host in `flintlock_hosts`.
 - **CF-031** The Runner SHALL reject an Inventory with duplicate Host names or
   duplicate endpoints.
 
-## Orchestrator and Pool Manager sections {#orchestrator-and-pool-manager-sections}
+## Pool Manager section {#pool-manager-section}
 
-- **CF-040** The Orchestrator section SHALL contain one or more endpoints, an
-  optional token with its authorization scheme, TLS settings and a request
-  deadline.
-- **CF-041** If the Orchestrator section is absent or has no endpoint, then
-  the Runner SHALL reject the configuration.
-- **CF-042** The Pool Manager section SHALL contain an endpoint, TLS
-  settings, a request deadline, a health backoff period, an events poll
-  interval, a pool declaration retry interval and a release retry limit.
-- **CF-043** If the Pool Manager section is absent or has no endpoint, then
+- **CF-040** The Pool Manager section SHALL contain an endpoint, TLS
+  settings, a request deadline, a health backoff period, a health probe
+  interval, an events poll interval, a pool declaration retry interval and a
+  release retry limit.
+- **CF-041** If the Pool Manager section is absent or has no endpoint, then
   the Runner SHALL reject the configuration.
 
 ## Scheduler section {#scheduler-section}
 
 - **CF-050** The Scheduler section SHALL contain the Runner namespace, the
-  Runner identity used in labels, the maximum number of Overflow MicroVMs,
-  the allocation timeout, the create timeout, the create poll interval, the
-  health probe interval, the unhealthy probe threshold, the garbage
-  collection interval, the orphan grace period, the maximum MicroVM lifetime,
-  the release retry limit and the keep-on-failure flag.
-- **CF-051** The Runner SHALL default the Runner identity to the runner name
-  combined with the system identifier so that two Runners with the same name
-  on different Control Nodes do not collect each other's MicroVMs.
+  allocation timeout, the Host health probe interval, the unhealthy probe
+  threshold, the keep-on-failure flag and the keep duration.
+- **CF-051** The Runner SHALL default the Runner namespace to the runner
+  name so that two Runners sharing one Pool Manager declare their Pools in
+  separate namespaces.
 
 ## Fleet section {#fleet-section}
 
 - **CF-060** The Fleet section SHALL contain the AWS region, the discovery
   tag key and value or explicit instance ids, the remote execution mode and
   its SSH settings, the provisioning parallelism, the pinned versions of
-  flintlock, Firecracker, Cloud Hypervisor, containerd, the Orchestrator and
-  the Pool Manager, the thin pool device, the guest subnet, the `flintlockd`
+  flintlock, Firecracker, Cloud Hypervisor, containerd and the Pool Manager,
+  the thin pool device, the guest subnet, the `flintlockd`
   port and auth settings, the Host reserve, and the paths for the generated
   Inventory and Runner configuration.
 - **CF-061** The Fleet section MAY contain launch template settings naming
   the Systems Manager parameters that hold secrets.
+
+## Host services section {#host-services-section}
+
+- **CF-070** The Host services section SHALL contain, for each of
+  `buildkit`, `go_proxy`, `registry_mirror` and `http_cache`, an enabled flag
+  that defaults to true and a port.
+- **CF-071** The `buildkit` entry MAY contain a storage limit and a garbage
+  collection policy.
+- **CF-072** The `go_proxy` entry MAY contain the upstream proxy, a list of
+  private module patterns, the version control host those patterns resolve
+  to, the Systems Manager parameter holding the read-only credential for
+  them, a private module revalidation interval, a storage limit and a list of
+  modules to pre-warm.
+- **CF-076** If the `go_proxy` entry lists private module patterns without a
+  credential parameter, then the Runner SHALL reject the configuration.
+- **CF-073** The `registry_mirror` entry MAY contain a list of upstream
+  registries with optional credential parameter names, a storage limit and a
+  list of images to pre-warm.
+- **CF-074** The `http_cache` entry MAY contain a list of upstreams, each
+  with a name, an upstream URL, a size limit, a time-to-live and the
+  environment variable name the Executor injects for it.
+- **CF-075** The Host services section SHALL contain the cache volume device
+  or directory and its total size cap.
+
+## Distributed cache section {#distributed-cache-section}
+
+- **CF-080** The Distributed cache section SHALL contain an S3 bucket name,
+  region and optional prefix, and MAY contain an endpoint for S3-compatible
+  stores.
+- **CF-081** The Runner SHALL map the Distributed cache section onto the
+  gitlab-runner cache configuration so that the `cache:` keyword in a
+  pipeline stores and restores through that bucket.
+- **CF-082** The Runner SHALL configure the distributed cache so that
+  pre-signed URLs are generated on the Control Node and no AWS credentials
+  are passed into the guest.
+- **CF-083** If the Distributed cache section is absent, then the Runner
+  SHALL log at startup that the `cache:` keyword is unavailable and SHALL
+  fail Jobs that use it with the failure reason `runner_unsupported`.

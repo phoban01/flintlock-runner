@@ -165,9 +165,8 @@ SPECIFICATION: [Executor](docs/requirements/02-executor.md)
     TEXT[!MUST]:   the builds directory, cache directory and helper binary path used in
     TEXT[!MUST]:   generated scripts are those of the Profile.
     TEXT[!MUST]: - **EX-019** The Executor SHALL write a collapsible section to the Job log
-    TEXT[!MUST]:   during `Prepare` that names the Profile, whether the MicroVM was warm or
-    TEXT[!MUST]:   overflow, the Host name, the MicroVM uid and the time taken to become
-    TEXT[!MUST]:   ready.
+    TEXT[!MUST]:   during `Prepare` that names the Profile, the Pool, the Host name, the
+    TEXT[!MUST]:   MicroVM uid and the time taken to become ready.
 
   SECTION: [Run](#run)
     TEXT[!MUST]: - **EX-020** When `Run` is called for a Stage, the Executor SHALL execute the
@@ -239,96 +238,107 @@ SPECIFICATION: [Executor](docs/requirements/02-executor.md)
     TEXT[!MUST]:   Guest Transport SHALL fail the in-flight operation within the configured
     TEXT[!MUST]:   transport deadline.
 
+  SECTION: [Host service environment](#host-service-environment)
+    TEXT[!MUST]: - **EX-060** When the Placement of a Job's MicroVM is known, the Executor
+    TEXT[!MUST]:   SHALL add to the Job's environment the variables that point at the Host
+    TEXT[!MUST]:   Services of that Host: `BUILDKIT_HOST`, `GOPROXY`, `GOFLAGS` with
+    TEXT[!MUST]:   `-modcacherw`, the registry mirror address as `CI_REGISTRY_MIRROR`, and
+    TEXT[!MUST]:   one variable per configured HTTP cache upstream under the name given in
+    TEXT[!MUST]:   the configuration.
+    TEXT[!MUST]: - **EX-065** When the Go module proxy is configured with private module
+    TEXT[!MUST]:   patterns, the Executor SHALL set `GONOSUMDB` to those patterns and
+    TEXT[!MUST]:   `GONOPROXY` to the empty string so that the Go toolchain fetches private
+    TEXT[!MUST]:   modules through the Host's proxy and does not consult the public checksum
+    TEXT[!MUST]:   database for them.
+    TEXT[!MUST]: - **EX-066** The Executor SHALL NOT set `GOPRIVATE`, because it would make
+    TEXT[!MUST]:   the Go toolchain bypass the Host's proxy for private modules.
+    TEXT[!MUST]: - **EX-061** The Executor SHALL NOT override a variable that the Job itself
+    TEXT[!MUST]:   sets with the same name, so that a job can opt out of a Host Service.
+    TEXT[!MUST]: - **EX-062** Where a Host Service is disabled or the Host's Inventory entry
+    TEXT[!MUST]:   lacks its address, the Executor SHALL omit that service's variables rather
+    TEXT[!MUST]:   than point them at an unreachable address.
+    TEXT[!MUST]: - **EX-063** The Executor SHALL add the Host Service variables before the
+    TEXT[!MUST]:   `prepare_script` Stage so that every Stage, including `get_sources`, sees
+    TEXT[!MUST]:   them.
+    TEXT[!MUST]: - **EX-064** The Executor SHALL write a line to the `flintlock_prepare`
+    TEXT[!MUST]:   section of the Job log naming the Host Services that were made available
+    TEXT[!MUST]:   to the Job.
+
 SPECIFICATION: [Scheduler](docs/requirements/03-scheduler.md)
   SECTION: [Capacity](#capacity)
     TEXT[!MUST]: - **SC-001** The Scheduler SHALL maintain a count of held Reservations and
     TEXT[!MUST]:   active Allocations and SHALL treat their sum as the number of Slots in use.
     TEXT[!MUST]: - **SC-002** The Scheduler SHALL compute available capacity as the lesser of
     TEXT[!MUST]:   the number of unused Slots and the sum of the number of available warm
-    TEXT[!MUST]:   MicroVMs across all Pools plus the unused overflow headroom.
-    TEXT[!MUST]: - **SC-003** The Scheduler SHALL compute the unused overflow headroom as the
-    TEXT[!MUST]:   configured maximum number of Overflow MicroVMs minus the number of Overflow
-    TEXT[!MUST]:   MicroVMs currently allocated or being created.
-    TEXT[!MUST]: - **SC-004** When a Reservation is requested and available capacity is
+    TEXT[!MUST]:   MicroVMs across all Pools.
+    TEXT[!MUST]: - **SC-003** When a Reservation is requested and available capacity is
     TEXT[!MUST]:   greater than zero, the Scheduler SHALL grant a Reservation and count it as
     TEXT[!MUST]:   a Slot in use.
-    TEXT[!MUST]: - **SC-005** When a Reservation is requested and available capacity is zero,
+    TEXT[!MUST]: - **SC-004** When a Reservation is requested and available capacity is zero,
     TEXT[!MUST]:   the Scheduler SHALL refuse the Reservation.
-    TEXT[!MUST]: - **SC-006** When a Reservation is released without an Allocation, the
+    TEXT[!MUST]: - **SC-005** When a Reservation is released without an Allocation, the
     TEXT[!MUST]:   Scheduler SHALL return its Slot immediately.
-    TEXT[!MUST]: - **SC-007** Where a Profile has a configured maximum concurrency, the
+    TEXT[!MUST]: - **SC-006** Where a Profile has a configured maximum concurrency, the
     TEXT[!MUST]:   Scheduler SHALL NOT hold more Allocations for that Profile than the
     TEXT[!MUST]:   maximum.
-    TEXT[!MUST]: - **SC-008** The Scheduler SHALL be safe for concurrent use by the number of
+    TEXT[!MUST]: - **SC-007** The Scheduler SHALL be safe for concurrent use by the number of
     TEXT[!MUST]:   workers the run loop starts.
-    TEXT[!MUST]: - **SC-009** While the Orchestrator is unhealthy, the Scheduler SHALL count
-    TEXT[!MUST]:   the unused overflow headroom as zero.
-    TEXT[!MUST]: - **SC-010** When starting, the Scheduler SHALL NOT grant any Reservation
-    TEXT[!MUST]:   until it has successfully contacted both the Pool Manager and the
-    TEXT[!MUST]:   Orchestrator at least once.
+    TEXT[!MUST]: - **SC-008** When starting, the Scheduler SHALL NOT grant any Reservation
+    TEXT[!MUST]:   until it has successfully contacted the Pool Manager at least once.
+    TEXT[!MUST]: - **SC-009** The Scheduler SHALL count a Pool's MicroVMs that are being
+    TEXT[!MUST]:   provisioned or running create hooks as unavailable when computing
+    TEXT[!MUST]:   capacity.
 
   SECTION: [Profile resolution](#profile-resolution)
-    TEXT[!MUST]: - **SC-011** The Scheduler SHALL resolve a Profile for a Job by matching the
+    TEXT[!MUST]: - **SC-010** The Scheduler SHALL resolve a Profile for a Job by matching the
     TEXT[!MUST]:   Job Image name against Profile image names exactly, then against Profile
     TEXT[!MUST]:   image glob patterns in configuration order, then by falling back to the
     TEXT[!MUST]:   Default Profile.
-    TEXT[!MUST]: - **SC-012** If a Job has no Job Image and no Default Profile is configured,
+    TEXT[!MUST]: - **SC-011** If a Job has no Job Image and no Default Profile is configured,
     TEXT[!MUST]:   then the Scheduler SHALL report that no Profile can be resolved.
-    TEXT[!MUST]: - **SC-013** If a Job Image matches no Profile and the configuration does not
+    TEXT[!MUST]: - **SC-012** If a Job Image matches no Profile and the configuration does not
     TEXT[!MUST]:   allow falling back to the Default Profile for unknown images, then the
     TEXT[!MUST]:   Scheduler SHALL report that no Profile can be resolved.
-    TEXT[!MUST]: - **SC-014** The Scheduler SHALL resolve the Profile before requesting any
+    TEXT[!MUST]: - **SC-013** The Scheduler SHALL resolve the Profile before claiming any
     TEXT[!MUST]:   MicroVM so that a Job with an unknown image fails without consuming a warm
     TEXT[!MUST]:   MicroVM.
 
   SECTION: [Allocation](#allocation)
     TEXT[!MUST]: - **SC-020** When an Allocation is requested for a Profile, the Scheduler
-    TEXT[!MUST]:   SHALL first attempt to claim a warm MicroVM from the Profile's Pool.
-    TEXT[!MUST]: - **SC-021** If the Pool has no warm MicroVM available and the Profile's
-    TEXT[!MUST]:   exhaustion policy is `overflow`, then the Scheduler SHALL create an Overflow
-    TEXT[!MUST]:   MicroVM for the Job through the Orchestrator.
-    TEXT[!MUST]: - **SC-022** If the Pool has no warm MicroVM available and the Profile's
-    TEXT[!MUST]:   exhaustion policy is `wait`, then the Scheduler SHALL retry the claim with
-    TEXT[!MUST]:   exponential backoff until the allocation timeout elapses.
-    TEXT[!MUST]: - **SC-023** If an Overflow MicroVM is needed and the unused overflow
-    TEXT[!MUST]:   headroom is zero, then the Scheduler SHALL keep retrying the claim and
-    TEXT[!MUST]:   re-checking the headroom with exponential backoff until one becomes
-    TEXT[!MUST]:   available or the allocation timeout elapses.
-    TEXT[!MUST]: - **SC-024** If the allocation timeout elapses before a MicroVM is obtained,
-    TEXT[!MUST]:   then the Scheduler SHALL return an allocation error naming the Profile, the
-    TEXT[!MUST]:   Pool and whether overflow was attempted.
-    TEXT[!MUST]: - **SC-025** When the Job's context is cancelled during allocation, the
-    TEXT[!MUST]:   Scheduler SHALL stop the allocation and release any MicroVM that was
+    TEXT[!MUST]:   SHALL claim a warm MicroVM from the Profile's Pool.
+    TEXT[!MUST]: - **SC-021** If the Pool has no warm MicroVM available, then the Scheduler
+    TEXT[!MUST]:   SHALL retry the claim with exponential backoff, waking early on a Pool
+    TEXT[!MUST]:   Manager event that reports a MicroVM in that Pool becoming available,
+    TEXT[!MUST]:   until the allocation timeout elapses.
+    TEXT[!MUST]: - **SC-022** If the allocation timeout elapses before a MicroVM is claimed,
+    TEXT[!MUST]:   then the Scheduler SHALL return an allocation error naming the Profile and
+    TEXT[!MUST]:   the Pool.
+    TEXT[!MUST]: - **SC-023** When the Job's context is cancelled during allocation, the
+    TEXT[!MUST]:   Scheduler SHALL stop the allocation and release any Lease that was
     TEXT[!MUST]:   obtained.
-    TEXT[!MUST]: - **SC-026** The Scheduler SHALL record for every Allocation the Job id, the
-    TEXT[!MUST]:   Profile name, the source (`warm` or `overflow`), the MicroVM uid, the Lease
-    TEXT[!MUST]:   id where applicable and the Placement.
-    TEXT[!MUST]: - **SC-027** The Scheduler SHALL log every allocation decision with the Job
-    TEXT[!MUST]:   id, Profile, source, Host name, MicroVM uid and elapsed time.
-    TEXT[!MUST]: - **SC-028** The Scheduler SHALL convert a Reservation into an Allocation
+    TEXT[!MUST]: - **SC-024** The Scheduler SHALL record for every Allocation the Job id, the
+    TEXT[!MUST]:   Profile name, the MicroVM uid, the Lease id and the Placement.
+    TEXT[!MUST]: - **SC-025** The Scheduler SHALL log every allocation with the Job id,
+    TEXT[!MUST]:   Profile, Host name, MicroVM uid and elapsed time from claim to Placement.
+    TEXT[!MUST]: - **SC-026** The Scheduler SHALL convert a Reservation into an Allocation
     TEXT[!MUST]:   without releasing the Slot in between.
 
   SECTION: [Placement](#placement)
-    TEXT[!MUST]: - **SC-030** The Scheduler SHALL send every `CreateMicroVM` request to the
-    TEXT[!MUST]:   Orchestrator and SHALL NOT select a Host for a MicroVM itself.
-    TEXT[!MUST]: - **SC-031** The Scheduler SHALL express a Profile's architecture and Host
-    TEXT[!MUST]:   selector as Orchestrator scheduling labels on every `CreateMicroVM` request
-    TEXT[!MUST]:   it sends for that Profile.
-    TEXT[!MUST]: - **SC-032** When a MicroVM is obtained, the Scheduler SHALL resolve its
-    TEXT[!MUST]:   Placement by calling `GetMicroVM` with the MicroVM's uid on each candidate
-    TEXT[!MUST]:   Host until one returns it.
-    TEXT[!MUST]: - **SC-033** When resolving the Placement of a warm MicroVM, the Scheduler
-    TEXT[!MUST]:   SHALL limit the candidate Hosts to those the Pool Manager reports for the
-    TEXT[!MUST]:   MicroVM's Pool.
-    TEXT[!MUST]: - **SC-034** When resolving the Placement of an Overflow MicroVM, the
-    TEXT[!MUST]:   Scheduler SHALL limit the candidate Hosts to those in the Inventory whose
-    TEXT[!MUST]:   labels and architecture satisfy the Profile.
-    TEXT[!MUST]: - **SC-035** The Scheduler SHALL cache the Placement of a MicroVM for its
-    TEXT[!MUST]:   lifetime.
-    TEXT[!MUST]: - **SC-036** If Placement cannot be resolved for a MicroVM, then the
-    TEXT[!MUST]:   Scheduler SHALL release the MicroVM and report an allocation error.
+    TEXT[!MUST]: - **SC-030** When a claim succeeds and the response names the Host that runs
+    TEXT[!MUST]:   the MicroVM, the Scheduler SHALL record that Host as the Placement.
+    TEXT[!MUST]: - **SC-031** When a claim succeeds and the response does not name the Host,
+    TEXT[!MUST]:   the Scheduler SHALL resolve the Placement by calling `GetMicroVM` with the
+    TEXT[!MUST]:   MicroVM's uid on each Host the Pool Manager reports for that Pool until
+    TEXT[!MUST]:   one returns it.
+    TEXT[!MUST]: - **SC-032** The Scheduler SHALL cache the Placement of a MicroVM for the
+    TEXT[!MUST]:   lifetime of its Lease.
+    TEXT[!MUST]: - **SC-033** If Placement cannot be resolved for a MicroVM, then the
+    TEXT[!MUST]:   Scheduler SHALL release its Lease and report an allocation error.
+    TEXT[!MUST]: - **SC-034** If the Host named in a Placement is not in the Inventory, then
+    TEXT[!MUST]:   the Scheduler SHALL release the Lease and report an allocation error
+    TEXT[!MUST]:   naming the Host.
 
-  SECTION: [Host and Orchestrator health](#host-and-orchestrator-health)
+  SECTION: [Host health](#host-health)
     TEXT[!MUST]: - **SC-040** The Scheduler SHALL probe every Host in the Inventory at the
     TEXT[!MUST]:   configured health interval by calling `ServerInfo`, falling back to
     TEXT[!MUST]:   `ListMicroVMs` on the Runner's namespace when `ServerInfo` is not
@@ -339,43 +349,24 @@ SPECIFICATION: [Scheduler](docs/requirements/03-scheduler.md)
     TEXT[!MUST]:   the Host healthy.
     TEXT[!MUST]: - **SC-043** When a Host becomes unhealthy, the Scheduler SHALL abort every
     TEXT[!MUST]:   Job whose MicroVM is placed on that Host with the failure reason
-    TEXT[!MUST]:   `runner_system_failure`.
-    TEXT[!MUST]: - **SC-044** The Scheduler SHALL probe the Orchestrator at the configured
-    TEXT[!MUST]:   health interval by calling `ListMicroVMs` on the Runner's namespace.
-    TEXT[!MUST]: - **SC-045** When the Orchestrator fails the configured number of
-    TEXT[!MUST]:   consecutive probes, the Scheduler SHALL mark the Orchestrator unhealthy,
-    TEXT[!MUST]:   and when it passes a probe again the Scheduler SHALL mark it healthy.
-    TEXT[!MUST]: - **SC-046** The Scheduler SHALL NOT abort running Jobs because the
-    TEXT[!MUST]:   Orchestrator became unhealthy.
+    TEXT[!MUST]:   `runner_system_failure` and release their Leases.
+    TEXT[!MUST]: - **SC-044** The Scheduler SHALL NOT refuse Reservations because a Host is
+    TEXT[!MUST]:   unhealthy, because the Pool Manager decides where warm MicroVMs live.
 
-  SECTION: [Release and garbage collection](#release-and-garbage-collection)
-    TEXT[!MUST]: - **SC-050** When an Overflow MicroVM is released, the Scheduler SHALL delete
-    TEXT[!MUST]:   it with `DeleteMicroVM` through the Orchestrator.
-    TEXT[!MUST]: - **SC-051** When a warm MicroVM is released, the Scheduler SHALL release its
-    TEXT[!MUST]:   Lease with the Pool Manager and SHALL NOT delete the MicroVM itself.
-    TEXT[!MUST]: - **SC-052** If a release operation fails, then the Scheduler SHALL retry it
-    TEXT[!MUST]:   with exponential backoff up to the configured retry limit and SHALL record
-    TEXT[!MUST]:   the MicroVM as pending cleanup on exhaustion.
-    TEXT[!MUST]: - **SC-053** The Scheduler SHALL return the Slot of a released MicroVM as
+  SECTION: [Release](#release)
+    TEXT[!MUST]: - **SC-050** When a Job finishes, the Scheduler SHALL release its Lease with
+    TEXT[!MUST]:   the Pool Manager and SHALL NOT delete the MicroVM itself.
+    TEXT[!MUST]: - **SC-051** If a release fails, then the Scheduler SHALL retry it with
+    TEXT[!MUST]:   exponential backoff up to the configured retry limit and SHALL then log
+    TEXT[!MUST]:   the Lease id and rely on Lease expiry.
+    TEXT[!MUST]: - **SC-052** The Scheduler SHALL return the Slot of a released MicroVM as
     TEXT[!MUST]:   soon as the release has been requested rather than when it completes.
-    TEXT[!MUST]: - **SC-054** The Scheduler SHALL run a garbage collection pass at the
-    TEXT[!MUST]:   configured interval that lists the MicroVMs in the Runner's namespace
-    TEXT[!MUST]:   through the Orchestrator.
-    TEXT[!MUST]: - **SC-055** When a garbage collection pass finds a MicroVM labelled with
-    TEXT[!MUST]:   this Runner's identity that is not an active Allocation and is older than
-    TEXT[!MUST]:   the configured orphan grace period, the Scheduler SHALL delete it through
-    TEXT[!MUST]:   the Orchestrator.
-    TEXT[!MUST]: - **SC-056** When a garbage collection pass finds a MicroVM labelled with
-    TEXT[!MUST]:   this Runner's identity whose `created-at` label is older than the
-    TEXT[!MUST]:   configured maximum MicroVM lifetime, the Scheduler SHALL delete it even if
-    TEXT[!MUST]:   it is an active Allocation and SHALL abort the associated Job.
-    TEXT[!MUST]: - **SC-057** When starting, the Scheduler SHALL run a garbage collection pass
-    TEXT[!MUST]:   before granting any Reservation.
-    TEXT[!MUST]: - **SC-058** The Scheduler SHALL NOT delete a MicroVM that is not labelled
-    TEXT[!MUST]:   with this Runner's identity.
-    TEXT[!MUST]: - **SC-059** Where the keep-on-failure debug option is enabled, the Scheduler
-    TEXT[!MUST]:   SHALL retain an Overflow MicroVM marked for retention until the maximum
-    TEXT[!MUST]:   MicroVM lifetime elapses and SHALL then delete it.
+    TEXT[!MUST]: - **SC-053** When starting, the Scheduler SHALL NOT attempt to find or clean
+    TEXT[!MUST]:   up MicroVMs from a previous incarnation, because Leases it no longer
+    TEXT[!MUST]:   heartbeats expire and the Pool Manager deletes them.
+    TEXT[!MUST]: - **SC-054** Where the keep-on-failure debug option is enabled, the Scheduler
+    TEXT[!MUST]:   SHALL keep heartbeating the Lease of a failed Job for the configured keep
+    TEXT[!MUST]:   duration before releasing it, and SHALL log the MicroVM uid and Host name.
 
   SECTION: [Lease keep-alive](#lease-keep-alive)
     TEXT[!MUST]: - **SC-060** While an Allocation holds a Lease, the Scheduler SHALL send a
@@ -403,6 +394,9 @@ SPECIFICATION: [Pool Manager integration](docs/requirements/04-pool-manager.md)
     TEXT[!MUST]:   health interval by calling `ListPools` and SHALL mark it unhealthy after
     TEXT[!MUST]:   the configured number of consecutive failures and healthy again after a
     TEXT[!MUST]:   successful probe.
+    TEXT[!MUST]: - **PL-006** The Scheduler SHALL maintain one long-lived connection to the
+    TEXT[!MUST]:   Pool Manager with keepalive enabled and SHALL reconnect with exponential
+    TEXT[!MUST]:   backoff when it is lost.
 
   SECTION: [Pool declaration](#pool-declaration)
     TEXT[!MUST]: - **PL-010** When starting and on every configuration reload, the Scheduler
@@ -413,170 +407,137 @@ SPECIFICATION: [Pool Manager integration](docs/requirements/04-pool-manager.md)
     TEXT[!MUST]:   Hosts in the Inventory that satisfy the Profile's Host selector and
     TEXT[!MUST]:   architecture.
     TEXT[!MUST]: - **PL-012** The Scheduler SHALL set `allow_guest_agent` in every Pool's
-    TEXT[!MUST]:   MicroVM template so that the `exec` Guest Transport works for warm
-    TEXT[!MUST]:   MicroVMs.
-    TEXT[!MUST]: - **PL-013** The Scheduler SHALL label every Pool's MicroVM template with
-    TEXT[!MUST]:   the Profile name and the Orchestrator scheduling labels derived from the
-    TEXT[!MUST]:   Profile.
-    TEXT[!MUST]: - **PL-014** When a Profile is removed by a configuration reload, the
+    TEXT[!MUST]:   MicroVM template so that the `exec` Guest Transport works.
+    TEXT[!MUST]: - **PL-013** The Scheduler SHALL set the Pool's replenishment strategy to
+    TEXT[!MUST]:   immediate-on-lease unless the Profile's pool settings choose another.
+    TEXT[!MUST]: - **PL-014** The Scheduler SHALL label every Pool's MicroVM template with
+    TEXT[!MUST]:   `gitlab-runner.flintlock.dev/runner` set to the Runner name and
+    TEXT[!MUST]:   `gitlab-runner.flintlock.dev/profile` set to the Profile name.
+    TEXT[!MUST]: - **PL-015** When a Profile is removed by a configuration reload, the
     TEXT[!MUST]:   Scheduler SHALL NOT delete its Pool and SHALL log that the Pool is no
     TEXT[!MUST]:   longer referenced.
-    TEXT[!MUST]: - **PL-015** If `CreatePool` or `UpdatePool` fails for a Profile, then the
+    TEXT[!MUST]: - **PL-016** If `CreatePool` or `UpdatePool` fails for a Profile, then the
     TEXT[!MUST]:   Scheduler SHALL log the error, treat that Pool as empty and retry the
     TEXT[!MUST]:   declaration at the configured interval.
+    TEXT[!MUST]: - **PL-017** If two Runners would declare the same Pool name in the same
+    TEXT[!MUST]:   namespace, the Runner SHALL use its own namespace for its Pools so that
+    TEXT[!MUST]:   they do not collide.
+
+  SECTION: [MicroVM template](#microvm-template)
+    TEXT[!MUST]: - **PL-020** The Scheduler SHALL build a Pool's MicroVM template from the
+    TEXT[!MUST]:   Profile: `vcpu`, `memory_in_mb`, `kernel`, `initrd` where set,
+    TEXT[!MUST]:   `root_volume`, `additional_volumes`, `interfaces`, `metadata` and
+    TEXT[!MUST]:   `provider` where set.
+    TEXT[!MUST]: - **PL-021** The Scheduler SHALL set the template's `namespace` to the
+    TEXT[!MUST]:   Runner namespace and SHALL leave its `id` empty for the Pool Manager to
+    TEXT[!MUST]:   assign.
+    TEXT[!MUST]: - **PL-022** The Scheduler SHALL set `add_network_config` on the template's
+    TEXT[!MUST]:   kernel spec so that flintlock generates the guest network configuration
+    TEXT[!MUST]:   from the interfaces.
+    TEXT[!MUST]: - **PL-023** The Scheduler SHALL NOT use `eth0` as a network interface
+    TEXT[!MUST]:   `device_id`.
+    TEXT[!MUST]: - **PL-024** The Scheduler SHALL base64-encode every value placed in the
+    TEXT[!MUST]:   template's `metadata` map and SHALL only use the keys `meta-data`,
+    TEXT[!MUST]:   `user-data`, `vendor-data` and `network-config`.
+    TEXT[!MUST]: - **PL-025** Where a Profile provides user-data, the Scheduler SHALL render
+    TEXT[!MUST]:   it as a template with the Profile name available and place the result in
+    TEXT[!MUST]:   the `user-data` entry.
+    TEXT[!MUST]: - **PL-026** The Scheduler SHALL NOT place any Job-specific value in the
+    TEXT[!MUST]:   template, because the template is instantiated before any Job exists.
 
   SECTION: [Claiming](#claiming)
-    TEXT[!MUST]: - **PL-020** When a warm MicroVM is needed for a Profile, the Scheduler SHALL
+    TEXT[!MUST]: - **PL-030** When a warm MicroVM is needed for a Profile, the Scheduler SHALL
     TEXT[!MUST]:   call `ClaimVM` with the `PoolRef` of that Profile's Pool.
-    TEXT[!MUST]: - **PL-021** When `ClaimVM` succeeds, the Scheduler SHALL record the returned
-    TEXT[!MUST]:   `lease_id`, `vm_uid` and `network_interfaces` on the Allocation.
-    TEXT[!MUST]: - **PL-022** If `ClaimVM` returns `RESOURCE_EXHAUSTED`, then the Scheduler
+    TEXT[!MUST]: - **PL-031** When `ClaimVM` succeeds, the Scheduler SHALL record the returned
+    TEXT[!MUST]:   `lease_id`, `vm_uid`, `network_interfaces` and, where present, the Host
+    TEXT[!MUST]:   on the Allocation.
+    TEXT[!MUST]: - **PL-032** If `ClaimVM` returns `RESOURCE_EXHAUSTED`, then the Scheduler
     TEXT[!MUST]:   SHALL treat the Pool as having no warm MicroVM available.
-    TEXT[!MUST]: - **PL-023** If `ClaimVM` returns `NOT_FOUND`, then the Scheduler SHALL
+    TEXT[!MUST]: - **PL-033** If `ClaimVM` returns `NOT_FOUND`, then the Scheduler SHALL
     TEXT[!MUST]:   re-declare the Pool from its Profile and treat the Pool as having no warm
     TEXT[!MUST]:   MicroVM available.
-    TEXT[!MUST]: - **PL-024** If `ClaimVM` fails with `UNAVAILABLE` or a connection error,
+    TEXT[!MUST]: - **PL-034** If `ClaimVM` fails with `UNAVAILABLE` or a connection error,
     TEXT[!MUST]:   then the Scheduler SHALL mark the Pool Manager unhealthy for the configured
-    TEXT[!MUST]:   backoff period and treat the Pool as having no warm MicroVM available.
-    TEXT[!MUST]: - **PL-025** While the Pool Manager is unhealthy, the Scheduler SHALL count
+    TEXT[!MUST]:   backoff period.
+    TEXT[!MUST]: - **PL-035** While the Pool Manager is unhealthy, the Scheduler SHALL count
     TEXT[!MUST]:   the available warm MicroVMs of every Pool as zero when computing capacity.
 
   SECTION: [Heartbeat and release](#heartbeat-and-release)
-    TEXT[!MUST]: - **PL-030** While an Allocation holds a Lease, the Scheduler SHALL call
+    TEXT[!MUST]: - **PL-040** While an Allocation holds a Lease, the Scheduler SHALL call
     TEXT[!MUST]:   `Heartbeat` with the `lease_id` and SHALL update the Lease expiry from the
     TEXT[!MUST]:   returned `expires_at`.
-    TEXT[!MUST]: - **PL-031** When a Job holding a Lease finishes, the Scheduler SHALL call
+    TEXT[!MUST]: - **PL-041** When a Job holding a Lease finishes, the Scheduler SHALL call
     TEXT[!MUST]:   `ReleaseVM` with the `lease_id`.
-    TEXT[!MUST]: - **PL-032** If `ReleaseVM` returns `NOT_FOUND`, then the Scheduler SHALL
+    TEXT[!MUST]: - **PL-042** If `ReleaseVM` returns `NOT_FOUND`, then the Scheduler SHALL
     TEXT[!MUST]:   treat the release as complete.
-    TEXT[!MUST]: - **PL-033** If `ReleaseVM` fails for any other reason, then the Scheduler
+    TEXT[!MUST]: - **PL-043** If `ReleaseVM` fails for any other reason, then the Scheduler
     TEXT[!MUST]:   SHALL retry with exponential backoff up to the configured retry limit and
     TEXT[!MUST]:   SHALL then log the Lease id and rely on Lease expiry.
-    TEXT[!MUST]: - **PL-034** The Scheduler SHALL NOT call `DeleteMicroVM` for a MicroVM
-    TEXT[!MUST]:   obtained through a Lease.
+    TEXT[!MUST]: - **PL-044** The Scheduler SHALL NOT call `DeleteMicroVM` on any Host.
 
   SECTION: [Capacity tracking](#capacity-tracking)
-    TEXT[!MUST]: - **PL-040** The Scheduler SHALL track the number of available warm MicroVMs
+    TEXT[!MUST]: - **PL-050** The Scheduler SHALL track the number of available warm MicroVMs
     TEXT[!MUST]:   in every Pool by subscribing to the `Events` service.
-    TEXT[!MUST]: - **PL-041** When the `Events` stream is unavailable, the Scheduler SHALL fall
+    TEXT[!MUST]: - **PL-051** When the `Events` stream is unavailable, the Scheduler SHALL fall
     TEXT[!MUST]:   back to polling `GetPool` at the configured interval until the stream can
     TEXT[!MUST]:   be re-established.
-    TEXT[!MUST]: - **PL-042** When an event reports a MicroVM in a Pool becoming available,
+    TEXT[!MUST]: - **PL-052** When an event reports a MicroVM in a Pool becoming available,
     TEXT[!MUST]:   claimed, released or deleted, the Scheduler SHALL update that Pool's
     TEXT[!MUST]:   available count before the next capacity computation.
-    TEXT[!MUST]: - **PL-043** When a `ClaimVM` call returns `RESOURCE_EXHAUSTED`, the Scheduler
+    TEXT[!MUST]: - **PL-053** When a `ClaimVM` call returns `RESOURCE_EXHAUSTED`, the Scheduler
     TEXT[!MUST]:   SHALL set that Pool's available count to zero until the next event or poll
     TEXT[!MUST]:   says otherwise.
-    TEXT[!MUST]: - **PL-044** The Scheduler SHALL expose each Pool's available count as a
+    TEXT[!MUST]: - **PL-054** The Scheduler SHALL expose each Pool's available count as a
     TEXT[!MUST]:   metric.
-    TEXT[!MUST]: - **PL-045** When an event reports that a Pool is below its target size, the
+    TEXT[!MUST]: - **PL-055** When an event reports that a Pool is below its target size, the
     TEXT[!MUST]:   Scheduler SHALL log it at `warn` level with the Pool name and the counts.
+    TEXT[!MUST]: - **PL-056** When an event reports a hook failure or a quarantined MicroVM
+    TEXT[!MUST]:   in a Pool, the Scheduler SHALL log it at `warn` level with the Pool name
+    TEXT[!MUST]:   and the MicroVM uid.
 
-SPECIFICATION: [Hosts and Orchestrator](docs/requirements/05-orchestrator.md)
+SPECIFICATION: [Hosts](docs/requirements/05-hosts.md)
   SECTION: [Client](#flintlock-client)
-    TEXT[!MUST]: - **BR-001** The Runner SHALL communicate with Hosts and with the Orchestrator
-    TEXT[!MUST]:   through the flintlock `microvm.services.api.v1alpha1` gRPC API using the
-    TEXT[!MUST]:   generated client from the flintlock `api` module.
-    TEXT[!MUST]: - **BR-002** The Runner SHALL treat the Orchestrator endpoint as a `MicroVM`
-    TEXT[!MUST]:   service endpoint and SHALL NOT depend on any Orchestrator-specific RPC.
-    TEXT[!MUST]: - **BR-003** The Runner SHALL maintain one long-lived gRPC connection per
-    TEXT[!MUST]:   Host and per Orchestrator endpoint, with keepalive enabled, and SHALL
-    TEXT[!MUST]:   reconnect with exponential backoff when a connection is lost.
-    TEXT[!MUST]: - **BR-004** The Runner SHALL apply the configured deadline to every unary
+    TEXT[!MUST]: - **HO-001** The Runner SHALL communicate with Hosts through the flintlock
+    TEXT[!MUST]:   `microvm.services.api.v1alpha1`, `microvmexec.services.api.v1alpha1` and
+    TEXT[!MUST]:   `microvmsshproxy.services.api.v1alpha1` gRPC APIs using the generated
+    TEXT[!MUST]:   clients from the flintlock `api` module.
+    TEXT[!MUST]: - **HO-002** The Runner SHALL maintain one long-lived gRPC connection per
+    TEXT[!MUST]:   Host, with keepalive enabled, and SHALL reconnect with exponential backoff
+    TEXT[!MUST]:   when a connection is lost.
+    TEXT[!MUST]: - **HO-003** The Runner SHALL apply the configured deadline to every unary
     TEXT[!MUST]:   flintlock call.
-    TEXT[!MUST]: - **BR-005** Where a Host is configured with a basic auth token, the Runner
+    TEXT[!MUST]: - **HO-004** Where a Host is configured with a basic auth token, the Runner
     TEXT[!MUST]:   SHALL send an `authorization` header with the value `Basic` followed by the
     TEXT[!MUST]:   base64 encoding of the token on every call to that Host.
-    TEXT[!MUST]: - **BR-006** Where the Orchestrator is configured with a token, the Runner
-    TEXT[!MUST]:   SHALL send an `authorization` header on every call to it using the scheme
-    TEXT[!MUST]:   named in the configuration, either `Basic` or `Bearer`.
-    TEXT[!MUST]: - **BR-007** The Runner SHALL connect to Hosts and to the Orchestrator with
-    TEXT[!MUST]:   TLS, verifying the server certificate against the configured certificate
-    TEXT[!MUST]:   authority, unless the endpoint is explicitly marked insecure.
-    TEXT[!MUST]: - **BR-008** Where client certificate and key files are configured for an
-    TEXT[!MUST]:   endpoint, the Runner SHALL present them for mutual TLS.
-    TEXT[!MUST]: - **BR-009** The Runner SHALL send `MicroVMExec.ExecCommand` and
-    TEXT[!MUST]:   `MicroVMSSHProxy.SSHProxy` requests only to Host endpoints and never to the
-    TEXT[!MUST]:   Orchestrator.
-    TEXT[!MUST]: - **BR-010** When several Orchestrator endpoints are configured, the Runner
-    TEXT[!MUST]:   SHALL use the first healthy endpoint in configuration order and SHALL move
-    TEXT[!MUST]:   to the next when a call fails with `UNAVAILABLE`.
+    TEXT[!MUST]: - **HO-005** The Runner SHALL connect to Hosts with TLS, verifying the server
+    TEXT[!MUST]:   certificate against the configured certificate authority, unless the Host
+    TEXT[!MUST]:   is explicitly marked insecure.
+    TEXT[!MUST]: - **HO-006** Where client certificate and key files are configured for a
+    TEXT[!MUST]:   Host, the Runner SHALL present them for mutual TLS.
+    TEXT[!MUST]: - **HO-007** The Runner SHALL NOT call `CreateMicroVM` or `DeleteMicroVM` on
+    TEXT[!MUST]:   any Host.
+    TEXT[!MUST]: - **HO-008** The Runner SHALL only call `ListMicroVMs` with its own namespace
+    TEXT[!MUST]:   and only as a health probe fallback.
 
-  SECTION: [Host inventory](#host-inventory)
-    TEXT[!MUST]: - **BR-011** The Runner SHALL load the set of Hosts from the Inventory
-    TEXT[!MUST]:   section of its configuration.
-    TEXT[!MUST]: - **BR-012** When starting, the Runner SHALL call `ServerInfo` on every Host
+  SECTION: [Inventory](#inventory)
+    TEXT[!MUST]: - **HO-010** The Runner SHALL load the set of Hosts from the Inventory
+    TEXT[!MUST]:   section of its configuration, keyed by the Host names the Pool Manager
+    TEXT[!MUST]:   uses in `flintlock_hosts`.
+    TEXT[!MUST]: - **HO-011** When starting, the Runner SHALL call `ServerInfo` on every Host
     TEXT[!MUST]:   and SHALL log the Host's flintlock version and whether the exec and SSH
     TEXT[!MUST]:   proxy services are enabled.
-    TEXT[!MUST]: - **BR-013** If a Host reports that the exec service is disabled, then the
-    TEXT[!MUST]:   Runner SHALL log a warning naming the Host, because Jobs placed there by
-    TEXT[!MUST]:   the Orchestrator cannot be run over the `exec` Guest Transport.
-    TEXT[!MUST]: - **BR-014** If `ServerInfo` is not implemented by a Host, then the Runner
+    TEXT[!MUST]: - **HO-012** If a Host reports that the exec service is disabled, then the
+    TEXT[!MUST]:   Runner SHALL log a warning naming the Host, because Jobs the Pool Manager
+    TEXT[!MUST]:   places there cannot be run over the `exec` Guest Transport.
+    TEXT[!MUST]: - **HO-013** If `ServerInfo` is not implemented by a Host, then the Runner
     TEXT[!MUST]:   SHALL treat the Host's version as unknown and continue.
-    TEXT[!MUST]: - **BR-015** When the configuration is reloaded, the Runner SHALL add new
+    TEXT[!MUST]: - **HO-014** When the configuration is reloaded, the Runner SHALL add new
     TEXT[!MUST]:   Hosts, stop probing removed Hosts and keep serving Jobs on removed Hosts
     TEXT[!MUST]:   until they finish.
-    TEXT[!MUST]: - **BR-016** The Runner SHALL NOT call `CreateMicroVM`, `DeleteMicroVM` or
-    TEXT[!MUST]:   `ListMicroVMs` on a Host endpoint directly.
-
-  SECTION: [MicroVM specification](#microvm-specification)
-    TEXT[!MUST]: - **BR-020** When creating an Overflow MicroVM, the Runner SHALL build the
-    TEXT[!MUST]:   `MicroVMSpec` from the Profile: `vcpu`, `memory_in_mb`, `kernel`,
-    TEXT[!MUST]:   `initrd` where set, `root_volume`, `additional_volumes`, `interfaces`,
-    TEXT[!MUST]:   `metadata` and `provider` where set.
-    TEXT[!MUST]: - **BR-021** The Runner SHALL set the MicroVM `id` to `job-` followed by the
-    TEXT[!MUST]:   Job id and the MicroVM `namespace` to the configured Runner namespace.
-    TEXT[!MUST]: - **BR-022** The Runner SHALL set `allow_guest_agent` to true on every
-    TEXT[!MUST]:   Overflow MicroVM.
-    TEXT[!MUST]: - **BR-023** The Runner SHALL label every Overflow MicroVM with the labels
-    TEXT[!MUST]:   `gitlab-runner.flintlock.dev/runner-id`, `gitlab-runner.flintlock.dev/job-id`,
-    TEXT[!MUST]:   `gitlab-runner.flintlock.dev/project-id`,
-    TEXT[!MUST]:   `gitlab-runner.flintlock.dev/profile` and
-    TEXT[!MUST]:   `gitlab-runner.flintlock.dev/created-at`.
-    TEXT[!MUST]: - **BR-024** The Runner SHALL copy the Profile's architecture, Host selector
-    TEXT[!MUST]:   and any declared Orchestrator scheduling constraints onto the MicroVM
-    TEXT[!MUST]:   labels with the `brigade.scheduling/` prefix so that the Orchestrator
-    TEXT[!MUST]:   places the MicroVM on a suitable Host.
-    TEXT[!MUST]: - **BR-025** The Runner SHALL set `add_network_config` on the kernel spec so
-    TEXT[!MUST]:   that flintlock generates the guest network configuration from the
-    TEXT[!MUST]:   interfaces.
-    TEXT[!MUST]: - **BR-026** The Runner SHALL NOT use `eth0` as a network interface
-    TEXT[!MUST]:   `device_id`.
-    TEXT[!MUST]: - **BR-027** The Runner SHALL base64-encode every value placed in the
-    TEXT[!MUST]:   MicroVM `metadata` map and SHALL only use the keys `meta-data`, `user-data`,
-    TEXT[!MUST]:   `vendor-data` and `network-config`.
-    TEXT[!MUST]: - **BR-028** The Runner SHALL set the `meta-data` entry so that the guest's
-    TEXT[!MUST]:   `instance-id` is the MicroVM id and its `local-hostname` is the MicroVM id.
-    TEXT[!MUST]: - **BR-029** Where a Profile provides user-data, the Runner SHALL render it as
-    TEXT[!MUST]:   a template with the Profile name and MicroVM id available and place the
-    TEXT[!MUST]:   result in the `user-data` entry.
-    TEXT[!MUST]: - **BR-030** The Runner SHALL build the Pool Manager's MicroVM template for a
-    TEXT[!MUST]:   Profile from the same fields and labels as an Overflow MicroVM, omitting
-    TEXT[!MUST]:   only the Job-specific `id` and labels.
-
-  SECTION: [Creation and deletion](#creation-and-deletion)
-    TEXT[!MUST]: - **BR-040** When creating an Overflow MicroVM, the Runner SHALL call
-    TEXT[!MUST]:   `CreateMicroVM` on the Orchestrator once and SHALL then poll `GetMicroVM`
-    TEXT[!MUST]:   with the returned uid on the Orchestrator at the configured interval until
-    TEXT[!MUST]:   the state is `CREATED` or `FAILED` or the create timeout elapses.
-    TEXT[!MUST]: - **BR-041** If a MicroVM reaches the `FAILED` state, then the Runner SHALL
-    TEXT[!MUST]:   delete it through the Orchestrator and report a creation error that
-    TEXT[!MUST]:   includes the flintlock status message.
-    TEXT[!MUST]: - **BR-042** If the create timeout elapses before the MicroVM is `CREATED`,
-    TEXT[!MUST]:   then the Runner SHALL delete it through the Orchestrator and report a
-    TEXT[!MUST]:   creation error.
-    TEXT[!MUST]: - **BR-043** If `CreateMicroVM` returns `ALREADY_EXISTS`, then the Runner
-    TEXT[!MUST]:   SHALL delete the existing MicroVM with that id through the Orchestrator and
-    TEXT[!MUST]:   retry the create once.
-    TEXT[!MUST]: - **BR-044** If `CreateMicroVM` returns `FAILED_PRECONDITION` or
-    TEXT[!MUST]:   `RESOURCE_EXHAUSTED` because the Orchestrator has no eligible Host, then
-    TEXT[!MUST]:   the Runner SHALL report a creation error naming the scheduling labels it
-    TEXT[!MUST]:   sent.
-    TEXT[!MUST]: - **BR-045** When deleting an Overflow MicroVM, the Runner SHALL call
-    TEXT[!MUST]:   `DeleteMicroVM` with the uid on the Orchestrator.
-    TEXT[!MUST]: - **BR-046** If `DeleteMicroVM` returns `NOT_FOUND`, then the Runner SHALL
-    TEXT[!MUST]:   treat the deletion as complete.
-    TEXT[!MUST]: - **BR-047** The Runner SHALL only call `ListMicroVMs` with its own namespace.
+    TEXT[!MUST]: - **HO-015** When starting, the Runner SHALL compare the Inventory with the
+    TEXT[!MUST]:   Hosts the Pool Manager reports for each Pool and SHALL log a warning for
+    TEXT[!MUST]:   any Pool Host missing from the Inventory, because a MicroVM placed there
+    TEXT[!MUST]:   could not be reached.
 
 SPECIFICATION: [Fleet](docs/requirements/06-fleet.md)
   SECTION: [Discovery](#discovery)
@@ -657,8 +618,8 @@ SPECIFICATION: [Fleet](docs/requirements/06-fleet.md)
     TEXT[!MUST]: - **FL-044** The Fleet Controller SHALL configure each Host to drop traffic
     TEXT[!MUST]:   from the guest subnet to the EC2 instance metadata service address.
     TEXT[!MUST]: - **FL-045** The Fleet Controller SHALL configure each Host to drop traffic
-    TEXT[!MUST]:   from the guest subnet to the Host's own `flintlockd`, Orchestrator, Pool
-    TEXT[!MUST]:   Manager and metrics ports.
+    TEXT[!MUST]:   from the guest subnet to the Host's own `flintlockd`, Pool Manager agent
+    TEXT[!MUST]:   and metrics ports.
     TEXT[!MUST]: - **FL-046** The Fleet Controller SHALL configure each Host to drop traffic
     TEXT[!MUST]:   from the guest subnet to the private addresses of other Hosts in the
     TEXT[!MUST]:   Inventory.
@@ -667,40 +628,34 @@ SPECIFICATION: [Fleet](docs/requirements/06-fleet.md)
     TEXT[!MUST]:   report any Host that is unreachable together with the security group
     TEXT[!MUST]:   rule that would be needed.
 
-  SECTION: [Orchestrator and Pool Manager agents](#orchestrator-and-pool-manager-agents)
-    TEXT[!MUST]: - **FL-050** The Fleet Controller SHALL install the pinned Orchestrator
-    TEXT[!MUST]:   release on every Host as a systemd service configured with the Host's
-    TEXT[!MUST]:   `flintlockd` endpoint and token, the north-edge token from the
-    TEXT[!MUST]:   configuration, and cluster gossip peers set to the other Hosts in the
-    TEXT[!MUST]:   Inventory.
-    TEXT[!MUST]: - **FL-051** The Fleet Controller SHALL set each Orchestrator node's declared
-    TEXT[!MUST]:   capacity and labels from the Host's Inventory entry, including the Host
-    TEXT[!MUST]:   architecture, because the Runner and the Pool Manager select Hosts through
-    TEXT[!MUST]:   the Orchestrator by those labels.
-    TEXT[!MUST]: - **FL-052** The Fleet Controller SHALL set the Orchestrator's minimum
-    TEXT[!MUST]:   cluster size to the configured value or, by default, to a majority of the
-    TEXT[!MUST]:   Hosts.
-    TEXT[!MUST]: - **FL-053** The Fleet Controller SHALL install the pinned Pool Manager host
+  SECTION: [Pool Manager](#pool-manager-install)
+    TEXT[!MUST]: - **FL-050** The Fleet Controller SHALL install the pinned Pool Manager host
     TEXT[!MUST]:   agent on every Host as a systemd service.
-    TEXT[!MUST]: - **FL-054** The Fleet Controller SHALL install the pinned Pool Manager daemon
+    TEXT[!MUST]: - **FL-051** The Fleet Controller SHALL install the pinned Pool Manager daemon
     TEXT[!MUST]:   on the Control Node with a host list generated from the Inventory that
-    TEXT[!MUST]:   names every physical Host with its TLS settings.
-    TEXT[!MUST]: - **FL-055** The Fleet Controller SHALL verify that each installed service is
+    TEXT[!MUST]:   names every Host with its `flintlockd` endpoint, token and TLS settings.
+    TEXT[!MUST]: - **FL-052** The Fleet Controller SHALL name each Host identically in the
+    TEXT[!MUST]:   Pool Manager's host list and in the Inventory, because the Runner joins
+    TEXT[!MUST]:   the two by name when resolving Placement.
+    TEXT[!MUST]: - **FL-053** The Fleet Controller SHALL verify that each installed service is
     TEXT[!MUST]:   active before reporting an instance as provisioned.
-    TEXT[!MUST]: - **FL-056** The Fleet Controller SHALL verify after installation that every
-    TEXT[!MUST]:   Orchestrator node reports the full cluster membership and that the Pool
-    TEXT[!MUST]:   Manager daemon answers `ListPools`.
+    TEXT[!MUST]: - **FL-054** The Fleet Controller SHALL verify after installation that the
+    TEXT[!MUST]:   Pool Manager daemon answers `ListPools` and reports every Host in the
+    TEXT[!MUST]:   Inventory as reachable.
+    TEXT[!MUST]: - **FL-055** When run again after the Inventory changes, the Fleet Controller
+    TEXT[!MUST]:   SHALL regenerate the Pool Manager's host list and reload the daemon without
+    TEXT[!MUST]:   interrupting existing Leases.
 
   SECTION: [Inventory and Runner configuration](#inventory-and-runner-configuration)
     TEXT[!MUST]: - **FL-060** When provisioning completes, the Fleet Controller SHALL write an
     TEXT[!MUST]:   Inventory file listing every Host with its name, `flintlockd` endpoint,
-    TEXT[!MUST]:   Orchestrator endpoint, architecture, vCPU and memory capacity, labels and
+    TEXT[!MUST]:   architecture, vCPU and memory capacity, labels, Host Service addresses and
     TEXT[!MUST]:   installed versions.
     TEXT[!MUST]: - **FL-061** The Fleet Controller SHALL compute each Host's capacity as the
     TEXT[!MUST]:   instance's vCPU and memory minus the configured Host reserve.
     TEXT[!MUST]: - **FL-062** The Fleet Controller SHALL generate a Runner configuration file
-    TEXT[!MUST]:   that references the Inventory, lists every Host's Orchestrator endpoint,
-    TEXT[!MUST]:   names the Pool Manager endpoint and carries the Profiles from its input.
+    TEXT[!MUST]:   that references the Inventory, names the Pool Manager endpoint and carries
+    TEXT[!MUST]:   the Profiles from its input.
     TEXT[!MUST]: - **FL-063** When run again after new instances match the discovery filter,
     TEXT[!MUST]:   the Fleet Controller SHALL provision only the new instances and SHALL merge
     TEXT[!MUST]:   them into the existing Inventory.
@@ -710,28 +665,31 @@ SPECIFICATION: [Fleet](docs/requirements/06-fleet.md)
 
   SECTION: [Verification](#verification)
     TEXT[!MUST]: - **FL-070** The Fleet Controller SHALL provide a verification command that
-    TEXT[!MUST]:   checks every Host answers `ServerInfo` with the exec service enabled, that
-    TEXT[!MUST]:   every Orchestrator node reports the full cluster and that the Pool Manager
-    TEXT[!MUST]:   lists every declared Pool.
+    TEXT[!MUST]:   checks every Host answers `ServerInfo` with the exec service enabled and
+    TEXT[!MUST]:   that the Pool Manager lists every declared Pool at its target size.
     TEXT[!MUST]: - **FL-071** If verification fails on any Host or service, then the Fleet
     TEXT[!MUST]:   Controller SHALL exit with a non-zero status naming each failure and the
     TEXT[!MUST]:   step that failed.
-    TEXT[!MUST]: - **FL-072** The verification command SHALL create one MicroVM per Profile
-    TEXT[!MUST]:   through the Orchestrator, resolve and report which Host it landed on, run a
-    TEXT[!MUST]:   trivial command in it through the Guest Transport and delete it.
-    TEXT[!MUST]: - **FL-073** The verification command SHALL claim, exercise and release one
-    TEXT[!MUST]:   warm MicroVM from every Pool and report the time from claim to readiness.
+    TEXT[!MUST]: - **FL-072** The verification command SHALL claim warm MicroVMs from every
+    TEXT[!MUST]:   Pool, run a trivial command in each through the Guest Transport and
+    TEXT[!MUST]:   release them, continuing until it has exercised every Host in the Pool's
+    TEXT[!MUST]:   host list or the verification timeout elapses, and SHALL report the time
+    TEXT[!MUST]:   from claim to readiness per Host.
+    TEXT[!MUST]: - **FL-073** The verification command SHALL report any Host in a Pool's host
+    TEXT[!MUST]:   list on which no MicroVM could be exercised within the verification
+    TEXT[!MUST]:   timeout.
 
   SECTION: [Drain and teardown](#drain-and-teardown)
     TEXT[!MUST]: - **FL-080** The Fleet Controller SHALL provide a drain command that removes
-    TEXT[!MUST]:   a Host from every Pool's `flintlock_hosts`, stops the Orchestrator node on
-    TEXT[!MUST]:   that Host so that it receives no new placements, and waits until no Job
-    TEXT[!MUST]:   MicroVM remains on it or the configured drain timeout elapses.
+    TEXT[!MUST]:   a Host from every Pool's `flintlock_hosts` so that the Pool Manager places
+    TEXT[!MUST]:   nothing new there, and waits until the Pool Manager reports no leased
+    TEXT[!MUST]:   MicroVM on that Host or the configured drain timeout elapses.
     TEXT[!MUST]: - **FL-084** The drain command SHALL NOT stop `flintlockd` on the drained
-    TEXT[!MUST]:   Host while any Job MicroVM remains on it.
+    TEXT[!MUST]:   Host while any leased MicroVM remains on it.
     TEXT[!MUST]: - **FL-081** The Fleet Controller SHALL provide a teardown command that
-    TEXT[!MUST]:   deletes every Runner-owned MicroVM, stops and disables the installed
-    TEXT[!MUST]:   services on every Host and removes the Inventory.
+    TEXT[!MUST]:   deletes the declared Pools through the Pool Manager, waits for their
+    TEXT[!MUST]:   MicroVMs to be removed, stops and disables the installed services on every
+    TEXT[!MUST]:   Host and removes the Inventory.
     TEXT[!MUST]: - **FL-082** The teardown command SHALL NOT terminate EC2 instances unless
     TEXT[!MUST]:   the terminate flag is passed explicitly.
     TEXT[!MUST]: - **FL-083** The teardown command SHALL NOT remove the thin pool or its
@@ -749,6 +707,61 @@ SPECIFICATION: [Fleet](docs/requirements/06-fleet.md)
     TEXT[!MUST]:   its Inventory from tag discovery at the configured interval so that
     TEXT[!MUST]:   self-provisioned Hosts join without a restart.
 
+  SECTION: [Host services](#host-services)
+    TEXT[!MUST]: - **FL-100** The Fleet Controller SHALL install on every Host a `buildkitd`
+    TEXT[!MUST]:   service, a Go module proxy service, a pull-through container registry
+    TEXT[!MUST]:   mirror service and an HTTP cache service for the configured upstreams,
+    TEXT[!MUST]:   collectively the Host Services.
+    TEXT[!MUST]: - **FL-101** The Fleet Controller SHALL bind every Host Service only to the
+    TEXT[!MUST]:   guest bridge gateway address so that it is reachable from guests on that
+    TEXT[!MUST]:   Host and from nothing else.
+    TEXT[!MUST]: - **FL-102** The Fleet Controller SHALL run `buildkitd` in rootless mode
+    TEXT[!MUST]:   with the overlayfs snapshotter and SHALL configure its garbage collection
+    TEXT[!MUST]:   with the storage limit from the configuration.
+    TEXT[!MUST]: - **FL-103** The Fleet Controller SHALL configure `buildkitd` to resolve
+    TEXT[!MUST]:   images through the Host's registry mirror before reaching upstream
+    TEXT[!MUST]:   registries.
+    TEXT[!MUST]: - **FL-104** The Fleet Controller SHALL configure the registry mirror as a
+    TEXT[!MUST]:   pull-through cache for each upstream registry named in the configuration,
+    TEXT[!MUST]:   with credentials for upstreams that need them supplied from Systems
+    TEXT[!MUST]:   Manager parameters.
+    TEXT[!MUST]: - **FL-105** The Fleet Controller SHALL configure the Go module proxy to
+    TEXT[!MUST]:   store modules on the Host's cache volume and to fetch modules it does not
+    TEXT[!MUST]:   have from the public proxy for public paths and from the configured
+    TEXT[!MUST]:   version control host for the configured private module patterns.
+    TEXT[!MUST]: - **FL-113** The Fleet Controller SHALL supply the Go module proxy with a
+    TEXT[!MUST]:   read-only credential for the private module patterns, read from the
+    TEXT[!MUST]:   configured Systems Manager parameter and held on the Host side only.
+    TEXT[!MUST]: - **FL-114** The Fleet Controller SHALL configure the Go module proxy to
+    TEXT[!MUST]:   skip checksum database verification for the private module patterns and
+    TEXT[!MUST]:   to verify every other module against the public checksum database.
+    TEXT[!MUST]: - **FL-115** The Fleet Controller SHALL configure the Go module proxy to
+    TEXT[!MUST]:   serve private modules from its cache without contacting the version
+    TEXT[!MUST]:   control host again until the configured private module revalidation
+    TEXT[!MUST]:   interval elapses.
+    TEXT[!MUST]: - **FL-106** The Fleet Controller SHALL configure the HTTP cache with one
+    TEXT[!MUST]:   cache path per configured upstream, each with its own size limit and
+    TEXT[!MUST]:   time-to-live.
+    TEXT[!MUST]: - **FL-107** The Fleet Controller SHALL place all Host Service storage on a
+    TEXT[!MUST]:   dedicated cache volume or directory whose total size is capped by the
+    TEXT[!MUST]:   configuration.
+    TEXT[!MUST]: - **FL-108** The Fleet Controller SHALL add guest firewall rules that allow
+    TEXT[!MUST]:   traffic from the guest subnet to the bridge gateway address only on the
+    TEXT[!MUST]:   Host Service ports and SHALL keep every other port on the gateway closed
+    TEXT[!MUST]:   to guests.
+    TEXT[!MUST]: - **FL-109** The verification command SHALL, from inside a verification
+    TEXT[!MUST]:   MicroVM on each Host, build a trivial image with `buildctl`, fetch a
+    TEXT[!MUST]:   module through the Go module proxy, pull an image through the registry
+    TEXT[!MUST]:   mirror and fetch one object through the HTTP cache, and SHALL report the
+    TEXT[!MUST]:   outcome per service per Host.
+    TEXT[!MUST]: - **FL-110** The Fleet Controller SHALL record the address and port of each
+    TEXT[!MUST]:   Host Service in the Host's Inventory entry.
+    TEXT[!MUST]: - **FL-111** Where a Host Service is disabled in the configuration, the Fleet
+    TEXT[!MUST]:   Controller SHALL NOT install it and SHALL NOT open its port.
+    TEXT[!MUST]: - **FL-112** The Fleet Controller SHALL pre-warm the Go module proxy and the
+    TEXT[!MUST]:   registry mirror on each Host with the modules and images listed in the
+    TEXT[!MUST]:   configuration after provisioning.
+
 SPECIFICATION: [Configuration](docs/requirements/07-configuration.md)
   SECTION: [File and precedence](#file-and-precedence)
     TEXT[!MUST]: - **CF-001** The Runner SHALL read its configuration from a single YAML file
@@ -765,8 +778,8 @@ SPECIFICATION: [Configuration](docs/requirements/07-configuration.md)
     TEXT[!MUST]:   the first invalid field and the reason.
     TEXT[!MUST]: - **CF-005** The Runner SHALL apply documented defaults to every optional
     TEXT[!MUST]:   field so that a minimal configuration contains only the GitLab URL, the
-    TEXT[!MUST]:   runner token, the Orchestrator endpoint, the Pool Manager endpoint, one
-    TEXT[!MUST]:   Host and one Profile with a Pool size.
+    TEXT[!MUST]:   runner token, the Pool Manager endpoint, one Host and one Profile with a
+    TEXT[!MUST]:   Pool size.
     TEXT[!MUST]: - **CF-006** The Runner SHALL provide a `config show` command that prints the
     TEXT[!MUST]:   effective configuration with every secret value redacted.
     TEXT[!MUST]: - **CF-007** When the Runner receives `SIGHUP`, the Runner SHALL reload the
@@ -781,8 +794,9 @@ SPECIFICATION: [Configuration](docs/requirements/07-configuration.md)
     TEXT[!MUST]:   certificate authority, client certificate and client key paths.
     TEXT[!MUST]: - **CF-011** The Runner SHALL map the GitLab section onto the `RunnerConfig`
     TEXT[!MUST]:   and `Config` structures of the gitlab-runner `common` package.
-    TEXT[!MUST]: - **CF-012** The Runner SHALL default the concurrency limit to the sum of the
-    TEXT[!MUST]:   declared Pool sizes plus the maximum number of Overflow MicroVMs.
+    TEXT[!MUST]: - **CF-012** The Runner SHALL default the concurrency limit to twice the sum
+    TEXT[!MUST]:   of the declared Pool sizes, because immediate-on-lease replenishment keeps
+    TEXT[!MUST]:   Jobs flowing beyond the idle Pool size.
 
   SECTION: [Profiles section](#profiles-section)
     TEXT[!MUST]: - **CF-020** A Profile SHALL have a unique name, an architecture, a vCPU
@@ -792,14 +806,13 @@ SPECIFICATION: [Configuration](docs/requirements/07-configuration.md)
     TEXT[!MAY]: - **CF-021** A Profile MAY declare image names and image glob patterns that
     TEXT[!MAY]:   map Job Images onto it, a kernel command line, an initrd image, additional
     TEXT[!MAY]:   volumes, a hypervisor provider, cloud-init user-data, a Guest Transport, a
-    TEXT[!MAY]:   user, a ready timeout, a Host selector, Orchestrator scheduling
-    TEXT[!MAY]:   constraints, an exhaustion policy, a maximum number of Overflow MicroVMs
-    TEXT[!MAY]:   and a maximum concurrency.
+    TEXT[!MAY]:   user, a ready timeout, a Host selector and a maximum concurrency.
     TEXT[!MAY]: - **CF-022** Exactly one Profile MAY be marked as the Default Profile.
     TEXT[!MUST]: - **CF-023** If two Profiles declare the same image name, then the Runner
     TEXT[!MUST]:   SHALL reject the configuration.
-    TEXT[!MUST]: - **CF-024** A Profile's exhaustion policy SHALL be either `overflow` or
-    TEXT[!MUST]:   `wait` and SHALL default to `overflow`.
+    TEXT[!MUST]: - **CF-024** A Profile's Host selector SHALL be expressed as label
+    TEXT[!MUST]:   requirements matched against Inventory labels and SHALL determine the
+    TEXT[!MUST]:   Pool's host list.
     TEXT[!MUST]: - **CF-025** A Profile's pool settings SHALL contain the Pool size and MAY
     TEXT[!MUST]:   contain the Pool name and namespace, replenishment strategy, minimum size,
     TEXT[!MUST]:   create hooks, pre-lease hooks, hook failure policy, heartbeat interval and
@@ -816,44 +829,75 @@ SPECIFICATION: [Configuration](docs/requirements/07-configuration.md)
   SECTION: [Inventory section](#inventory-section)
     TEXT[!MUST]: - **CF-030** An Inventory entry SHALL contain a Host name, a `flintlockd`
     TEXT[!MUST]:   gRPC endpoint, an architecture, a vCPU capacity and a memory capacity, and
-    TEXT[!MUST]:   MAY contain an Orchestrator endpoint, labels, a basic auth token, TLS
-    TEXT[!MUST]:   settings and installed version information.
+    TEXT[!MUST]:   MAY contain labels, a basic auth token, TLS settings, Host Service
+    TEXT[!MUST]:   addresses and installed version information.
+    TEXT[!MUST]: - **CF-032** The Host name in an Inventory entry SHALL be the name the Pool
+    TEXT[!MUST]:   Manager uses for that Host in `flintlock_hosts`.
     TEXT[!MUST]: - **CF-031** The Runner SHALL reject an Inventory with duplicate Host names or
     TEXT[!MUST]:   duplicate endpoints.
 
-  SECTION: [Orchestrator and Pool Manager sections](#orchestrator-and-pool-manager-sections)
-    TEXT[!MUST]: - **CF-040** The Orchestrator section SHALL contain one or more endpoints, an
-    TEXT[!MUST]:   optional token with its authorization scheme, TLS settings and a request
-    TEXT[!MUST]:   deadline.
-    TEXT[!MUST]: - **CF-041** If the Orchestrator section is absent or has no endpoint, then
-    TEXT[!MUST]:   the Runner SHALL reject the configuration.
-    TEXT[!MUST]: - **CF-042** The Pool Manager section SHALL contain an endpoint, TLS
-    TEXT[!MUST]:   settings, a request deadline, a health backoff period, an events poll
-    TEXT[!MUST]:   interval, a pool declaration retry interval and a release retry limit.
-    TEXT[!MUST]: - **CF-043** If the Pool Manager section is absent or has no endpoint, then
+  SECTION: [Pool Manager section](#pool-manager-section)
+    TEXT[!MUST]: - **CF-040** The Pool Manager section SHALL contain an endpoint, TLS
+    TEXT[!MUST]:   settings, a request deadline, a health backoff period, a health probe
+    TEXT[!MUST]:   interval, an events poll interval, a pool declaration retry interval and a
+    TEXT[!MUST]:   release retry limit.
+    TEXT[!MUST]: - **CF-041** If the Pool Manager section is absent or has no endpoint, then
     TEXT[!MUST]:   the Runner SHALL reject the configuration.
 
   SECTION: [Scheduler section](#scheduler-section)
     TEXT[!MUST]: - **CF-050** The Scheduler section SHALL contain the Runner namespace, the
-    TEXT[!MUST]:   Runner identity used in labels, the maximum number of Overflow MicroVMs,
-    TEXT[!MUST]:   the allocation timeout, the create timeout, the create poll interval, the
-    TEXT[!MUST]:   health probe interval, the unhealthy probe threshold, the garbage
-    TEXT[!MUST]:   collection interval, the orphan grace period, the maximum MicroVM lifetime,
-    TEXT[!MUST]:   the release retry limit and the keep-on-failure flag.
-    TEXT[!MUST]: - **CF-051** The Runner SHALL default the Runner identity to the runner name
-    TEXT[!MUST]:   combined with the system identifier so that two Runners with the same name
-    TEXT[!MUST]:   on different Control Nodes do not collect each other's MicroVMs.
+    TEXT[!MUST]:   allocation timeout, the Host health probe interval, the unhealthy probe
+    TEXT[!MUST]:   threshold, the keep-on-failure flag and the keep duration.
+    TEXT[!MUST]: - **CF-051** The Runner SHALL default the Runner namespace to the runner
+    TEXT[!MUST]:   name so that two Runners sharing one Pool Manager declare their Pools in
+    TEXT[!MUST]:   separate namespaces.
 
   SECTION: [Fleet section](#fleet-section)
     TEXT[!MUST]: - **CF-060** The Fleet section SHALL contain the AWS region, the discovery
     TEXT[!MUST]:   tag key and value or explicit instance ids, the remote execution mode and
     TEXT[!MUST]:   its SSH settings, the provisioning parallelism, the pinned versions of
-    TEXT[!MUST]:   flintlock, Firecracker, Cloud Hypervisor, containerd, the Orchestrator and
-    TEXT[!MUST]:   the Pool Manager, the thin pool device, the guest subnet, the `flintlockd`
+    TEXT[!MUST]:   flintlock, Firecracker, Cloud Hypervisor, containerd and the Pool Manager,
+    TEXT[!MUST]:   the thin pool device, the guest subnet, the `flintlockd`
     TEXT[!MUST]:   port and auth settings, the Host reserve, and the paths for the generated
     TEXT[!MUST]:   Inventory and Runner configuration.
     TEXT[!MAY]: - **CF-061** The Fleet section MAY contain launch template settings naming
     TEXT[!MAY]:   the Systems Manager parameters that hold secrets.
+
+  SECTION: [Host services section](#host-services-section)
+    TEXT[!MUST]: - **CF-070** The Host services section SHALL contain, for each of
+    TEXT[!MUST]:   `buildkit`, `go_proxy`, `registry_mirror` and `http_cache`, an enabled flag
+    TEXT[!MUST]:   that defaults to true and a port.
+    TEXT[!MAY]: - **CF-071** The `buildkit` entry MAY contain a storage limit and a garbage
+    TEXT[!MAY]:   collection policy.
+    TEXT[!MAY]: - **CF-072** The `go_proxy` entry MAY contain the upstream proxy, a list of
+    TEXT[!MAY]:   private module patterns, the version control host those patterns resolve
+    TEXT[!MAY]:   to, the Systems Manager parameter holding the read-only credential for
+    TEXT[!MAY]:   them, a private module revalidation interval, a storage limit and a list of
+    TEXT[!MAY]:   modules to pre-warm.
+    TEXT[!MUST]: - **CF-076** If the `go_proxy` entry lists private module patterns without a
+    TEXT[!MUST]:   credential parameter, then the Runner SHALL reject the configuration.
+    TEXT[!MAY]: - **CF-073** The `registry_mirror` entry MAY contain a list of upstream
+    TEXT[!MAY]:   registries with optional credential parameter names, a storage limit and a
+    TEXT[!MAY]:   list of images to pre-warm.
+    TEXT[!MAY]: - **CF-074** The `http_cache` entry MAY contain a list of upstreams, each
+    TEXT[!MAY]:   with a name, an upstream URL, a size limit, a time-to-live and the
+    TEXT[!MAY]:   environment variable name the Executor injects for it.
+    TEXT[!MUST]: - **CF-075** The Host services section SHALL contain the cache volume device
+    TEXT[!MUST]:   or directory and its total size cap.
+
+  SECTION: [Distributed cache section](#distributed-cache-section)
+    TEXT[!MUST]: - **CF-080** The Distributed cache section SHALL contain an S3 bucket name,
+    TEXT[!MUST]:   region and optional prefix, and MAY contain an endpoint for S3-compatible
+    TEXT[!MUST]:   stores.
+    TEXT[!MUST]: - **CF-081** The Runner SHALL map the Distributed cache section onto the
+    TEXT[!MUST]:   gitlab-runner cache configuration so that the `cache:` keyword in a
+    TEXT[!MUST]:   pipeline stores and restores through that bucket.
+    TEXT[!MUST]: - **CF-082** The Runner SHALL configure the distributed cache so that
+    TEXT[!MUST]:   pre-signed URLs are generated on the Control Node and no AWS credentials
+    TEXT[!MUST]:   are passed into the guest.
+    TEXT[!MUST]: - **CF-083** If the Distributed cache section is absent, then the Runner
+    TEXT[!MUST]:   SHALL log at startup that the `cache:` keyword is unavailable and SHALL
+    TEXT[!MUST]:   fail Jobs that use it with the failure reason `runner_unsupported`.
 
 SPECIFICATION: [Observability](docs/requirements/08-observability.md)
   SECTION: [Logging](#logging)
@@ -864,44 +908,44 @@ SPECIFICATION: [Observability](docs/requirements/08-observability.md)
     TEXT[!MUST]: - **OB-003** The Runner SHALL log at `info` level each Reservation refusal
     TEXT[!MUST]:   reason at most once per minute per reason to avoid flooding when capacity
     TEXT[!MUST]:   is exhausted.
-    TEXT[!MUST]: - **OB-004** The Runner SHALL log at `warn` level every overflow creation
-    TEXT[!MUST]:   with the name of the exhausted Pool and the cause.
+    TEXT[!MUST]: - **OB-004** The Runner SHALL log at `warn` level when a claim finds a Pool
+    TEXT[!MUST]:   exhausted, at most once per minute per Pool, with the Pool name and the
+    TEXT[!MUST]:   number of Jobs waiting on it.
 
   SECTION: [Metrics](#metrics)
     TEXT[!MUST]: - **OB-010** The Runner SHALL expose Prometheus metrics on the configured
     TEXT[!MUST]:   listen address at the `/metrics` path.
     TEXT[!MUST]: - **OB-011** The Runner SHALL expose the standard metrics of the
     TEXT[!MUST]:   gitlab-runner packages alongside its own.
-    TEXT[!MUST]: - **OB-012** The Runner SHALL expose a counter of Jobs by final state and by
-    TEXT[!MUST]:   MicroVM source.
-    TEXT[!MUST]: - **OB-013** The Runner SHALL expose a histogram of allocation duration
-    TEXT[!MUST]:   labelled by Profile and source.
+    TEXT[!MUST]: - **OB-012** The Runner SHALL expose a counter of Jobs by final state and
+    TEXT[!MUST]:   Profile.
+    TEXT[!MUST]: - **OB-013** The Runner SHALL expose a histogram of allocation duration, from
+    TEXT[!MUST]:   first claim attempt to Placement, labelled by Profile.
     TEXT[!MUST]: - **OB-014** The Runner SHALL expose a histogram of the time from allocation
-    TEXT[!MUST]:   to guest readiness labelled by Profile and source.
+    TEXT[!MUST]:   to guest readiness labelled by Profile.
     TEXT[!MUST]: - **OB-015** The Runner SHALL expose a counter of Reservation refusals
     TEXT[!MUST]:   labelled by reason.
     TEXT[!MUST]: - **OB-016** The Runner SHALL expose a gauge of available warm MicroVMs per
     TEXT[!MUST]:   Pool.
-    TEXT[!MUST]: - **OB-017** The Runner SHALL expose gauges of active Overflow MicroVMs and
-    TEXT[!MUST]:   active Leases.
+    TEXT[!MUST]: - **OB-017** The Runner SHALL expose a gauge of active Leases per Pool.
     TEXT[!MUST]: - **OB-018** The Runner SHALL expose a gauge of Host health per Host and a
-    TEXT[!MUST]:   gauge of Runner-owned MicroVMs per Host.
-    TEXT[!MUST]: - **OB-019** The Runner SHALL expose a histogram of `CreateMicroVM` to
-    TEXT[!MUST]:   `CREATED` latency labelled by Host.
-    TEXT[!MUST]: - **OB-020** The Runner SHALL expose counters of garbage-collected MicroVMs,
-    TEXT[!MUST]:   failed release operations, Guest Transport stream failures and Lease
-    TEXT[!MUST]:   heartbeat failures.
+    TEXT[!MUST]:   gauge of leased MicroVMs per Host.
+    TEXT[!MUST]: - **OB-019** The Runner SHALL expose gauges of each Pool's target size and
+    TEXT[!MUST]:   number of MicroVMs being provisioned, as reported by the Pool Manager.
+    TEXT[!MUST]: - **OB-020** The Runner SHALL expose counters of failed release operations,
+    TEXT[!MUST]:   Guest Transport stream failures and Lease heartbeat failures.
+    TEXT[!MUST]: - **OB-021** The Runner SHALL expose a counter of Jobs that waited on an
+    TEXT[!MUST]:   exhausted Pool and a histogram of how long they waited, labelled by Pool.
 
   SECTION: [Health](#health)
     TEXT[!MUST]: - **OB-030** The Runner SHALL serve a liveness endpoint at `/healthz` that
     TEXT[!MUST]:   returns success while the process is running.
     TEXT[!MUST]: - **OB-031** The Runner SHALL serve a readiness endpoint at `/readyz` that
-    TEXT[!MUST]:   returns success only after the runner token has been verified, the
-    TEXT[!MUST]:   Orchestrator and the Pool Manager have each answered at least once and at
-    TEXT[!MUST]:   least one Host is healthy.
+    TEXT[!MUST]:   returns success only after the runner token has been verified, the Pool
+    TEXT[!MUST]:   Manager has answered at least once and at least one Host is healthy.
     TEXT[!MUST]: - **OB-032** The readiness endpoint SHALL report, in its response body, the
-    TEXT[!MUST]:   number of healthy Hosts, whether the Orchestrator is reachable and whether
-    TEXT[!MUST]:   the Pool Manager is reachable.
+    TEXT[!MUST]:   number of healthy Hosts, whether the Pool Manager is reachable and the
+    TEXT[!MUST]:   available count of each Pool.
 
   SECTION: [Job log annotations](#job-log-annotations)
     TEXT[!MUST]: - **OB-040** The Runner SHALL write a collapsible section named
@@ -928,7 +972,7 @@ SPECIFICATION: [Security](docs/requirements/09-security.md)
 
   SECTION: [Secrets](#secrets)
     TEXT[!MUST]: - **SE-010** The Runner SHALL NOT write the runner authentication token, Job
-    TEXT[!MUST]:   tokens, Host tokens, Orchestrator tokens or Pool Manager credentials to any
+    TEXT[!MUST]:   tokens, Host tokens or Pool Manager credentials to any
     TEXT[!MUST]:   log, metric label, Job log or MicroVM metadata.
     TEXT[!MUST]: - **SE-011** The Runner SHALL deliver the Job token to the guest only inside
     TEXT[!MUST]:   the Stage scripts sent over the Guest Transport.
@@ -945,9 +989,8 @@ SPECIFICATION: [Security](docs/requirements/09-security.md)
   SECTION: [Transport security](#transport-security)
     TEXT[!MUST]: - **SE-020** The Runner SHALL refuse a GitLab URL that is not `https` unless
     TEXT[!MUST]:   the configuration explicitly allows insecure GitLab access.
-    TEXT[!MUST]: - **SE-021** The Runner SHALL refuse plaintext connections to Hosts, the
-    TEXT[!MUST]:   Orchestrator and the Pool Manager unless each endpoint is explicitly marked
-    TEXT[!MUST]:   insecure.
+    TEXT[!MUST]: - **SE-021** The Runner SHALL refuse plaintext connections to Hosts and the
+    TEXT[!MUST]:   Pool Manager unless each endpoint is explicitly marked insecure.
     TEXT[!MUST]: - **SE-022** The Runner SHALL verify server certificates for every TLS
     TEXT[!MUST]:   connection and SHALL NOT offer an option to skip verification.
     TEXT[!MUST]: - **SE-023** The Fleet Controller SHALL generate a certificate authority and
@@ -973,3 +1016,25 @@ SPECIFICATION: [Security](docs/requirements/09-security.md)
     TEXT[!MUST]:   it SHALL require only `ec2:DescribeInstances`.
     TEXT[!MUST]: - **SE-042** The Fleet Controller SHALL document the security group rules it
     TEXT[!MUST]:   needs and SHALL NOT modify security groups itself.
+
+  SECTION: [Host services](#host-services-security)
+    TEXT[!MUST]: - **SE-050** The Fleet Controller SHALL run `buildkitd` as an unprivileged
+    TEXT[!MUST]:   user so that a build escaping its sandbox does not gain root on the Host.
+    TEXT[!MUST]: - **SE-051** Every Host Service SHALL be reachable only from the guest
+    TEXT[!MUST]:   subnet of its own Host and from the Host itself, and SHALL NOT be
+    TEXT[!MUST]:   reachable from other Hosts or from outside the Host.
+    TEXT[!MUST]: - **SE-052** The Fleet Controller SHALL NOT place upstream registry or proxy
+    TEXT[!MUST]:   credentials where a guest can read them, and SHALL configure the registry
+    TEXT[!MUST]:   mirror and Go module proxy to hold them on the Host side only.
+    TEXT[!MUST]: - **SE-053** The Executor SHALL NOT inject Host Service variables that would
+    TEXT[!MUST]:   route a Job's traffic to a Host other than the one running its MicroVM.
+    TEXT[!MUST]: - **SE-054** Where a Job builds images with `buildkitd`, the Runner SHALL
+    TEXT[!MUST]:   document that the layer cache is shared between Jobs on the same Host and
+    TEXT[!MUST]:   that a Job can read layers another Job on that Host produced.
+    TEXT[!MUST]: - **SE-055** The credential the Go module proxy uses for private modules
+    TEXT[!MUST]:   SHALL be read-only and SHALL grant access to no groups or projects beyond
+    TEXT[!MUST]:   those covered by the configured private module patterns.
+    TEXT[!MUST]: - **SE-056** The Runner SHALL document that private modules cached by a
+    TEXT[!MUST]:   Host's Go module proxy are readable by every Job that runs on that Host.
+    TEXT[!MUST]: - **SE-057** The Go module proxy SHALL NOT use a Job's token to fetch
+    TEXT[!MUST]:   modules.

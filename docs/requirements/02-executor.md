@@ -51,9 +51,8 @@ Executor calls into it.
   the builds directory, cache directory and helper binary path used in
   generated scripts are those of the Profile.
 - **EX-019** The Executor SHALL write a collapsible section to the Job log
-  during `Prepare` that names the Profile, whether the MicroVM was warm or
-  overflow, the Host name, the MicroVM uid and the time taken to become
-  ready.
+  during `Prepare` that names the Profile, the Pool, the Host name, the
+  MicroVM uid and the time taken to become ready.
 
 The helper binary path matters because the generated `upload_artifacts`,
 `download_artifacts`, `restore_cache` and `archive_cache` scripts invoke
@@ -85,10 +84,9 @@ binary at the configured path.
   through the Stage scripts sent over the Guest Transport and SHALL NOT place
   Job-specific values in MicroVM metadata.
 
-EX-027 keeps warm and Overflow MicroVMs identical from the guest's point of
-view: a warm MicroVM was booted before the Job existed, so nothing about the
-Job can be in its cloud-init data, and Overflow MicroVMs follow the same
-rule so that both paths are exercised by the same tests.
+EX-027 follows from the Pool model: a warm MicroVM was booted before the Job
+existed, so nothing about the Job can be in its cloud-init data, and the
+Stage scripts are the only channel that exists after boot.
 
 ## Finish and cleanup {#finish-and-cleanup}
 
@@ -143,3 +141,37 @@ The `exec` transport is the default because the exec service is served by
 reachable from the Control Node. On EC2, guest addresses live behind a
 host-local bridge and are not routable in the VPC, so a TCP transport would
 require extra plumbing on every Host.
+
+## Host service environment {#host-service-environment}
+
+- **EX-060** When the Placement of a Job's MicroVM is known, the Executor
+  SHALL add to the Job's environment the variables that point at the Host
+  Services of that Host: `BUILDKIT_HOST`, `GOPROXY`, `GOFLAGS` with
+  `-modcacherw`, the registry mirror address as `CI_REGISTRY_MIRROR`, and
+  one variable per configured HTTP cache upstream under the name given in
+  the configuration.
+- **EX-065** When the Go module proxy is configured with private module
+  patterns, the Executor SHALL set `GONOSUMDB` to those patterns and
+  `GONOPROXY` to the empty string so that the Go toolchain fetches private
+  modules through the Host's proxy and does not consult the public checksum
+  database for them.
+- **EX-066** The Executor SHALL NOT set `GOPRIVATE`, because it would make
+  the Go toolchain bypass the Host's proxy for private modules.
+- **EX-061** The Executor SHALL NOT override a variable that the Job itself
+  sets with the same name, so that a job can opt out of a Host Service.
+- **EX-062** Where a Host Service is disabled or the Host's Inventory entry
+  lacks its address, the Executor SHALL omit that service's variables rather
+  than point them at an unreachable address.
+- **EX-063** The Executor SHALL add the Host Service variables before the
+  `prepare_script` Stage so that every Stage, including `get_sources`, sees
+  them.
+- **EX-064** The Executor SHALL write a line to the `flintlock_prepare`
+  section of the Job log naming the Host Services that were made available
+  to the Job.
+
+`GOPROXY` points at the Host's Go module proxy, which fetches public modules
+from the public proxy and private modules from the version control host on a
+miss, so a job on a fresh host sees the same results as a job on a warm one,
+only slower. Jobs do not need `GOPRIVATE` or credentials for private
+modules; the proxy holds those. `GOCACHE` is not served by a Host Service;
+build outputs travel between hosts through the GitLab distributed cache.

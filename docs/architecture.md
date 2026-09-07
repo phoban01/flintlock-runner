@@ -9,22 +9,20 @@ made (September 2026).
 
 `flintlock-runner` is a GitLab CI runner that executes every job in its own
 Firecracker or Cloud Hypervisor microVM on a fleet of bare-metal EC2 hosts.
-It is built on three liquidmetal components:
+It is built on two liquidmetal components:
 
 - [flintlock](https://github.com/liquidmetal-dev/flintlock) runs microVMs on
-  each host.
-- [brigade](https://github.com/liquidmetal-dev/brigade), the Orchestrator,
-  fronts the fleet: it speaks flintlock's `MicroVM` gRPC API unchanged and
-  decides which host each microVM lands on. The runner never talks to a
-  host to create or delete a microVM.
+  each host and exposes a guest-agent exec API over vsock.
 - [battery](https://github.com/liquidmetal-dev/battery), the Pool Manager,
-  keeps pools of pre-booted microVMs and leases them out. Every job normally
-  starts in a leased warm microVM; the runner declares the pools from its
-  own profile configuration.
+  keeps pools of pre-booted microVMs on those hosts, decides which host each
+  one lives on, leases them out, and deletes and replaces them after use.
+  Every job runs in a leased pool microVM. The runner declares the pools
+  from its own profile configuration and never creates, deletes or places a
+  microVM itself.
 
-The runner itself is a single Go binary built from the gitlab-runner Go
-packages, with a scheduling component inserted where the stock runner would
-talk to a container runtime.
+The runner is a single Go binary built from the gitlab-runner Go packages,
+with a scheduling component inserted where the stock runner would talk to a
+container runtime.
 
 ```
                  ┌──────────────────────── Control Node ─────────────────────────┐
@@ -33,23 +31,20 @@ talk to a container runtime.
   jobs/request   │        │ Acquire / Release                                     │
   trace, artifacts        ▼                                                       │
                  │   Executor "flintlock" ──► Scheduler ──► capacity, profiles,   │
-                 │        │                       │        leases, overflow, GC   │
+                 │        │                       │        leases, placement      │
                  │        │ Guest Transport        │                              │
-                 │        │ (MicroVMExec)          ├──► battery poolmgrd          │
-                 │        │                        │      ClaimVM / Heartbeat /   │
-                 │        │                        │      ReleaseVM  (warm path)  │
-                 │        │                        └──► brigade                   │
-                 │        │                               CreateMicroVM           │
-                 │        │                               (overflow path, GC)     │
+                 │        │ (MicroVMExec)          └──► battery poolmgrd          │
+                 │        │                               ClaimVM / Heartbeat /   │
+                 │        │                               ReleaseVM · PoolAdmin   │
                  └────────┼─────────────────────────────────┬─────────────────────┘
-                          │ exec over vsock, GetMicroVM      │ MicroVM gRPC (drop-in)
+                          │ exec over vsock, GetMicroVM      │ creates / deletes pool VMs
           ┌───────────────▼─────────────┐    ┌───────────────▼─────────────┐
           │ Host A (m7g.metal)          │    │ Host B (m7g.metal)          │
           │  flintlockd :9090           │    │  flintlockd :9090           │
-          │  brigade node :9091 ◄──gossip──► brigade node :9091           │
           │  poolmgr-hostagent          │    │  poolmgr-hostagent          │
           │  containerd + thinpool      │    │  containerd + thinpool      │
           │  bridge + dnsmasq + NAT     │    │  bridge + dnsmasq + NAT     │
+          │  buildkitd, go proxy, mirror│    │  buildkitd, go proxy, mirror│
           │   ┌────┐ ┌────┐ ┌────┐      │    │   ┌────┐ ┌────┐             │
           │   │job │ │job │ │warm│      │    │   │job │ │warm│             │
           │   └────┘ └────┘ └────┘      │    │   └────┘ └────┘             │
@@ -59,26 +54,24 @@ talk to a container runtime.
 ## Life of a job
 
 1. The run loop calls `Executor.Acquire`. The Scheduler grants a reservation
-   only if a slot is free *and* either a pool has a warm microVM or overflow
-   headroom remains. Otherwise no job is requested from GitLab.
+   only if a slot is free *and* some pool has a warm microVM available.
+   Otherwise no job is requested from GitLab and it waits in GitLab's queue.
 2. A job arrives. Its `image:` keyword names a Profile (kernel, rootfs,
    sizing, transport, pool). Unknown image, no default profile: the job
    fails immediately without touching a pool.
 3. The Scheduler calls battery `ClaimVM` on the profile's pool. On success it
-   holds a lease and heartbeats it for the life of the job.
-4. If the pool is exhausted and the profile's exhaustion policy is
-   `overflow`, the Scheduler sends `CreateMicroVM` to brigade with the
-   profile's architecture and host selector as `brigade.scheduling/` labels.
-   Policy `wait` retries the claim until the allocation timeout instead.
-5. Either way the Scheduler resolves *placement*: which host runs the
-   microVM. Neither brigade nor battery returns that, so it fans out
-   `GetMicroVM` across the candidate hosts (the pool's hosts, or the
-   inventory filtered by the profile) and caches the answer.
-6. The Executor waits for the guest to answer over the Guest Transport, then
-   streams each generated bash stage script into the guest via flintlock's
+   holds a lease and heartbeats it for the life of the job. battery starts a
+   replacement boot at once (immediate-on-lease replenishment), which is how
+   bursts larger than the pool are absorbed: the next job waits one boot.
+4. The Scheduler resolves *placement*: which host runs the microVM. The
+   claim response should carry it (an upstream request asks for that); until
+   it does, the Scheduler asks each of the pool's hosts with `GetMicroVM`.
+5. The Executor waits for the guest to answer over the Guest Transport,
+   injects the host-service environment for that host, then streams each
+   generated bash stage script into the guest via flintlock's
    `MicroVMExec.ExecCommand` on that host, with the script on stdin.
-7. On completion the lease is released (battery deletes and replenishes) or
-   the overflow microVM is deleted through brigade. The slot is returned.
+6. On completion the lease is released. battery deletes the microVM and the
+   slot is returned. The runner has nothing to garbage-collect.
 
 ## Components
 
@@ -94,25 +87,21 @@ intake on real capacity.
 interfaces. `Acquire` asks the Scheduler for a reservation; `Prepare` asks
 it for a microVM matching the job's profile and waits for the guest to
 answer; `Run` sends each stage script into the guest; `Cleanup` hands the
-microVM back.
+lease back.
 
 **Scheduler.** The component the design exists to insert. It owns:
 
 - *Capacity*: how many jobs may be requested from GitLab right now,
-  computed from warm pool availability plus overflow headroom.
+  computed from warm pool availability.
 - *Profile resolution*: `image:` names a profile, never a container image.
-- *Allocation*: claim from the profile's pool first; overflow through
-  brigade only when the pool is exhausted and the profile allows it.
+- *Claims*: one `ClaimVM` per job, with backoff while a pool is exhausted.
 - *Placement resolution*: learn which host got the microVM, because the
   exec transport talks to that host directly.
 - *Pool declaration*: create or update one battery pool per profile at
   startup and on reload, so profiles are the single source of truth.
-- *Lifecycle*: lease heartbeats, deletion of overflow microVMs through
-  brigade, garbage collection of orphans by label, host and orchestrator
-  health probing.
+- *Lease lifecycle*: heartbeats, release, host health probing.
 
-It never picks a host. brigade places overflow microVMs; battery places warm
-ones across the hosts eligible for the pool.
+It never picks a host and never deletes a microVM. battery does both.
 
 **Guest Transport.** Default is flintlock's `MicroVMExec.ExecCommand`
 streaming RPC, served by `flintlockd` over the microVM's vsock via the
@@ -121,11 +110,22 @@ returns an exit code, which is everything a stage needs. An SSH transport
 (via flintlock's `MicroVMSSHProxy` or direct TCP) is specified as an
 alternative for images without the guest agent.
 
+**Host services.** Every host also runs rootless `buildkitd`, a Go module
+proxy (Athens) that serves private modules with a read-only fleet
+credential as well as public ones, a pull-through registry mirror and a
+generic HTTP cache for configured upstreams such as npm and PyPI, all bound
+to the guest bridge gateway so only that host's guests can reach them. The
+executor injects `BUILDKIT_HOST`, `GOPROXY` and friends into every job once
+it knows which host the job landed on, so a fresh microVM starts with warm
+layers and modules. Build outputs such as `GOCACHE` cross hosts through
+GitLab's distributed cache on S3, using pre-signed URLs generated on the
+control node so no AWS credentials enter a guest.
+
 **Fleet Controller.** `flintlock-runner fleet {provision,verify,drain,
 teardown,emit-userdata}`. Discovers `*.metal` instances by tag, provisions
 them over SSM Run Command with `flintlock-provision all`, sets up a NAT'd
-guest bridge with dnsmasq, installs a brigade node and the battery host
-agent on every host and battery's daemon on the control node, pre-pulls
+guest bridge with dnsmasq, installs the battery host agent and the host
+services on every host and battery's daemon on the control node, pre-pulls
 images, writes an inventory and generates the runner config. No part of the
 liquidmetal ecosystem knows about EC2, so this layer is entirely ours.
 
@@ -153,18 +153,18 @@ loop design can look at a job before committing to it. The `Acquire` hook
 already lets us decline to request. The cost is that the runner reads a
 `RunnerConfig` structure; we generate it from our own YAML.
 
-**brigade as the only control-plane endpoint.** The runner has exactly one
-place to create, list and delete microVMs, and placement policy lives in
-one component that every consumer of the fleet shares. The runner's host
-inventory exists only for the two things brigade does not proxy: the exec
-transport and placement lookup.
-
-**battery as the only source of warm microVMs, with overflow through
-brigade.** Warm pools give sub-second job start; overflow keeps a burst
-larger than a pool from stalling on replenishment. Both paths produce a
-microVM from the same specification builder, so a job cannot tell them
-apart. Pools are declared from profiles so that adding a profile is one
-edit.
+**battery only, no brigade.** An earlier draft put
+[brigade](https://github.com/liquidmetal-dev/brigade), the flintlock
+orchestrator, in front of the fleet so the runner could create "overflow"
+microVMs when a pool was empty. It was dropped because battery already
+covers that case: with immediate-on-lease replenishment every claim starts
+a replacement boot, so a burst waits one boot time either way, and pool
+size becomes idle headroom rather than a concurrency ceiling. Removing
+brigade deleted the runner's microVM spec builder, create polling, garbage
+collection, orphan labels, orchestrator health and an Erlang cluster to
+operate, and left exactly one component deciding where microVMs live.
+brigade remains the right tool if something other than this runner needs a
+fleet-wide flintlock API; it is just not in the runner's path.
 
 **Exec over vsock as the default transport.** EC2 does not deliver frames to
 MAC addresses it has not assigned, so microVMs on a host bridge are not
@@ -185,21 +185,14 @@ across jobs. Warm pools provide the latency win instead.
   token in the `authorization` header; TLS and mTLS supported.
   `flintlock-provision` (the Go replacement for `provision.sh`) merged
   2026-09-05 and is not yet in a tagged release.
-- **brigade** v0.2.0 (2026-07-24). Elixir/OTP, not Go. Runs on every host,
-  meshes with distributed Erlang, exposes flintlock's `MicroVM` service
-  verbatim on :9091 and places each create on a host via a least-loaded
-  strategy with `brigade.scheduling/` label constraints. Protos pinned to
-  flintlock v0.11.0, so `cpu_config` and `ServerInfo` do not pass through
-  it. Does not proxy exec or SSH proxy. Host capacity is static config, not
-  probed. Only "topology A" (a node per host) is implemented.
 - **battery** (created 2026-09-05, no releases). Go, module
   `github.com/liquidmetal-dev/battery`. Protos for `PoolAdmin`, `Lease`
   (`ClaimVM`/`Heartbeat`/`ReleaseVM`), `Events` and a per-host `Hostagent`
   are defined; the daemons are stubs. A released VM is deleted and replaced,
   never reused. Hosts are a static JSON list and the host agent is reached
-  through each VM's vsock path, so battery has to be pointed at physical
-  hosts rather than at brigade. TLS only, no basic-auth token support in
-  its client yet.
+  through each VM's vsock path. Placement in v1 is round-robin or
+  least-VMs across the pool's hosts. TLS only; no basic-auth token support
+  in its client yet. `ClaimVMResponse` does not yet name the host.
 - **gitlab-runner** 19.4.0 (HEAD). Importable via pseudo-version only
   (`go get gitlab.com/gitlab-org/gitlab-runner@<commit>`); `go 1.26`.
   `common.JobResponse` is gone in favour of `common/spec.Job`; executor
@@ -214,44 +207,41 @@ Firecracker projects that run the stock runner binary inside the VM.
 
 ## Delivery order
 
-brigade and battery are load-bearing, so the runner is developed against
-them from the start. battery's daemon does not exist yet, which sets the
+battery is load-bearing and its daemon does not exist yet, which sets the
 order:
 
-1. **Clients and fakes.** flintlock, brigade and battery gRPC clients with a
-   conforming in-process fake for each, driven by the requirements in
-   `04-pool-manager.md` and `05-orchestrator.md`. The fakes are what the
-   Scheduler's tests run against.
-2. **Scheduler and Executor** against the fakes, then against a real
-   flintlock host and a real brigade cluster with the battery fake standing
-   in for the pool manager.
-3. **Fleet Controller** for EC2: provisioning, brigade and battery agent
+1. **Clients and fakes.** flintlock and battery gRPC clients with a
+   conforming in-process fake for battery, driven by the requirements in
+   `04-pool-manager.md` and `05-hosts.md`. The fake is what the Scheduler's
+   tests run against, and it is also what the first real fleet runs on
+   until battery lands: a fake that creates directly on hosts is a working
+   pool manager, just not a production one.
+2. **Scheduler and Executor** against the fake, then against real flintlock
+   hosts with the fake standing in for battery.
+3. **Fleet Controller** for EC2: provisioning, host services, battery agent
    installation, verification.
 4. **Real battery** as soon as its lease and reconciliation logic lands
-   upstream; contribute there where the runner needs something (a host
-   field on `ClaimVMResponse` would remove the placement fan-out).
+   upstream, with the host field on `ClaimVMResponse` if accepted.
 5. **Launch-template mode** for self-provisioning auto scaling groups.
 
 ## Known risks
 
-- battery has no working daemon. Until it does, warm pools are exercised
-  only against the fake, and a deployed fleet runs every job as overflow
-  through brigade. That path is fully specified and is the fallback the
-  design already needs for bursts, so nothing is wasted, but the latency
-  benefit arrives only with battery.
-- brigade and battery are single-author projects a few weeks old. Their
-  APIs are pinned in this spec by proto package name; bumps are expected.
-- brigade pins flintlock v0.11.0 protos; `cpu_config` is excluded from
-  Profiles until brigade is rebuilt against a newer API.
-- battery cannot be fronted by brigade because its host agent is addressed
-  per physical host. Warm-pool placement is therefore battery's, overflow
-  placement is brigade's, and the Fleet Controller gives both the same host
-  list and labels so the two agree on what is eligible.
-- Placement resolution is a fan-out of `GetMicroVM` over candidate hosts.
-  Fine for tens of hosts; a placement field in either upstream response
-  would replace it.
+- battery has no working daemon and this design has no other source of
+  microVMs. The in-process fake covers development and early fleets, and
+  everything the runner needs from battery is in the published protos, but
+  production depends on upstream landing.
+- battery is a single-author project a few weeks old, single-instance with
+  SQLite and HA deferred. The runner is also single-instance, so this does
+  not lower availability below the runner's own, but a battery restart
+  pauses new claims until it is back.
+- Placement resolution is a fan-out of `GetMicroVM` over a pool's hosts
+  until battery reports the host on `ClaimVMResponse` (upstream request
+  filed). Fine for tens of hosts.
+- battery's v1 placement does not account for vCPU or memory; pool sizes
+  have to be chosen so that the sum over pools fits the hosts. Capacity-aware
+  placement is a natural upstream follow-up.
 - gitlab-runner's exported API churns between minors. Pin a commit and
   re-vet `common.Network`, `ExecutorProvider` and `spec.Job` on every bump.
-- Job images need `gitlab-runner-helper` (artifacts/cache) and the flintlock
-  guest agent baked in. An image-building recipe is out of scope for the
-  requirements but is a prerequisite for the first real job.
+- Job images need `gitlab-runner-helper` (artifacts/cache), `buildctl` and
+  the flintlock guest agent baked in. An image-building recipe is out of
+  scope for the requirements but is a prerequisite for the first real job.

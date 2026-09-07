@@ -31,7 +31,7 @@ source = "docs/requirements/04-pool-manager.md"
 format = "markdown"
 
 [[specification]]
-source = "docs/requirements/05-orchestrator.md"
+source = "docs/requirements/05-hosts.md"
 format = "markdown"
 
 [[specification]]
