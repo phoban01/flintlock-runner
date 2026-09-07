@@ -50,6 +50,10 @@ format = "markdown"
 source = "docs/requirements/09-security.md"
 format = "markdown"
 
+[[specification]]
+source = "docs/requirements/10-test-doubles.md"
+format = "markdown"
+
 [report.html]
 enabled = true
 path = ".duvet/reports/report.html"

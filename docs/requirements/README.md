@@ -21,6 +21,7 @@ the coverage report.
 | `07-configuration.md` | `CF` | The configuration surface |
 | `08-observability.md` | `OB` | Logging, metrics, health, job-log annotations |
 | `09-security.md` | `SE` | Isolation, secrets, transport security |
+| `10-test-doubles.md` | `TD` | The fakes (Pool Manager, Host, GitLab, AWS) and the end-to-end harness that stand in for EC2, KVM and battery during development |
 
 ## EARS patterns
 

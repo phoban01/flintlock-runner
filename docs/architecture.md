@@ -205,6 +205,15 @@ None of these has been integrated with GitLab before; the closest prior art
 is Collabora's Rust `gitlab-runner` crate (raw REST) and a handful of
 Firecracker projects that run the stock runner binary inside the VM.
 
+## Development environment
+
+This phase has no EC2 account, no KVM on the development machine and no
+battery daemon upstream. The requirements in `10-test-doubles.md` specify
+the fakes that stand in for all three, and `docs/PLAN.md` sets out how the
+work is split and coordinated around them. EC2 remains the production
+target; only the order of verification changes, with the fake stack first,
+real hosts second and EC2 last.
+
 ## Delivery order
 
 battery is load-bearing and its daemon does not exist yet, which sets the
