@@ -17,7 +17,9 @@ the live state.
   `/dev/kvm`, so no real `flintlockd` runs here. The fake Host (`TD-020` to
   `TD-026`) stands in. A hardware tier (`TD-052`) runs the same scenarios
   against real hosts whenever someone has them.
-- **No battery daemon yet.** The fake Pool Manager (`TD-001` to `TD-010`) is
+- **No battery release yet.** battery `main` gained a working daemon on
+  2026-09-07 (see `docs/architecture.md`), but there is no tagged release and
+  no host to run it against here. The fake Pool Manager (`TD-001` to `TD-010`) is
   a minimal but real pool manager on the battery protos; early fleets can
   run on it as a standalone binary (`TD-009`).
 
@@ -86,8 +88,8 @@ than by a separate agent.
 The harness against the fake stack in CI on every PR. Then, when a KVM
 machine is available to anyone on the project, the hardware tier: static
 inventory, SSH provisioning of a real host, real `flintlockd`, fake Pool
-Manager as the standalone binary. Then real battery when upstream lands,
-with battery #48 if accepted.
+Manager as the standalone binary. Then a build of battery `main` (its daemon works as of 2026-09-07), and
+a tagged release when one exists; PR #45 already returns the host on the claim.
 
 ### Phase 3: EC2
 

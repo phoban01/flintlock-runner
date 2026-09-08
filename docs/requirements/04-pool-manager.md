@@ -7,10 +7,11 @@ to exactly one Pool, the Runner declares those Pools from its Profiles, and
 a Job starts in a MicroVM claimed from its Profile's Pool through a Lease.
 The Pool Manager also decides which Host each pool MicroVM lives on and
 deletes it after release. The integration targets the `poolmgr.v1alpha1`
-gRPC API (`PoolAdmin`, `Lease`, `Events` services). At the time of writing
-the Pool Manager's API is defined upstream but its reconciliation and lease
-logic is not yet implemented, so every requirement here is written against
-the published protos and is exercised first against a conforming fake.
+gRPC API (`PoolAdmin`, `Lease`, `Events` services). battery's daemon gained a
+working lease service, expiry sweeper, reconciler, events stream and SQLite
+store on 2026-09-07 but has no tagged release yet, so the requirements here
+are written against the protos on `main` and are exercised first against a
+conforming fake and then against a build of `main`.
 
 ## Client {#client}
 
@@ -93,7 +94,7 @@ size is the amount of idle warm capacity, not a ceiling on concurrent Jobs.
 - **PL-030** When a warm MicroVM is needed for a Profile, the Scheduler SHALL
   call `ClaimVM` with the `PoolRef` of that Profile's Pool.
 - **PL-031** When `ClaimVM` succeeds, the Scheduler SHALL record the returned
-  `lease_id`, `vm_uid`, `network_interfaces` and, where present, the Host
+  `lease_id`, `vm_uid`, `network_interfaces` and the `host` name and address
   on the Allocation.
 - **PL-032** If `ClaimVM` returns `RESOURCE_EXHAUSTED`, then the Scheduler
   SHALL treat the Pool as having no warm MicroVM available.

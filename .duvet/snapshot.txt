@@ -324,8 +324,9 @@ SPECIFICATION: [Scheduler](docs/requirements/03-scheduler.md)
     TEXT[!MUST]:   without releasing the Slot in between.
 
   SECTION: [Placement](#placement)
-    TEXT[!MUST]: - **SC-030** When a claim succeeds and the response names the Host that runs
-    TEXT[!MUST]:   the MicroVM, the Scheduler SHALL record that Host as the Placement.
+    TEXT[!MUST]: - **SC-030** When a claim succeeds and the response carries a `host` with a
+    TEXT[!MUST]:   name, the Scheduler SHALL record that name as the Placement and SHALL
+    TEXT[!MUST]:   check that the `host.address` matches the Inventory entry of that name.
     TEXT[!MUST]: - **SC-031** When a claim succeeds and the response does not name the Host,
     TEXT[!MUST]:   the Scheduler SHALL resolve the Placement by calling `GetMicroVM` with the
     TEXT[!MUST]:   MicroVM's uid on each Host the Pool Manager reports for that Pool until
@@ -449,7 +450,7 @@ SPECIFICATION: [Pool Manager integration](docs/requirements/04-pool-manager.md)
     TEXT[!MUST]: - **PL-030** When a warm MicroVM is needed for a Profile, the Scheduler SHALL
     TEXT[!MUST]:   call `ClaimVM` with the `PoolRef` of that Profile's Pool.
     TEXT[!MUST]: - **PL-031** When `ClaimVM` succeeds, the Scheduler SHALL record the returned
-    TEXT[!MUST]:   `lease_id`, `vm_uid`, `network_interfaces` and, where present, the Host
+    TEXT[!MUST]:   `lease_id`, `vm_uid`, `network_interfaces` and the `host` name and address
     TEXT[!MUST]:   on the Allocation.
     TEXT[!MUST]: - **PL-032** If `ClaimVM` returns `RESOURCE_EXHAUSTED`, then the Scheduler
     TEXT[!MUST]:   SHALL treat the Pool as having no warm MicroVM available.

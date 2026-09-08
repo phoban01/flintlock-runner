@@ -185,14 +185,18 @@ across jobs. Warm pools provide the latency win instead.
   token in the `authorization` header; TLS and mTLS supported.
   `flintlock-provision` (the Go replacement for `provision.sh`) merged
   2026-09-05 and is not yet in a tagged release.
-- **battery** (created 2026-09-05, no releases). Go, module
-  `github.com/liquidmetal-dev/battery`. Protos for `PoolAdmin`, `Lease`
-  (`ClaimVM`/`Heartbeat`/`ReleaseVM`), `Events` and a per-host `Hostagent`
-  are defined; the daemons are stubs. A released VM is deleted and replaced,
-  never reused. Hosts are a static JSON list and the host agent is reached
-  through each VM's vsock path. Placement in v1 is round-robin or
-  least-VMs across the pool's hosts. TLS only; no basic-auth token support
-  in its client yet. `ClaimVMResponse` does not yet name the host.
+- **battery** (created 2026-09-05, no tagged release; `main` moved fast on
+  2026-09-07). Go, module `github.com/liquidmetal-dev/battery`. As of the
+  evening of 2026-09-07 `main` has a working `poolmgrd`: the `Lease` service
+  (`ClaimVM` returning `RESOURCE_EXHAUSTED` when empty and `NOT_FOUND` for an
+  unknown pool, `Heartbeat`, `ReleaseVM`), an expiry sweeper, the reconciler
+  with all three replenishment strategies, `PoolAdmin`, an outbox-backed
+  `Events.Subscribe`, a SQLite store, TLS/mTLS and basic-auth server options,
+  Prometheus metrics, a Helm chart, an e2e suite and a release pipeline. PR
+  #45 added `HostInfo{name, address}` to `ClaimVMResponse`, which is the
+  field the runner needs for placement; the README status line still says
+  pre-alpha and is stale. Hosts are a static list; placement is round-robin
+  or least-VMs; the host agent is reached through each VM's vsock path.
 - **gitlab-runner** 19.4.0 (HEAD). Importable via pseudo-version only
   (`go get gitlab.com/gitlab-org/gitlab-runner@<commit>`); `go 1.26`.
   `common.JobResponse` is gone in favour of `common/spec.Job`; executor
@@ -229,23 +233,22 @@ order:
    hosts with the fake standing in for battery.
 3. **Fleet Controller** for EC2: provisioning, host services, battery agent
    installation, verification.
-4. **Real battery** as soon as its lease and reconciliation logic lands
-   upstream, with the host field on `ClaimVMResponse` if accepted.
+4. **Real battery** from a build of `main` in the hardware tier, then from a
+   tagged release when one exists.
 5. **Launch-template mode** for self-provisioning auto scaling groups.
 
 ## Known risks
 
-- battery has no working daemon and this design has no other source of
-  microVMs. The in-process fake covers development and early fleets, and
-  everything the runner needs from battery is in the published protos, but
-  production depends on upstream landing.
+- battery has no tagged release and its README still calls it pre-alpha,
+  although `main` now runs. The in-process fake covers development, and the
+  hardware tier can point at a build of battery `main`; production waits on
+  a release.
 - battery is a single-author project a few weeks old, single-instance with
   SQLite and HA deferred. The runner is also single-instance, so this does
   not lower availability below the runner's own, but a battery restart
   pauses new claims until it is back.
-- Placement resolution is a fan-out of `GetMicroVM` over a pool's hosts
-  until battery reports the host on `ClaimVMResponse` (upstream request
-  filed). Fine for tens of hosts.
+- Placement now comes from the claim response (battery #45). The `GetMicroVM`
+  fan-out remains only as a fallback against an older battery.
 - battery's v1 placement does not account for vCPU or memory; pool sizes
   have to be chosen so that the sum over pools fits the hosts. Capacity-aware
   placement is a natural upstream follow-up.

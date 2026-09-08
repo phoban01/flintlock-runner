@@ -81,8 +81,9 @@ refused.
 
 ## Placement {#placement}
 
-- **SC-030** When a claim succeeds and the response names the Host that runs
-  the MicroVM, the Scheduler SHALL record that Host as the Placement.
+- **SC-030** When a claim succeeds and the response carries a `host` with a
+  name, the Scheduler SHALL record that name as the Placement and SHALL
+  check that the `host.address` matches the Inventory entry of that name.
 - **SC-031** When a claim succeeds and the response does not name the Host,
   the Scheduler SHALL resolve the Placement by calling `GetMicroVM` with the
   MicroVM's uid on each Host the Pool Manager reports for that Pool until
@@ -95,9 +96,10 @@ refused.
   the Scheduler SHALL release the Lease and report an allocation error
   naming the Host.
 
-SC-031 exists because the Pool Manager's claim response does not yet carry
-the Host; an upstream request asks for it. Once it does, SC-030 is the only
-path and the fan-out code is deleted.
+SC-031 is a fallback for a Pool Manager older than battery PR #45, which
+added `HostInfo{name, address}` to the claim response on 2026-09-07. With a
+current Pool Manager SC-030 is the only path taken; the fan-out stays so
+that the Runner degrades rather than fails against an older server.
 
 ## Host health {#host-health}
 
