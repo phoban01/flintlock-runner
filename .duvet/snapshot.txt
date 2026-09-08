@@ -1,8 +1,9 @@
 SPECIFICATION: [GitLab protocol](docs/requirements/01-gitlab-protocol.md)
   SECTION: [Library basis](#library-basis)
-    TEXT[!MUST]: - **GL-001** The Runner SHALL be a single Go program that imports the
-    TEXT[!MUST]:   gitlab-runner `common`, `network`, `shells` and `executors` packages and
-    TEXT[!MUST]:   SHALL NOT execute a `gitlab-runner` binary.
+    TEXT[!MUST]: - **GL-001**
+    TEXT[!MUST,implementation,test]: The Runner SHALL be a single Go program that imports the
+    TEXT[!MUST,implementation,test]:   gitlab-runner `common`, `network`, `shells` and `executors` packages and
+    TEXT[!MUST,implementation,test]:   SHALL NOT execute a `gitlab-runner` binary.
     TEXT[!MUST]: - **GL-002** The Runner SHALL perform every request to the GitLab API through
     TEXT[!MUST]:   the `GitLabClient` type of the gitlab-runner `network` package.
     TEXT[!MUST]: - **GL-003** The Runner SHALL pin the gitlab-runner module to an explicit
@@ -226,9 +227,9 @@ SPECIFICATION: [Executor](docs/requirements/02-executor.md)
     TEXT[!MUST]: - **EX-047** The `ssh` Guest Transport SHALL connect to the guest's SSH
     TEXT[!MUST]:   service through the flintlock `MicroVMSSHProxy.SSHProxy` streaming RPC of
     TEXT[!MUST]:   the Host that runs the MicroVM.
-    TEXT[!MUST]: - **EX-048** Where a Profile sets a direct SSH address mode, the `ssh` Guest
-    TEXT[!MUST]:   Transport SHALL connect over TCP to the address reported for the MicroVM's
-    TEXT[!MUST]:   first network interface instead of using the proxy RPC.
+    TEXT[!MUST]: - **EX-048** The `ssh` Guest Transport SHALL NOT offer a direct TCP mode,
+    TEXT[!MUST]:   because pool MicroVMs are created from one shared template and flintlock
+    TEXT[!MUST]:   reports no guest address the Runner could connect to.
     TEXT[!MUST]: - **EX-049** The `ssh` Guest Transport SHALL authenticate with the private
     TEXT[!MUST]:   key named by the Profile and SHALL verify the guest host key only where the
     TEXT[!MUST]:   Profile provides a known host key.
@@ -325,8 +326,10 @@ SPECIFICATION: [Scheduler](docs/requirements/03-scheduler.md)
 
   SECTION: [Placement](#placement)
     TEXT[!MUST]: - **SC-030** When a claim succeeds and the response carries a `host` with a
-    TEXT[!MUST]:   name, the Scheduler SHALL record that name as the Placement and SHALL
-    TEXT[!MUST]:   check that the `host.address` matches the Inventory entry of that name.
+    TEXT[!MUST]:   name, the Scheduler SHALL record that name as the Placement, and if the
+    TEXT[!MUST]:   `host.address` differs from the Inventory entry of that name, then the
+    TEXT[!MUST]:   Scheduler SHALL log a warning with both values, count the mismatch and
+    TEXT[!MUST]:   continue using the Inventory endpoint.
     TEXT[!MUST]: - **SC-031** When a claim succeeds and the response does not name the Host,
     TEXT[!MUST]:   the Scheduler SHALL resolve the Placement by calling `GetMicroVM` with the
     TEXT[!MUST]:   MicroVM's uid on each Host the Pool Manager reports for that Pool until
@@ -1042,76 +1045,93 @@ SPECIFICATION: [Security](docs/requirements/09-security.md)
 
 SPECIFICATION: [Test doubles](docs/requirements/10-test-doubles.md)
   SECTION: [Fake Pool Manager](#fake-pool-manager)
-    TEXT[!MUST]: - **TD-001** The project SHALL provide a fake Pool Manager that serves the
-    TEXT[!MUST]:   `poolmgr.v1alpha1` `PoolAdmin`, `Lease` and `Events` services over gRPC
-    TEXT[!MUST]:   using the generated server stubs from the battery module.
+    TEXT[!MUST]: - **TD-001**
+    TEXT[!MUST,todo]: The project SHALL provide a fake Pool Manager that serves the
+    TEXT[!MUST,todo]:   `poolmgr.v1alpha1` `PoolAdmin`, `Lease` and `Events` services over gRPC
+    TEXT[!MUST,todo]:   using the generated server stubs from the battery module.
     TEXT[!MUST]: - **TD-002** The fake Pool Manager SHALL create, place and delete MicroVMs
     TEXT[!MUST]:   through the same Host client interface the Runner uses, so that it can be
     TEXT[!MUST]:   pointed at fake Hosts or at real `flintlockd` instances.
     TEXT[!MUST]: - **TD-003** The fake Pool Manager SHALL implement the immediate-on-lease,
     TEXT[!MUST]:   minimum-size-threshold and replace-on-delete replenishment strategies as
     TEXT[!MUST]:   declared in the `PoolSpec`.
-    TEXT[!MUST]: - **TD-004** The fake Pool Manager SHALL expire a Lease whose last heartbeat
-    TEXT[!MUST]:   is older than the Pool's heartbeat expiry threshold and SHALL delete the
-    TEXT[!MUST]:   expired Lease's MicroVM.
-    TEXT[!MUST]: - **TD-005** The fake Pool Manager SHALL return `RESOURCE_EXHAUSTED` from
-    TEXT[!MUST]:   `ClaimVM` when the Pool has no MicroVM in the `AVAILABLE` phase.
-    TEXT[!MUST]: - **TD-006** The fake Pool Manager SHALL emit every `Event` type defined in
-    TEXT[!MUST]:   the proto at the corresponding phase transition.
-    TEXT[!MUST]: - **TD-007** The fake Pool Manager SHALL place MicroVMs across a Pool's
-    TEXT[!MUST]:   `flintlock_hosts` by least MicroVM count, matching battery's design.
+    TEXT[!MUST]: - **TD-004**
+    TEXT[!MUST,todo]: The fake Pool Manager SHALL expire a Lease whose last heartbeat
+    TEXT[!MUST,todo]:   is older than the Pool's heartbeat expiry threshold and SHALL delete the
+    TEXT[!MUST,todo]:   expired Lease's MicroVM.
+    TEXT[!MUST]: - **TD-005**
+    TEXT[!MUST,todo]: The fake Pool Manager SHALL return `RESOURCE_EXHAUSTED` from
+    TEXT[!MUST,todo]:   `ClaimVM` when the Pool has no MicroVM in the `AVAILABLE` phase.
+    TEXT[!MUST]: - **TD-006**
+    TEXT[!MUST,todo]: The fake Pool Manager SHALL emit every `Event` type defined in
+    TEXT[!MUST,todo]:   the proto at the corresponding phase transition.
+    TEXT[!MUST]: - **TD-007**
+    TEXT[!MUST,todo]: The fake Pool Manager SHALL place MicroVMs across a Pool's
+    TEXT[!MUST,todo]:   `flintlock_hosts` by least MicroVM count, matching battery's design.
     TEXT[!MUST]: - **TD-008** The fake Pool Manager SHALL populate the Host name on
     TEXT[!MUST]:   `ClaimVMResponse` when the proto carries a field for it and SHALL provide
     TEXT[!MUST]:   a switch that omits it, so that both Placement paths of the Scheduler are
     TEXT[!MUST]:   tested.
-    TEXT[!MUST]: - **TD-009** The fake Pool Manager SHALL be runnable as a standalone binary
-    TEXT[!MUST]:   as well as in process, so that a fleet without battery can run on it.
-    TEXT[!MUST]: - **TD-010** The fake Pool Manager SHALL support fault injection for claim
-    TEXT[!MUST]:   latency, a period of `UNAVAILABLE`, hook failure and a dropped `Events`
-    TEXT[!MUST]:   stream.
+    TEXT[!MUST]: - **TD-009**
+    TEXT[!MUST,todo]: The fake Pool Manager SHALL be runnable as a standalone binary
+    TEXT[!MUST,todo]:   as well as in process, so that a fleet without battery can run on it.
+    TEXT[!MUST]: - **TD-010**
+    TEXT[!MUST,todo]: The fake Pool Manager SHALL support fault injection for claim
+    TEXT[!MUST,todo]:   latency, a period of `UNAVAILABLE`, hook failure and a dropped `Events`
+    TEXT[!MUST,todo]:   stream.
 
   SECTION: [Fake Host](#fake-host)
-    TEXT[!MUST]: - **TD-020** The project SHALL provide a fake Host that serves the flintlock
-    TEXT[!MUST]:   `MicroVM` service, including `ServerInfo`, and the `MicroVMExec` service
-    TEXT[!MUST]:   over gRPC using the generated server stubs from the flintlock `api`
-    TEXT[!MUST]:   module.
-    TEXT[!MUST]: - **TD-021** The fake Host SHALL represent each MicroVM as a sandbox
-    TEXT[!MUST]:   directory on the local filesystem and SHALL run each `ExecCommand` as a
-    TEXT[!MUST]:   local process rooted in that directory, streaming standard input,
-    TEXT[!MUST]:   standard output, standard error and the exit code as `flintlockd` does.
-    TEXT[!MUST]: - **TD-022** The fake Host SHALL move a MicroVM from `PENDING` to `CREATED`
-    TEXT[!MUST]:   after a configurable boot delay and SHALL populate `vsock_path` in its
-    TEXT[!MUST]:   status.
-    TEXT[!MUST]: - **TD-023** The fake Host SHALL honour the `cwd`, `env`, `timeout_seconds`,
-    TEXT[!MUST]:   `has_stdin` and `stdin_eof` fields of an exec request and SHALL accept
-    TEXT[!MUST]:   and ignore `user`.
+    TEXT[!MUST]: - **TD-020**
+    TEXT[!MUST,todo]: The project SHALL provide a fake Host that serves the flintlock
+    TEXT[!MUST,todo]:   `MicroVM` service, including `ServerInfo`, and the `MicroVMExec` service
+    TEXT[!MUST,todo]:   over gRPC using the generated server stubs from the flintlock `api`
+    TEXT[!MUST,todo]:   module.
+    TEXT[!MUST]: - **TD-021**
+    TEXT[!MUST,todo]: The fake Host SHALL represent each MicroVM as a sandbox
+    TEXT[!MUST,todo]:   directory on the local filesystem and SHALL run each `ExecCommand` as a
+    TEXT[!MUST,todo]:   local process rooted in that directory, streaming standard input,
+    TEXT[!MUST,todo]:   standard output, standard error and the exit code as `flintlockd` does.
+    TEXT[!MUST]: - **TD-022**
+    TEXT[!MUST,todo]: The fake Host SHALL move a MicroVM from `PENDING` to `CREATED`
+    TEXT[!MUST,todo]:   after a configurable boot delay and SHALL populate `vsock_path` in its
+    TEXT[!MUST,todo]:   status.
+    TEXT[!MUST]: - **TD-023**
+    TEXT[!MUST,todo]: The fake Host SHALL honour the `cwd`, `env`, `timeout_seconds`,
+    TEXT[!MUST,todo]:   `has_stdin` and `stdin_eof` fields of an exec request and SHALL accept
+    TEXT[!MUST,todo]:   and ignore `user`.
     TEXT[!MUST]: - **TD-024** The fake Host SHALL enforce basic auth and TLS when configured
     TEXT[!MUST]:   so that the Runner's authentication code is exercised.
-    TEXT[!MUST]: - **TD-025** The fake Host SHALL support fault injection for a create that
-    TEXT[!MUST]:   ends in `FAILED`, an exec stream dropped before the exit code, and a Host
-    TEXT[!MUST]:   that stops answering.
-    TEXT[!MUST]: - **TD-026** The fake Host SHALL report a configurable flintlock version and
-    TEXT[!MUST]:   service flags from `ServerInfo` and SHALL provide a mode in which
-    TEXT[!MUST]:   `ServerInfo` returns `UNIMPLEMENTED`.
+    TEXT[!MUST]: - **TD-025**
+    TEXT[!MUST,todo]: The fake Host SHALL support fault injection for a create that
+    TEXT[!MUST,todo]:   ends in `FAILED`, an exec stream dropped before the exit code, and a Host
+    TEXT[!MUST,todo]:   that stops answering.
+    TEXT[!MUST]: - **TD-026**
+    TEXT[!MUST,todo]: The fake Host SHALL report a configurable flintlock version and
+    TEXT[!MUST,todo]:   service flags from `ServerInfo` and SHALL provide a mode in which
+    TEXT[!MUST,todo]:   `ServerInfo` returns `UNIMPLEMENTED`.
 
   SECTION: [Fake GitLab](#fake-gitlab)
-    TEXT[!MUST]: - **TD-030** The project SHALL provide a fake GitLab HTTP server that
-    TEXT[!MUST]:   implements runner verification, job request with long polling and the
-    TEXT[!MUST]:   `X-GitLab-Last-Update` header, job update, trace patching with
-    TEXT[!MUST]:   `Content-Range` and range-not-satisfiable handling, artifact upload and
-    TEXT[!MUST]:   dependency artifact download.
-    TEXT[!MUST]: - **TD-031** The fake GitLab SHALL hand out Jobs from a queue of `spec.Job`
-    TEXT[!MUST]:   payloads supplied by the test and SHALL record every state update and the
-    TEXT[!MUST]:   assembled trace for each Job.
-    TEXT[!MUST]: - **TD-032** The fake GitLab SHALL be able to cancel a running Job through
-    TEXT[!MUST]:   the `Job-Status` header and to answer a final update with an
-    TEXT[!MUST]:   accepted-but-pending response a configurable number of times.
+    TEXT[!MUST]: - **TD-030**
+    TEXT[!MUST,todo]: The project SHALL provide a fake GitLab HTTP server that
+    TEXT[!MUST,todo]:   implements runner verification, job request with long polling and the
+    TEXT[!MUST,todo]:   `X-GitLab-Last-Update` header, job update, trace patching with
+    TEXT[!MUST,todo]:   `Content-Range` and range-not-satisfiable handling, artifact upload and
+    TEXT[!MUST,todo]:   dependency artifact download.
+    TEXT[!MUST]: - **TD-031**
+    TEXT[!MUST,todo]: The fake GitLab SHALL hand out Jobs from a queue of `spec.Job`
+    TEXT[!MUST,todo]:   payloads supplied by the test and SHALL record every state update and the
+    TEXT[!MUST,todo]:   assembled trace for each Job.
+    TEXT[!MUST]: - **TD-032**
+    TEXT[!MUST,todo]: The fake GitLab SHALL be able to cancel a running Job through
+    TEXT[!MUST,todo]:   the `Job-Status` header and to answer a final update with an
+    TEXT[!MUST,todo]:   accepted-but-pending response a configurable number of times.
     TEXT[!MUST]: - **TD-033** The fake GitLab SHALL require the runner token and a system
     TEXT[!MUST]:   identifier on runner-scoped requests and the Job token on job-scoped
     TEXT[!MUST]:   requests, as the real API does.
-    TEXT[!MUST]: - **TD-034** The project SHALL provide a fake object store that accepts the
-    TEXT[!MUST]:   pre-signed style requests the gitlab-runner cache client issues, so that
-    TEXT[!MUST]:   the `cache:` keyword works end to end against a local endpoint.
+    TEXT[!MUST]: - **TD-034**
+    TEXT[!MUST,todo]: The project SHALL provide a fake object store that accepts the
+    TEXT[!MUST,todo]:   pre-signed style requests the gitlab-runner cache client issues, so that
+    TEXT[!MUST,todo]:   the `cache:` keyword works end to end against a local endpoint.
 
   SECTION: [Fake AWS](#fake-aws)
     TEXT[!MUST]: - **TD-040** The Fleet Controller SHALL access EC2 and Systems Manager
