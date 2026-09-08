@@ -200,16 +200,6 @@ const (
 	TransportSSH  TransportKind = "ssh"
 )
 
-// SSHMode selects how the ssh transport reaches the guest (EX-047, EX-048).
-type SSHMode string
-
-// SSH modes: through the flintlock MicroVMSSHProxy RPC (default) or over TCP
-// to the guest's first interface address.
-const (
-	SSHModeProxy  SSHMode = "proxy"
-	SSHModeDirect SSHMode = "direct"
-)
-
 // Transport is a Profile's Guest Transport selection (EX-042).
 type Transport struct {
 	// Kind is exec or ssh; default exec.
@@ -218,10 +208,10 @@ type Transport struct {
 	SSH SSHTransport `yaml:"ssh,omitempty"`
 }
 
-// SSHTransport configures the ssh Guest Transport (EX-047 to EX-049).
+// SSHTransport configures the ssh Guest Transport (EX-047, EX-049). It always
+// goes through the flintlock MicroVMSSHProxy RPC; there is no direct mode
+// (EX-048).
 type SSHTransport struct {
-	// Mode is proxy (default) or direct (EX-048).
-	Mode SSHMode `yaml:"mode"`
 	// User is the SSH user; default is the Profile user.
 	User string `yaml:"user,omitempty"`
 	// PrivateKeyFile is the private key used to authenticate (EX-049).
@@ -229,8 +219,6 @@ type SSHTransport struct {
 	// KnownHostKey is the guest host public key; when empty the host key is
 	// not verified (EX-049).
 	KnownHostKey string `yaml:"known_host_key,omitempty"`
-	// Port is the guest sshd port; default 22.
-	Port int `yaml:"port,omitempty"`
 }
 
 // ReplenishmentStrategy names a battery replenishment strategy (PL-013,

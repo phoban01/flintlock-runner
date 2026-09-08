@@ -107,8 +107,9 @@ It never picks a host and never deletes a microVM. battery does both.
 streaming RPC, served by `flintlockd` over the microVM's vsock via the
 guest-agent. It supports stdin streaming, cwd, env, user, a timeout and
 returns an exit code, which is everything a stage needs. An SSH transport
-(via flintlock's `MicroVMSSHProxy` or direct TCP) is specified as an
-alternative for images without the guest agent.
+through flintlock's `MicroVMSSHProxy` is specified as an alternative for
+images without the guest agent; there is no direct TCP mode, since pool VMs
+share one template and have no per-VM address the runner could learn.
 
 **Host services.** Every host also runs rootless `buildkitd`, a Go module
 proxy (Athens) that serves private modules with a read-only fleet

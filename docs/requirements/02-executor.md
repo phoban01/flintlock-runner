@@ -124,9 +124,9 @@ Stage scripts are the only channel that exists after boot.
 - **EX-047** The `ssh` Guest Transport SHALL connect to the guest's SSH
   service through the flintlock `MicroVMSSHProxy.SSHProxy` streaming RPC of
   the Host that runs the MicroVM.
-- **EX-048** Where a Profile sets a direct SSH address mode, the `ssh` Guest
-  Transport SHALL connect over TCP to the address reported for the MicroVM's
-  first network interface instead of using the proxy RPC.
+- **EX-048** The `ssh` Guest Transport SHALL NOT offer a direct TCP mode,
+  because pool MicroVMs are created from one shared template and flintlock
+  reports no guest address the Runner could connect to.
 - **EX-049** The `ssh` Guest Transport SHALL authenticate with the private
   key named by the Profile and SHALL verify the guest host key only where the
   Profile provides a known host key.

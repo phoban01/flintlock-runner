@@ -38,10 +38,6 @@ var (
 	// ErrHostNotInInventory is the cause when the Placement names a Host
 	// missing from the Inventory (SC-034). The Lease has been released.
 	ErrHostNotInInventory = errors.New("scheduler: placed on host not in inventory")
-	// ErrHostAddressMismatch is the cause when the claim's host.address
-	// differs from the Inventory entry's endpoint (SC-030, PL-031). The
-	// Lease has been released.
-	ErrHostAddressMismatch = errors.New("scheduler: claim host address does not match inventory")
 	// ErrProfileLimit is the cause when the Profile's maximum concurrency
 	// (SC-006) stays reached until the allocation timeout.
 	ErrProfileLimit = errors.New("scheduler: profile concurrency limit reached")
@@ -183,13 +179,15 @@ type Placement struct {
 // PlacementResolver is the SC-030/SC-031 step on its own, so both paths are
 // tested directly against a poolmgr.Claim literal and a fake Registry.
 type PlacementResolver interface {
-	// ResolvePlacement records claim.Host.Name when set, after checking
-	// claim.Host.Address against the Registry's Endpoint for that name
-	// (SC-030); otherwise it fans GetMicroVM out over the Pool's Hosts
-	// (SC-031). It returns an *AllocationError whose cause is
-	// ErrHostAddressMismatch, ErrHostNotInInventory or
-	// ErrPlacementUnresolved; the caller releases the Lease (SC-033,
-	// SC-034).
+	// ResolvePlacement records claim.Host.Name when set (SC-030); otherwise
+	// it fans GetMicroVM out over the Pool's Hosts (SC-031). When the claim
+	// carries an address that differs from the Registry's Endpoint for that
+	// name it logs a warning with both values and counts
+	// FailureAddressMismatch, then continues with the Inventory endpoint:
+	// battery reports the address as battery dials it, so a difference is a
+	// configuration inconsistency, not a placement error. It returns an
+	// *AllocationError whose cause is ErrHostNotInInventory or
+	// ErrPlacementUnresolved; the caller releases the Lease (SC-033, SC-034).
 	ResolvePlacement(ctx context.Context, p *Profile, claim *poolmgr.Claim) (Placement, error)
 }
 
@@ -235,9 +233,10 @@ type Allocation struct {
 
 // Handle is a live Allocation. It mirrors context.Context so that the
 // Executor selects on Done alongside the Job's context while a Stage runs
-// and, through common.WithContext, derives the Build's context from it: an
-// abort surfaces as runner_system_failure through the Build's own
-// cancellation rather than by failing the next Run.
+// and, through common.WithContext, derives the Build's context from it. The
+// Executor cancels that context with a cause of *common.BuildError carrying
+// RunnerSystemFailure and Err(); a plain cancellation would be reported to
+// GitLab as job_canceled (SC-043, SC-061, SC-062, GL-072).
 type Handle interface {
 	// Allocation returns the immutable Allocation.
 	Allocation() Allocation
@@ -385,6 +384,9 @@ type FailureKind string
 const (
 	FailureRelease   FailureKind = "release"
 	FailureHeartbeat FailureKind = "heartbeat"
+	// FailureAddressMismatch counts a claim whose host.address differed from
+	// the Inventory endpoint (SC-030); the Job still runs.
+	FailureAddressMismatch FailureKind = "address_mismatch"
 )
 
 // Metrics is the Scheduler's metrics sink (OB-013, OB-015 to OB-021). The

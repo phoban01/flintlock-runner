@@ -169,10 +169,17 @@ func NewDialer(hosts ...*Host) *Dialer {
 	return d
 }
 
-// Dial implements flintlock.Dialer. It matches on ep.Name and returns
-// flintlock.ErrUnknownHost for a Host it does not have.
-func (d *Dialer) Dial(_ context.Context, ep flintlock.Endpoint) (flintlock.HostClient, error) {
-	return d.DialAdmin(context.Background(), ep)
+// Dial implements flintlock.Dialer. It matches on ep.Name, returns
+// flintlock.ErrUnknownHost for a Host it does not have, and hides the admin
+// methods of the underlying client.
+func (d *Dialer) Dial(ctx context.Context, ep flintlock.Endpoint) (flintlock.HostClient, error) {
+	c, err := d.DialAdmin(ctx, ep)
+	if err != nil {
+		return nil, err
+	}
+	// Wrap so that a type assertion to flintlock.HostAdminClient fails in
+	// tests exactly as it would against a real Runner-side client (HO-007).
+	return struct{ flintlock.HostClient }{c}, nil
 }
 
 // DialAdmin implements flintlock.AdminDialer.

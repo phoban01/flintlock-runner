@@ -83,18 +83,11 @@ type Transport interface {
 	Close() error
 }
 
-// SSHMode selects how the ssh transport reaches the guest.
-type SSHMode string
-
-// SSH modes: the flintlock proxy RPC (EX-047) or direct TCP (EX-048).
-const (
-	SSHModeProxy  SSHMode = "proxy"
-	SSHModeDirect SSHMode = "direct"
-)
-
-// SSHOptions configure the ssh transport (EX-047 to EX-049).
+// SSHOptions configure the ssh transport (EX-047, EX-049). The transport
+// always reaches the guest through the flintlock MicroVMSSHProxy RPC; there
+// is no direct TCP mode, because pool MicroVMs share one template and have
+// no per-MicroVM address the Runner could learn (EX-048).
 type SSHOptions struct {
-	Mode SSHMode
 	// User is the SSH login user.
 	User string
 	// PrivateKey is the PEM private key (EX-049). It is loaded from the
@@ -104,10 +97,6 @@ type SSHOptions struct {
 	// KnownHostKey is the guest's host public key in authorized_keys form;
 	// empty disables host key verification (EX-049).
 	KnownHostKey string
-	// Address is host:port for SSHModeDirect (EX-048). The caller resolves
-	// it from the MicroVM's first network interface; the transport does not
-	// know how to map a MAC to an address.
-	Address string
 }
 
 // Target is everything needed to build a Transport for one Job's MicroVM.

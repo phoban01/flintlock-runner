@@ -32,11 +32,11 @@ func TestProfileErrorNamesImage(t *testing.T) {
 
 func TestAllocationErrorUnwraps(t *testing.T) {
 	t.Parallel()
-	err := &AllocationError{Profile: "p", Pool: poolmgr.PoolRef{Name: "p", Namespace: "ns"}, Host: "h1", Err: ErrHostAddressMismatch}
-	if !errors.Is(err, ErrHostAddressMismatch) {
+	err := &AllocationError{Profile: "p", Pool: poolmgr.PoolRef{Name: "p", Namespace: "ns"}, Host: "h1", Err: ErrHostNotInInventory}
+	if !errors.Is(err, ErrHostNotInInventory) {
 		t.Error("cause not unwrapped")
 	}
-	want := `scheduler: allocation for profile "p" from pool ns/p failed on host "h1": scheduler: claim host address does not match inventory`
+	want := `scheduler: allocation for profile "p" from pool ns/p failed on host "h1": scheduler: placed on host not in inventory`
 	if got := err.Error(); got != want {
 		t.Errorf("Error() = %q, want %q", got, want)
 	}

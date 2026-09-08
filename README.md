@@ -44,6 +44,7 @@ make duvet-ci         # fails if .duvet/snapshot.txt is stale
 
 ```
 cmd/flintlock-runner/   main: run, config show, fleet {provision,verify,drain,teardown,emit-userdata}
+cmd/fake-poolmgr/       the fake Pool Manager as a standalone binary (TD-009)
 internal/clock/         Clock and Backoff interfaces shared by the scheduler, poolmgr and the fakes
 internal/executor/      common.ExecutorProvider + common.Executor ("flintlock")
 internal/scheduler/     capacity, profiles, claims, placement resolution, lease keep-alive
@@ -52,6 +53,6 @@ internal/flintlock/     gRPC client for hosts (exec, ssh proxy, GetMicroVM, Serv
 internal/poolmgr/       gRPC client for battery and the PL policy units; fake/ is itself a minimal pool manager
 internal/fleet/         EC2 discovery, SSM/SSH execution, host provisioning, host services, inventory
 internal/config/        YAML schema, validation, RunnerConfig translation
-internal/testing/       fakegitlab and fakes3 for the end-to-end harness
+internal/testing/       fakegitlab, fakes3 and harness (TD-050..TD-054); the harness exports the hardware-tier env var names
 hack/                   CI helper scripts
 ```

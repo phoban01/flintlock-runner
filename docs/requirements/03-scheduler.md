@@ -82,8 +82,10 @@ refused.
 ## Placement {#placement}
 
 - **SC-030** When a claim succeeds and the response carries a `host` with a
-  name, the Scheduler SHALL record that name as the Placement and SHALL
-  check that the `host.address` matches the Inventory entry of that name.
+  name, the Scheduler SHALL record that name as the Placement, and if the
+  `host.address` differs from the Inventory entry of that name, then the
+  Scheduler SHALL log a warning with both values, count the mismatch and
+  continue using the Inventory endpoint.
 - **SC-031** When a claim succeeds and the response does not name the Host,
   the Scheduler SHALL resolve the Placement by calling `GetMicroVM` with the
   MicroVM's uid on each Host the Pool Manager reports for that Pool until

@@ -52,9 +52,16 @@ type Executor interface {
 // Data is the executor data returned by Acquire and passed back to Release
 // and Prepare (EX-003, EX-005). It carries the Reservation from Acquire and,
 // once Prepare has allocated, the Handle. It implements common.WithContext
-// so that the Build's context is cancelled when the Handle is done (SC-043,
-// SC-061, SC-062 surface as runner_system_failure) and
+// so that the Build's context is cancelled when the Handle is done, and
 // common.ExecutorDataLogger for OB-002.
+//
+// The cancellation carries a cause. At the pinned gitlab-runner commit,
+// Build.run handles ctx.Done() with context.Cause(ctx) and maps a bare
+// context.Canceled onto job_canceled; a *common.BuildError cause is reported
+// as is. SC-043, SC-061, SC-062 and GL-072 require runner_system_failure, so
+// the cause is a BuildError with that reason wrapping Handle.Err(). The
+// executor work package keeps this invariant when it implements Run and
+// Finish: never cancel the Build context without a BuildError cause.
 type Data struct {
 	Reservation *scheduler.Reservation
 	// Handle is set by Prepare and read by WithContext and Cleanup.
@@ -62,18 +69,23 @@ type Data struct {
 }
 
 // WithContext implements common.WithContext. The run loop calls it after
-// Prepare and before the first Stage; the returned context is cancelled when
-// the Handle is done or the parent is cancelled.
+// Prepare and before the first Stage; the returned context is cancelled with
+// a runner_system_failure BuildError cause when the Handle is done, or
+// plainly when the parent is cancelled.
 func (d *Data) WithContext(parent context.Context) (context.Context, context.CancelFunc) {
-	ctx, cancel := context.WithCancel(parent)
+	ctx, cancelCause := context.WithCancelCause(parent)
+	cancel := func() { cancelCause(nil) }
 	if d == nil || d.Handle == nil {
 		return ctx, cancel
 	}
-	done := d.Handle.Done()
+	h := d.Handle
 	go func() {
 		select {
-		case <-done:
-			cancel()
+		case <-h.Done():
+			cancelCause(&common.BuildError{
+				Inner:         h.Err(),
+				FailureReason: common.RunnerSystemFailure,
+			})
 		case <-ctx.Done():
 		}
 	}()
@@ -126,6 +138,21 @@ type HostServiceEnv struct {
 	// flintlock_prepare log line (EX-064). Disabled services and services
 	// without an address are absent (EX-062).
 	Services []string
+}
+
+// HostServiceVarNames is the closed list of fixed variable names a
+// HostServiceEnvResolver may emit (EX-060, EX-065). The names of the
+// configured HTTP cache upstreams are added per configuration. GOPRIVATE is
+// deliberately absent (EX-066); the Executor drops any key outside this list
+// plus the configured upstream names when it merges the environment, so
+// EX-066 and SE-053 hold by construction rather than by convention.
+var HostServiceVarNames = []string{
+	"BUILDKIT_HOST",
+	"GOPROXY",
+	"GOFLAGS",
+	"GONOSUMDB",
+	"GONOPROXY",
+	"CI_REGISTRY_MIRROR",
 }
 
 // HostServiceEnvResolver computes the Host Service environment for the Host

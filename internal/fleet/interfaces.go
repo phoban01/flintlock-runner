@@ -130,6 +130,19 @@ type SSMRecorder interface {
 	SentCommands() []SendCommandInput
 }
 
+// EC2Recorder is implemented by the fake EC2 client so that tests assert on
+// every DescribeInstances and TerminateInstances call (TD-041).
+type EC2Recorder interface {
+	DescribeCalls() []DescribeFilter
+	TerminateCalls() [][]string
+}
+
+// ParametersRecorder is implemented by the fake Parameters client so that
+// tests assert on every GetParameter call (TD-041).
+type ParametersRecorder interface {
+	ParameterCalls() []string
+}
+
 // Step is one provisioning step, each backed by one script (FL-020 to
 // FL-046, FL-050, FL-100 to FL-112). Steps are idempotent (FL-023, FL-030).
 type Step string

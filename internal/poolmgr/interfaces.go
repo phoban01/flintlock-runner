@@ -155,10 +155,10 @@ type EventStream interface {
 	Close() error
 }
 
-// EventFilter narrows a subscription. The proto only filters by pool name;
-// the Tracker filters by namespace on its side.
+// EventFilter narrows a subscription to one Pool, as the proto
+// SubscribeRequest does with its PoolRef; nil subscribes to every Pool.
 type EventFilter struct {
-	PoolName *string
+	Pool *PoolRef
 }
 
 // PoolAdmin mirrors the PoolAdmin service. The Declarer uses it to declare
@@ -228,9 +228,17 @@ type SpecInput struct {
 	Hosts []string
 }
 
+// GuestDeviceID is the device_id of the single network interface every Pool
+// MicroVM template carries (PL-020). It is a TAP interface on the Host's
+// guest bridge with DHCP addressing (FL-040, FL-041); the name is fixed
+// because a Profile has no interface configuration and `eth0` is reserved by
+// Firecracker (PL-023).
+const GuestDeviceID = "net0"
+
 // SpecBuilder derives a PoolSpec from a Profile (PL-010, PL-012 to PL-014,
 // PL-020 to PL-026). It is a pure function of its inputs, so its tests are
-// table-driven, and it never sees a Job (PL-026).
+// table-driven, and it never sees a Job (PL-026). The template's only
+// interface is GuestDeviceID (PL-020, PL-023).
 type SpecBuilder interface {
 	Build(p config.Profile, in SpecInput) (PoolSpec, error)
 }

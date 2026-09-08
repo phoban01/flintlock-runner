@@ -227,9 +227,9 @@ SPECIFICATION: [Executor](docs/requirements/02-executor.md)
     TEXT[!MUST]: - **EX-047** The `ssh` Guest Transport SHALL connect to the guest's SSH
     TEXT[!MUST]:   service through the flintlock `MicroVMSSHProxy.SSHProxy` streaming RPC of
     TEXT[!MUST]:   the Host that runs the MicroVM.
-    TEXT[!MUST]: - **EX-048** Where a Profile sets a direct SSH address mode, the `ssh` Guest
-    TEXT[!MUST]:   Transport SHALL connect over TCP to the address reported for the MicroVM's
-    TEXT[!MUST]:   first network interface instead of using the proxy RPC.
+    TEXT[!MUST]: - **EX-048** The `ssh` Guest Transport SHALL NOT offer a direct TCP mode,
+    TEXT[!MUST]:   because pool MicroVMs are created from one shared template and flintlock
+    TEXT[!MUST]:   reports no guest address the Runner could connect to.
     TEXT[!MUST]: - **EX-049** The `ssh` Guest Transport SHALL authenticate with the private
     TEXT[!MUST]:   key named by the Profile and SHALL verify the guest host key only where the
     TEXT[!MUST]:   Profile provides a known host key.
@@ -326,8 +326,10 @@ SPECIFICATION: [Scheduler](docs/requirements/03-scheduler.md)
 
   SECTION: [Placement](#placement)
     TEXT[!MUST]: - **SC-030** When a claim succeeds and the response carries a `host` with a
-    TEXT[!MUST]:   name, the Scheduler SHALL record that name as the Placement and SHALL
-    TEXT[!MUST]:   check that the `host.address` matches the Inventory entry of that name.
+    TEXT[!MUST]:   name, the Scheduler SHALL record that name as the Placement, and if the
+    TEXT[!MUST]:   `host.address` differs from the Inventory entry of that name, then the
+    TEXT[!MUST]:   Scheduler SHALL log a warning with both values, count the mismatch and
+    TEXT[!MUST]:   continue using the Inventory endpoint.
     TEXT[!MUST]: - **SC-031** When a claim succeeds and the response does not name the Host,
     TEXT[!MUST]:   the Scheduler SHALL resolve the Placement by calling `GetMicroVM` with the
     TEXT[!MUST]:   MicroVM's uid on each Host the Pool Manager reports for that Pool until
