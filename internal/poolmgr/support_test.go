@@ -381,9 +381,17 @@ type trackerHarness struct {
 	polls  chan poolmgr.PoolRef
 }
 
-// newTracker builds a Tracker over c with a fake clock. It does not start
-// it; call run.
+// newTracker builds a Tracker over one client with a fake clock. It does
+// not start it; call run.
 func newTracker(t *testing.T, c poolmgr.Client, health poolmgr.Health, pollInterval time.Duration, log *slog.Logger) *trackerHarness {
+	t.Helper()
+	return newTrackerWith(t, c, c, health, pollInterval, log)
+}
+
+// newTrackerWith builds a Tracker whose Events and PoolAdmin come from
+// different places, which is how a test takes the Events stream away
+// without taking the Pool Manager away (PL-051).
+func newTrackerWith(t *testing.T, events poolmgr.Events, admin poolmgr.PoolAdmin, health poolmgr.Health, pollInterval time.Duration, log *slog.Logger) *trackerHarness {
 	t.Helper()
 	h := &trackerHarness{
 		clk:    clock.NewFake(testEpoch),
@@ -394,8 +402,8 @@ func newTracker(t *testing.T, c poolmgr.Client, health poolmgr.Health, pollInter
 		log = testLogger(t)
 	}
 	tracker, err := poolmgr.NewTracker(poolmgr.TrackerConfig{
-		Events:       c,
-		Admin:        c,
+		Events:       events,
+		Admin:        admin,
 		Health:       health,
 		Clock:        h.clk,
 		PollInterval: pollInterval,
