@@ -423,10 +423,16 @@ func (j *jobState) applyUpdate(req updateRequest) (int, *apiError) {
 	return code, nil
 }
 
+//= docs/requirements/10-test-doubles.md#fake-gitlab
+//# The fake GitLab SHALL hand out Jobs from a queue of `spec.Job` payloads
+//# supplied by the test and SHALL record every state update and the
+//# assembled trace for each Job.
+
 // handlePatchTrace is PATCH /api/v4/jobs/:id/trace. The body is appended at
 // the offset named by Content-Range when that offset is the current end of
 // the log, answered 202 with Range 0-<size>; any other offset is 416 with
-// Range 0-<size> so that the Runner resends from there.
+// Range 0-<size> so that the Runner resends from there. Appending here is
+// what assembles the trace Record reports (TD-031).
 func (s *Server) handlePatchTrace(w http.ResponseWriter, r *http.Request) {
 	id, ok := pathJobID(w, r)
 	if !ok {
