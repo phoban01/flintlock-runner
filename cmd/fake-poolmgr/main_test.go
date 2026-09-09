@@ -29,7 +29,9 @@ const testTimeout = 30 * time.Second
 // three services over a real gRPC connection to the address it reports. It
 // then ends the context, as a signal does, and checks that run returns
 // cleanly. Nothing outside the process is needed: the Hosts are dialled
-// lazily, so the inventory may name endpoints nothing is listening on.
+// lazily, so the inventory may name endpoints nothing is listening on. The
+// other half of the requirement, the same pool manager in process, is what
+// every test in internal/poolmgr/fake runs against.
 func TestRunServesUntilTheContextEnds(t *testing.T) {
 	dir := t.TempDir()
 	tokenFile := filepath.Join(dir, "token")
@@ -120,15 +122,10 @@ func start(t *testing.T, ctx context.Context, args []string) (string, <-chan err
 	return addr, done
 }
 
-//= docs/requirements/10-test-doubles.md#fake-pool-manager
-//= type=test
-//# The fake Pool Manager SHALL be runnable as a standalone binary as well as
-//# in process, so that a fleet without battery can run on it.
-
-// TestRunReportsStartupFailures checks the two ways starting the binary can
-// fail before it serves: a command line it cannot parse and an inventory it
-// cannot read. Both come back as an error for main to exit on rather than a
-// process that is up but useless.
+// TestRunReportsStartupFailures checks the ways starting the binary can fail
+// before it serves: a command line it cannot parse, an inventory it cannot
+// read and an address it cannot listen on. Each comes back as an error for
+// main to exit on rather than a process that is up but useless.
 func TestRunReportsStartupFailures(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), testTimeout)
 	defer cancel()
