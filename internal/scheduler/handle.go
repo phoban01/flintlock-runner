@@ -19,9 +19,8 @@ type handle struct {
 	// leaseGone is set when the Lease no longer exists at the Pool Manager,
 	// so that no release call is made for it (SC-061, SC-062).
 	leaseGone bool
-	// stopHeartbeat ends the keep-alive loop; hbDone is closed when it has.
+	// stopHeartbeat ends the keep-alive loop.
 	stopHeartbeat context.CancelFunc
-	hbDone        chan struct{}
 }
 
 // newHandle builds a handle for an Allocation.

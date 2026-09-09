@@ -3,6 +3,7 @@ package scheduler
 import (
 	"context"
 	"errors"
+	"runtime"
 	"testing"
 	"time"
 
@@ -10,6 +11,34 @@ import (
 	"github.com/phoban01/flintlock-runner/internal/config"
 	"github.com/phoban01/flintlock-runner/internal/poolmgr"
 )
+
+// TestRunLeavesNoGoroutinesBehind is deliberately not parallel: it counts
+// goroutines, so it has to be the only test running. Every test in this
+// package runs in parallel, which means the count is stable around it.
+func TestRunLeavesNoGoroutinesBehind(t *testing.T) {
+	ctx := testContext(t)
+	before := runtime.NumGoroutine()
+
+	client := newStubClient()
+	client.script(func(c *stubClient) {
+		c.claimFn = claimsFrom("host-1")
+		c.beatFn = beatsFor(clock.NewFake(testEpoch), time.Hour)
+	})
+	e := newEnv(t, envConfig{client: client})
+	e.health.contact()
+	stop := e.run(ctx)
+	e.tracker.setAvailable(e.poolOf("default"), 5)
+
+	h := e.allocate(ctx, JobInfo{ID: 61}, "default")
+	e.reserve(ctx)
+	e.sched.Release(h)
+	waitFor(t, ctx, func() bool { return client.releaseCount() == 1 })
+	stop()
+
+	// Run has returned, so every loop, heartbeat and release it started has
+	// finished with it.
+	waitFor(t, ctx, func() bool { return runtime.NumGoroutine() <= before })
+}
 
 func TestNewRequiresItsDependencies(t *testing.T) {
 	t.Parallel()

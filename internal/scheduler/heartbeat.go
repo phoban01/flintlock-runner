@@ -20,16 +20,15 @@ const minHeartbeatDelay = time.Millisecond
 // still heartbeated while the Runner is shutting down (GL-071).
 func (s *impl) startHeartbeat(h *handle) {
 	ctx, cancel := context.WithCancel(s.background())
-	done := make(chan struct{})
 
 	h.mu.Lock()
 	h.stopHeartbeat = cancel
-	h.hbDone = done
 	h.mu.Unlock()
 
-	if !s.inBackground(func() { s.heartbeatLoop(ctx, h, done) }) {
+	// The loop releases the context when it returns, so a Lease that was lost
+	// rather than released leaves nothing attached to the background context.
+	if !s.inBackground(func() { defer cancel(); s.heartbeatLoop(ctx, h) }) {
 		cancel()
-		close(done)
 	}
 }
 
@@ -53,9 +52,7 @@ func (s *impl) stopHeartbeat(h *handle) {
 // waits at most half the time left on the expiry the last Heartbeat returned,
 // so a Lease is heartbeated at least twice within its own lifetime and one
 // lost call is never enough to lose it.
-func (s *impl) heartbeatLoop(ctx context.Context, h *handle, done chan struct{}) {
-	defer close(done)
-
+func (s *impl) heartbeatLoop(ctx context.Context, h *handle) {
 	alloc := h.Allocation()
 	log := s.log.With("job", alloc.JobID, "vm", alloc.VMUID, "lease", alloc.Lease.ID,
 		"pool", alloc.Lease.Pool.String(), "host", alloc.Placement.Host)

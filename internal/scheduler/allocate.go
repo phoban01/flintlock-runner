@@ -19,7 +19,7 @@ import (
 // between (SC-026).
 func (s *impl) Allocate(ctx context.Context, r *Reservation, job JobInfo, p *Profile) (Handle, error) {
 	if r == nil {
-		return nil, fmt.Errorf("scheduler: allocate: %w", errors.New("a reservation is required"))
+		return nil, errors.New("scheduler: allocate: a reservation is required")
 	}
 	if p == nil {
 		return nil, &ProfileError{Image: job.Image}
@@ -255,7 +255,10 @@ func (s *impl) allocated(
 
 	if !s.convert(r, h) {
 		s.abandon(lease, "the reservation was released while the allocation was in flight")
-		return nil, &AllocationError{Profile: p.Name, Pool: p.PoolRef, Host: placement.Host, Err: ErrNotRunning}
+		return nil, &AllocationError{
+			Profile: p.Name, Pool: p.PoolRef, Host: placement.Host,
+			Err: fmt.Errorf("reservation %d was released while the allocation was in flight", r.ID),
+		}
 	}
 
 	s.startHeartbeat(h)
