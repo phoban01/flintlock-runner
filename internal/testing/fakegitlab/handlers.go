@@ -376,13 +376,16 @@ func (j *jobState) applyUpdate(req updateRequest) (int, *apiError) {
 	case StatusRunning:
 	case StatusSuccess, StatusFailed:
 		j.rec.ExitCode = req.ExitCode
-		if j.pendingLeft > 0 {
+		switch {
+		case j.pendingLeft > 0:
 			j.pendingLeft--
 			u.Accepted = false
 			code = http.StatusAccepted
-		} else if j.rec.Status == StatusCanceling {
+		case j.rec.Status == StatusCanceling:
+			// A Job GitLab was cancelling ends as canceled whatever final
+			// state the Runner reports, as it does on the GitLab side.
 			j.rec.Status = StatusCanceled
-		} else {
+		default:
 			j.rec.Status = req.State
 		}
 	default:
