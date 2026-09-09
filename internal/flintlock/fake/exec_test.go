@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
@@ -558,7 +559,9 @@ func processGone(pid int) error {
 	if pid <= 0 {
 		return errors.New("no pid captured")
 	}
-	if err := os.NewSyscallError("kill", killZero(pid)); err != nil && strings.Contains(err.Error(), "no such process") {
+	// Signal 0 checks for the process without touching it; ESRCH means the
+	// fake Host reaped it.
+	if err := syscall.Kill(pid, 0); errors.Is(err, syscall.ESRCH) {
 		return nil
 	}
 	return errors.New("process " + strconv.Itoa(pid) + " still exists")
