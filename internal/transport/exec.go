@@ -157,7 +157,14 @@ func (t *execTransport) exchange(ctx context.Context, start *execv1.ExecStart, s
 		_ = stream.CloseSend()
 		stdinCh <- nil
 	}
-	defer wg.Wait()
+	// Cancel before waiting, and in that order: a stdin goroutine blocked on
+	// a Send that a stalled Host is not reading would otherwise keep this
+	// call here for ever, because the deferred cancel that would release it
+	// runs only after the wait returns.
+	defer func() {
+		cancel()
+		wg.Wait()
+	}()
 
 	status, err := t.receive(ctx, cancel, stream, stdout, stderr)
 	if err != nil {

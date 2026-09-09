@@ -431,6 +431,39 @@ func TestRunFailsWhenTheHostStopsAnswering(t *testing.T) {
 		}
 	})
 
+	t.Run("a host that stops answering while the script is being sent", func(t *testing.T) {
+		// The Stage's script is larger than the stream's buffer and the
+		// command never reads it, so the goroutine feeding standard input
+		// is blocked in a Send when the Host stops answering. Run still has
+		// to come back: an operation whose stdin cannot drain must not hold
+		// the caller for ever.
+		host, client, uid := newFakeHost(t, flintlock.FakeHostConfig{Name: "h1", ExecEnabled: true})
+		const deadline = 500 * time.Millisecond
+		tr := newExecTransport(t, transport.Target{Host: client, VMUID: uid, Deadline: deadline})
+
+		script := strings.NewReader(strings.Repeat("# a line of a very long script\n", 400_000))
+		done := make(chan error, 1)
+		go func() {
+			_, err := tr.Run(ctx, transport.Command{
+				Path:  "sh",
+				Args:  []string{"-c", "sleep 60"},
+				Stdin: script,
+			})
+			done <- err
+		}()
+		time.Sleep(100 * time.Millisecond)
+		host.SetFaults(flintlock.HostFaults{Unresponsive: true})
+
+		select {
+		case err := <-done:
+			if !errors.Is(err, transport.ErrStreamFailed) {
+				t.Fatalf("Run returned %v, want a failure wrapping ErrStreamFailed", err)
+			}
+		case <-time.After(testTimeout):
+			t.Fatal("Run never returned while its standard input was stuck")
+		}
+	})
+
 	t.Run("a quiet stage on a healthy host", func(t *testing.T) {
 		_, client, uid := newFakeHost(t, flintlock.FakeHostConfig{Name: "h1", ExecEnabled: true})
 		// The command says nothing for several deadlines, which is what a
