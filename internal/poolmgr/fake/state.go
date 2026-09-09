@@ -142,6 +142,10 @@ func (p *PoolManager) oldestAvailableLocked(key poolKey) *vmState {
 	return best
 }
 
+//= docs/requirements/10-test-doubles.md#fake-pool-manager
+//# The fake Pool Manager SHALL place MicroVMs across a Pool's
+//# `flintlock_hosts` by least MicroVM count, matching battery's design.
+
 // pickHostLocked chooses the Host for a new MicroVM in ps (TD-007). Only
 // names the HostSource knows are candidates. PlacementLeastVMs picks the
 // candidate with the fewest MicroVMs of this Pool that are not DELETING or

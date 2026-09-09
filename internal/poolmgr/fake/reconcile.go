@@ -80,6 +80,11 @@ func (s strategy) tickDeficit(c counts) int {
 	return int(deficit)
 }
 
+//= docs/requirements/10-test-doubles.md#fake-pool-manager
+//# The fake Pool Manager SHALL expire a Lease whose last heartbeat is older
+//# than the Pool's heartbeat expiry threshold and SHALL delete the expired
+//# Lease's MicroVM.
+
 // tick is one pass of the control loop: expire and warn on Leases (TD-004),
 // retry deletions a Host refused, and top every Pool up (TD-003).
 func (p *PoolManager) tick(ctx context.Context) {

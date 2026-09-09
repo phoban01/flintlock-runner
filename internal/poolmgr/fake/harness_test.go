@@ -39,6 +39,10 @@ var testEpoch = time.Date(2026, 9, 8, 12, 0, 0, 0, time.UTC)
 type stubHost struct {
 	name string
 
+	// deletions receives the uid of every MicroVM the Host deletes, so that a
+	// test can wait for a deletion that has no Event of its own.
+	deletions chan string
+
 	mu      sync.Mutex
 	next    int
 	vms     map[string]*types.MicroVM
@@ -59,7 +63,7 @@ type stubHost struct {
 }
 
 func newStubHost(name string) *stubHost {
-	return &stubHost{name: name, vms: make(map[string]*types.MicroVM)}
+	return &stubHost{name: name, vms: make(map[string]*types.MicroVM), deletions: make(chan string, 64)}
 }
 
 func (h *stubHost) Name() string { return h.name }
@@ -139,6 +143,10 @@ func (h *stubHost) DeleteMicroVM(_ context.Context, uid string) error {
 	}
 	delete(h.vms, uid)
 	h.deleted = append(h.deleted, uid)
+	select {
+	case h.deletions <- uid:
+	default:
+	}
 	return nil
 }
 
@@ -332,6 +340,24 @@ func (h *harness) collectUntil(typ poolmgr.EventType) []*poolmgr.Event {
 			// Put the match first so waitEvent can return got[0].
 			got[0], got[len(got)-1] = got[len(got)-1], got[0]
 			return got
+		}
+	}
+}
+
+// waitDeletion blocks until host reports that it deleted uid. Deletions that
+// follow an Event are already visible when the Event arrives; this is for the
+// ones that have no Event of their own, such as the deletion the hook
+// failure policy performs.
+func (h *harness) waitDeletion(host *stubHost, uid string) {
+	h.t.Helper()
+	for {
+		select {
+		case got := <-host.deletions:
+			if got == uid {
+				return
+			}
+		case <-h.ctx.Done():
+			h.t.Fatalf("waiting for host %s to delete %s: %v", host.name, uid, h.ctx.Err())
 		}
 	}
 }

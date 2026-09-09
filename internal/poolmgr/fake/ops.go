@@ -281,11 +281,6 @@ func (p *PoolManager) claimLatency(ctx context.Context) error {
 	}
 }
 
-//= docs/requirements/10-test-doubles.md#fake-pool-manager
-//# The fake Pool Manager SHALL expire a Lease whose last heartbeat is older
-//# than the Pool's heartbeat expiry threshold and SHALL delete the expired
-//# Lease's MicroVM.
-
 // heartbeat implements Lease.Heartbeat: it moves the Lease's expiry to now
 // plus the Pool's threshold (TD-004) and returns it. RefuseHeartbeats makes
 // every Lease look expired (TD-010).

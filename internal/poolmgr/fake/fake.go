@@ -56,11 +56,6 @@ const (
 // been started; a PoolManager runs once.
 var ErrAlreadyRunning = errors.New("fake poolmgr: already running or stopped")
 
-//= docs/requirements/10-test-doubles.md#fake-pool-manager
-//# The project SHALL provide a fake Pool Manager that serves the
-//# `poolmgr.v1alpha1` `PoolAdmin`, `Lease` and `Events` services over gRPC
-//# using the generated server stubs from the battery module.
-
 // PoolManager is the fake Pool Manager. It is constructed from a
 // poolmgr.FakeConfig and served with Serve, or run in process with Run and
 // used through Client. It implements poolmgr.FaultInjector and
@@ -339,11 +334,8 @@ func (p *PoolManager) Leases() []poolmgr.LeaseRecord {
 	return out
 }
 
-//= docs/requirements/10-test-doubles.md#fake-pool-manager
-//# The fake Pool Manager SHALL place MicroVMs across a Pool's
-//# `flintlock_hosts` by least MicroVM count, matching battery's design.
-
-// VMs implements poolmgr.Inspector (TD-007). Records are in creation order;
+// VMs implements poolmgr.Inspector, which is how a test sees the placement
+// TD-007 asks for. Records are in creation order;
 // a MicroVM whose CreateMicroVM call has not returned yet has an empty UID.
 func (p *PoolManager) VMs() []poolmgr.VMRecord {
 	p.mu.Lock()

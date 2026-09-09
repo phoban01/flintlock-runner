@@ -16,6 +16,11 @@ import (
 	"github.com/phoban01/flintlock-runner/internal/poolmgr"
 )
 
+//= docs/requirements/10-test-doubles.md#fake-pool-manager
+//# The project SHALL provide a fake Pool Manager that serves the
+//# `poolmgr.v1alpha1` `PoolAdmin`, `Lease` and `Events` services over gRPC
+//# using the generated server stubs from the battery module.
+
 // newGRPCServer builds a server with the three services registered from the
 // battery module's generated stubs (TD-001) and the UNAVAILABLE fault
 // interceptors (TD-010). Serve and the loopback client each build one over
