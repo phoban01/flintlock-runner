@@ -1,0 +1,327 @@
+package fake
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"io"
+	"sync"
+
+	execv1 "github.com/liquidmetal-dev/flintlock/api/services/microvmexec/v1alpha1"
+	"github.com/liquidmetal-dev/flintlock/api/types"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
+
+	"github.com/phoban01/flintlock-runner/internal/flintlock"
+)
+
+// memStreamBuffer is how many messages an in-memory exec stream buffers in
+// each direction, standing in for gRPC's flow-control window so that a
+// client can send a few stdin chunks before the handler reads them.
+const memStreamBuffer = 64
+
+// Client is the in-memory flintlock.PoolHostClient over a Host. It goes
+// through the same store and the same exec handler as the gRPC services, so
+// what it returns is what a real client would map a Host's answer onto,
+// including the sentinel errors.
+type Client struct {
+	host  *Host
+	token string
+
+	ctx    context.Context
+	cancel context.CancelFunc
+}
+
+// newClient binds a client to h presenting token.
+func (h *Host) newClient(token string) *Client {
+	ctx, cancel := context.WithCancel(context.Background())
+	return &Client{host: h, token: token, ctx: ctx, cancel: cancel}
+}
+
+// Name implements flintlock.HostClient.
+func (c *Client) Name() string { return c.host.cfg.Name }
+
+// admit is the in-process counterpart of the gRPC interceptors: it fails
+// once the client or the Host is closed, blocks while the Host is
+// Unresponsive and then checks the token (TD-024, TD-025). Errors wrap the
+// flintlock sentinels; a wait that ends at the caller's deadline wraps both
+// flintlock.ErrUnavailable and the context error.
+func (c *Client) admit(ctx context.Context) error {
+	if c.ctx.Err() != nil {
+		return fmt.Errorf("fake host %s: client closed: %w", c.Name(), flintlock.ErrUnavailable)
+	}
+	if err := c.host.awaitResponsive(ctx); err != nil {
+		if errors.Is(err, errClosed) {
+			return fmt.Errorf("fake host %s: %w", c.Name(), flintlock.ErrUnavailable)
+		}
+		return fmt.Errorf("fake host %s: unresponsive: %w", c.Name(), errors.Join(flintlock.ErrUnavailable, err))
+	}
+	if c.host.cfg.Token != "" && c.token != c.host.cfg.Token {
+		return fmt.Errorf("fake host %s: invalid auth token: %w", c.Name(), flintlock.ErrUnauthenticated)
+	}
+	return nil
+}
+
+// ServerInfo implements flintlock.HostClient (TD-026).
+func (c *Client) ServerInfo(ctx context.Context) (*flintlock.HostInfo, error) {
+	if err := c.admit(ctx); err != nil {
+		return nil, err
+	}
+	resp, err := c.host.serverInfo()
+	if err != nil {
+		return nil, statusToSentinel(c.Name(), err)
+	}
+	return &flintlock.HostInfo{
+		Name:         c.Name(),
+		VersionKnown: true,
+		Version:      resp.GetVersion().GetVersion(),
+		BuildDate:    resp.GetVersion().GetBuildDate(),
+		Commit:       resp.GetVersion().GetCommitHash(),
+		Uptime:       resp.GetUptime().AsDuration(),
+		Exec: flintlock.GuestService{
+			Enabled: resp.GetExec().GetEnabled(),
+			Address: resp.GetExec().GetAddress(),
+		},
+		SSHProxy: flintlock.GuestService{
+			Enabled: resp.GetSshProxy().GetEnabled(),
+			Address: resp.GetSshProxy().GetAddress(),
+		},
+	}, nil
+}
+
+// GetMicroVM implements flintlock.HostClient.
+func (c *Client) GetMicroVM(ctx context.Context, uid string) (*types.MicroVM, error) {
+	if err := c.admit(ctx); err != nil {
+		return nil, err
+	}
+	vm, err := c.host.getMicroVM(uid)
+	if err != nil {
+		return nil, statusToSentinel(c.Name(), err)
+	}
+	return vm, nil
+}
+
+// ListMicroVMs implements flintlock.HostClient.
+func (c *Client) ListMicroVMs(ctx context.Context, namespace string) ([]*types.MicroVM, error) {
+	if err := c.admit(ctx); err != nil {
+		return nil, err
+	}
+	vms, err := c.host.listMicroVMs(namespace, nil)
+	if err != nil {
+		return nil, statusToSentinel(c.Name(), err)
+	}
+	return vms, nil
+}
+
+// Exec implements flintlock.HostClient. The returned stream is served by
+// the same handler as the gRPC service (TD-021, TD-023); it ends when ctx
+// is cancelled, the exit code has been received or the client is closed.
+func (c *Client) Exec(ctx context.Context) (flintlock.ExecStream, error) {
+	if err := c.admit(ctx); err != nil {
+		return nil, err
+	}
+	c.host.mu.Lock()
+	closed := c.host.closed
+	if !closed {
+		c.host.wg.Add(1)
+	}
+	c.host.mu.Unlock()
+	if closed {
+		return nil, fmt.Errorf("fake host %s: %w", c.Name(), flintlock.ErrUnavailable)
+	}
+
+	s := newMemExecStream(ctx, c.ctx)
+	go func() {
+		defer c.host.wg.Done()
+		err := c.host.execCommand(s.server())
+		s.finish(statusToSentinel(c.Name(), err))
+	}()
+	return s, nil
+}
+
+// SSHProxy implements flintlock.HostClient. The fake serves no SSH proxy;
+// it reports the configured flag from ServerInfo and nothing more.
+func (c *Client) SSHProxy(ctx context.Context, _ string) (io.ReadWriteCloser, error) {
+	if err := c.admit(ctx); err != nil {
+		return nil, err
+	}
+	return nil, fmt.Errorf("fake host %s: ssh proxy: %w", c.Name(), flintlock.ErrUnimplemented)
+}
+
+// Close implements flintlock.HostClient. In-flight exec streams fail.
+func (c *Client) Close() error {
+	c.cancel()
+	return nil
+}
+
+// CreateMicroVM implements flintlock.HostAdminClient (TD-022).
+func (c *Client) CreateMicroVM(ctx context.Context, spec *types.MicroVMSpec) (*types.MicroVM, error) {
+	if err := c.admit(ctx); err != nil {
+		return nil, err
+	}
+	vm, err := c.host.createMicroVM(spec)
+	if err != nil {
+		return nil, statusToSentinel(c.Name(), err)
+	}
+	return vm, nil
+}
+
+// DeleteMicroVM implements flintlock.HostAdminClient.
+func (c *Client) DeleteMicroVM(ctx context.Context, uid string) error {
+	if err := c.admit(ctx); err != nil {
+		return err
+	}
+	return statusToSentinel(c.Name(), c.host.deleteMicroVM(uid))
+}
+
+// memExecStream is an in-memory bidirectional stream: the client half is a
+// flintlock.ExecStream, the server half an execStream. Each direction is a
+// buffered channel; the stream context ends when the client's context, the
+// client value or the handler ends.
+type memExecStream struct {
+	ctx    context.Context
+	cancel context.CancelFunc
+
+	reqs  chan *execv1.ExecCommandRequest
+	resps chan *execv1.ExecCommandResponse
+
+	mu         sync.Mutex
+	sendClosed bool
+	closeSend  chan struct{}
+	done       chan struct{}
+	err        error
+}
+
+func newMemExecStream(ctx, clientCtx context.Context) *memExecStream {
+	ctx, cancel := context.WithCancel(ctx)
+	s := &memExecStream{
+		ctx:       ctx,
+		cancel:    cancel,
+		reqs:      make(chan *execv1.ExecCommandRequest, memStreamBuffer),
+		resps:     make(chan *execv1.ExecCommandResponse, memStreamBuffer),
+		closeSend: make(chan struct{}),
+		done:      make(chan struct{}),
+	}
+	// Closing the Client fails the stream (HostClient.Close contract).
+	stop := context.AfterFunc(clientCtx, cancel)
+	go func() {
+		<-s.done
+		stop()
+	}()
+	return s
+}
+
+// finish records the handler's result and ends the stream.
+func (s *memExecStream) finish(err error) {
+	s.mu.Lock()
+	s.err = err
+	s.mu.Unlock()
+	close(s.done)
+	s.cancel()
+}
+
+// Send implements flintlock.ExecStream.
+func (s *memExecStream) Send(req *execv1.ExecCommandRequest) error {
+	s.mu.Lock()
+	closed := s.sendClosed
+	s.mu.Unlock()
+	if closed {
+		return errors.New("fake exec stream: Send after CloseSend")
+	}
+	select {
+	case <-s.done:
+		// The stream is over; like gRPC, report EOF and let Recv carry the
+		// status.
+		return io.EOF
+	case <-s.ctx.Done():
+		return s.ctx.Err()
+	case s.reqs <- req:
+		return nil
+	}
+}
+
+// Recv implements flintlock.ExecStream.
+func (s *memExecStream) Recv() (*execv1.ExecCommandResponse, error) {
+	select {
+	case resp := <-s.resps:
+		return resp, nil
+	default:
+	}
+	select {
+	case resp := <-s.resps:
+		return resp, nil
+	case <-s.done:
+		// Drain what the handler sent before finishing.
+		select {
+		case resp := <-s.resps:
+			return resp, nil
+		default:
+		}
+		s.mu.Lock()
+		err := s.err
+		s.mu.Unlock()
+		if err == nil {
+			return nil, io.EOF
+		}
+		return nil, err
+	case <-s.ctx.Done():
+		return nil, statusToSentinel("", status.FromContextError(s.ctx.Err()).Err())
+	}
+}
+
+// CloseSend implements flintlock.ExecStream.
+func (s *memExecStream) CloseSend() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if !s.sendClosed {
+		s.sendClosed = true
+		close(s.closeSend)
+	}
+	return nil
+}
+
+// server returns the handler-side view of the stream.
+func (s *memExecStream) server() execStream { return memServerStream{s} }
+
+// memServerStream is the execStream the handler drives.
+type memServerStream struct{ s *memExecStream }
+
+func (m memServerStream) Context() context.Context { return m.s.ctx }
+
+func (m memServerStream) Send(resp *execv1.ExecCommandResponse) error {
+	select {
+	case m.s.resps <- resp:
+		return nil
+	case <-m.s.ctx.Done():
+		return status.FromContextError(m.s.ctx.Err()).Err()
+	}
+}
+
+func (m memServerStream) Recv() (*execv1.ExecCommandRequest, error) {
+	// Deliver buffered requests before reporting the half-close, as gRPC
+	// does.
+	select {
+	case req := <-m.s.reqs:
+		return req, nil
+	default:
+	}
+	select {
+	case req := <-m.s.reqs:
+		return req, nil
+	case <-m.s.closeSend:
+		select {
+		case req := <-m.s.reqs:
+			return req, nil
+		default:
+			return nil, io.EOF
+		}
+	case <-m.s.ctx.Done():
+		return nil, status.Error(codes.Canceled, m.s.ctx.Err().Error())
+	}
+}
+
+// Compile-time checks.
+var (
+	_ flintlock.ExecStream = (*memExecStream)(nil)
+	_ execStream           = memServerStream{}
+)
