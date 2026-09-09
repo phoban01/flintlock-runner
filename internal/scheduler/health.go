@@ -11,7 +11,7 @@ import (
 	"github.com/phoban01/flintlock-runner/internal/flintlock"
 )
 
-// probeLoop probes every Host in the Registry at the configured health
+// probeLoop probes every Host in the Inventory at the configured health
 // interval until ctx is cancelled. The first round runs at once, so a Host
 // that is down at startup is known to be down before the first Job is placed
 // on it and its flintlock version is logged (HO-011).
@@ -56,9 +56,20 @@ func (s *impl) hostUnhealthyThreshold() int {
 	return config.DefaultHostUnhealthyThreshold
 }
 
-// probeAll probes every Host once, in parallel, and publishes the gauges.
+//= docs/requirements/03-scheduler.md#host-health
+//# The Scheduler SHALL probe every Host in the Inventory at the
+//# configured health interval by calling `ServerInfo`, falling back to
+//# `ListMicroVMs` on the Runner's namespace when `ServerInfo` is not
+//# implemented by the Host.
+
+// probeAll probes every Host once, in parallel, and publishes the gauges. The
+// names come from the health table, which resetHosts builds from the
+// Inventory, and not from the Registry: a Host the Registry could not dial is
+// exactly the one whose health matters, and taking the names from the
+// Registry would leave it with the healthy state resetHosts seeded it with
+// for ever. probeHost turns the missing Registry entry into a failed probe.
 func (s *impl) probeAll(ctx context.Context) {
-	names := s.deps.Hosts.Names()
+	names := s.inventoryHosts()
 	var wg sync.WaitGroup
 	for _, name := range names {
 		wg.Add(1)
@@ -71,6 +82,18 @@ func (s *impl) probeAll(ctx context.Context) {
 	s.publishGauges()
 }
 
+// inventoryHosts is the Host names of the Inventory, which is what resetHosts
+// keys the health table by.
+func (s *impl) inventoryHosts() []string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	out := make([]string, 0, len(s.hosts))
+	for name := range s.hosts {
+		out = append(out, name)
+	}
+	return out
+}
+
 //= docs/requirements/03-scheduler.md#host-health
 //# The Scheduler SHALL probe every Host in the Inventory at the
 //# configured health interval by calling `ServerInfo`, falling back to
@@ -81,7 +104,9 @@ func (s *impl) probeAll(ctx context.Context) {
 // interval. A Host that predates the ServerInfo RPC answers UNIMPLEMENTED, in
 // which case ListMicroVMs on the Runner's own namespace is the probe instead
 // and the Host's version stays unknown (HO-013); ListMicroVMs is called with
-// no other namespace and for no other purpose (HO-008).
+// no other namespace and for no other purpose (HO-008). An Inventory Host the
+// Registry does not hold, because Apply could not dial it, has no client at
+// all and counts as a failed probe like any other unreachable Host.
 func (s *impl) probeHost(ctx context.Context, name string) {
 	client, err := s.deps.Hosts.Get(name)
 	if err != nil {

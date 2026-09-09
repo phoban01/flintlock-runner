@@ -321,6 +321,21 @@ func (r *testRegistry) add(name, address string, client flintlock.HostClient) {
 	sort.Strings(r.names)
 }
 
+// drop forgets a Host, which is what the Registry looks like for an Inventory
+// entry it could not dial.
+func (r *testRegistry) drop(name string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	delete(r.clients, name)
+	delete(r.eps, name)
+	for i, n := range r.names {
+		if n == name {
+			r.names = append(r.names[:i], r.names[i+1:]...)
+			break
+		}
+	}
+}
+
 func (r *testRegistry) Get(name string) (flintlock.HostClient, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()

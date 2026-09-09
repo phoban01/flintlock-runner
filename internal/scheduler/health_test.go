@@ -80,6 +80,42 @@ func TestProbeCallsServerInfoOnEveryHostAtTheConfiguredInterval(t *testing.T) {
 	}
 }
 
+// TestInventoryHostTheRegistryNeverDialledIsProbedAndGoesUnhealthy holds the
+// "every Host in the Inventory" clause of SC-040. The health table is built
+// from the Inventory and seeds every Host healthy, so taking the probe list
+// from the Registry instead would leave a Host that could not be dialled
+// healthy for ever, with a zero LastProbeAt, and would make the readiness
+// snapshot OB-031 feeds /readyz from report ready with nothing reachable.
+func TestInventoryHostTheRegistryNeverDialledIsProbedAndGoesUnhealthy(t *testing.T) {
+	t.Parallel()
+	ctx := testContext(t)
+
+	e := newEnv(t, envConfig{
+		inventory: []config.HostEntry{testHostEntry("host-1")},
+		tune:      func(s *Settings) { s.Scheduler.HostUnhealthyThreshold = 1 },
+	})
+	// Apply could not dial the only Inventory Host, so the Registry holds
+	// nothing while the Inventory still names it.
+	e.registry.drop("host-1")
+	e.startBare(ctx)
+
+	e.sched.probeAll(ctx)
+
+	got := hostHealth(t, e, "host-1")
+	if got.Healthy {
+		t.Fatal("an inventory host the registry never dialled is still healthy")
+	}
+	if got.ConsecutiveFailures != 1 {
+		t.Fatalf("consecutive failures = %d, want 1", got.ConsecutiveFailures)
+	}
+	if got.LastProbeAt.IsZero() {
+		t.Fatal("the host was never probed")
+	}
+	if e.sched.Snapshot().Ready() {
+		t.Fatal("the scheduler reports ready with no reachable host")
+	}
+}
+
 func TestProbeFallsBackToListMicroVMsWhenServerInfoIsUnimplemented(t *testing.T) {
 	t.Parallel()
 	ctx := testContext(t)
