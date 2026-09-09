@@ -298,9 +298,14 @@ func leaseExpiry(p *Profile) time.Duration {
 	return config.DefaultHeartbeatExpiry
 }
 
-// abandon hands a Lease back that never became an Allocation.
+// abandon hands a Lease back that never became an Allocation. The release
+// goes to the background, as every other release path does: it is the full
+// retry ladder against a Pool Manager that may be the reason the allocation
+// failed in the first place, and Allocate holds the caller's Reservation
+// until it returns, so waiting for it here would pin a run-loop worker and
+// its Slot for the whole ladder.
 func (s *impl) abandon(lease Lease, why string) {
 	s.log.Warn("releasing a leased microvm that did not become an allocation",
 		"lease", lease.ID, "pool", lease.Pool.String(), "reason", why)
-	s.releaseLease(lease)
+	s.releaseInBackground(lease)
 }

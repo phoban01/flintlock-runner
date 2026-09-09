@@ -245,6 +245,82 @@ func TestCancelledJobContextReleasesTheLeaseObtained(t *testing.T) {
 	}
 }
 
+// TestCancelledAllocationDoesNotWaitForTheAbandonedRelease holds the "stop
+// the allocation" half of SC-023. Allocate holds the caller's Reservation
+// until it returns, so a release made on the calling goroutine keeps the
+// worker and its Slot for the whole retry ladder: up to ReleaseRetryLimit
+// attempts, each bounded by the Pool Manager deadline, with backoff between
+// them, and none of it interruptible by the Job's own context, because the
+// release call deliberately survives cancellation.
+func TestCancelledAllocationDoesNotWaitForTheAbandonedRelease(t *testing.T) {
+	t.Parallel()
+	ctx := testContext(t)
+
+	jobCtx, cancelJob := context.WithCancel(ctx)
+	defer cancelJob()
+
+	inRelease := make(chan struct{})
+	holdRelease := make(chan struct{})
+	// The release is let go before the test's cleanup waits for the
+	// background goroutines.
+	defer close(holdRelease)
+
+	client := newStubClient()
+	client.script(func(c *stubClient) {
+		c.claimFn = func(context.Context, poolmgr.PoolRef) (*poolmgr.Claim, error) {
+			cancelJob()
+			return &poolmgr.Claim{
+				LeaseID: "lease-abandoned",
+				VMUID:   "vm-abandoned",
+				Host:    poolmgr.HostRef{Name: "host-1", Address: "host-1:9090"},
+			}, nil
+		}
+		// A Pool Manager that never answers the release, which is what the
+		// retry ladder is for.
+		c.releaseFn = func(context.Context, string) error {
+			close(inRelease)
+			<-holdRelease
+			return nil
+		}
+	})
+	e := newEnv(t, envConfig{client: client})
+	e.startBare(ctx)
+	e.tracker.setAvailable(e.poolOf("default"), 1)
+
+	r := e.reserve(ctx)
+	done := make(chan error, 1)
+	go func() {
+		_, err := e.sched.Allocate(jobCtx, r, JobInfo{ID: 23}, e.profile("default"))
+		done <- err
+	}()
+
+	// The abandoned Lease is being released; if that release were inline,
+	// Allocate would be sitting inside it.
+	select {
+	case <-inRelease:
+	case <-ctx.Done():
+		t.Fatal("the abandoned lease was never released")
+	}
+
+	select {
+	case err := <-done:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("Allocate error = %v, want context.Canceled", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("Allocate is still blocked while the abandoned lease is being released")
+	}
+
+	// The Slot is the caller's to give back the moment Allocate returned.
+	if got := e.sched.Snapshot().SlotsInUse; got != 1 {
+		t.Fatalf("slots in use = %d, want the reservation still held for the caller", got)
+	}
+	e.sched.ReleaseReservation(r)
+	if got := e.sched.Snapshot().SlotsInUse; got != 0 {
+		t.Fatalf("slots in use after releasing the reservation = %d, want 0", got)
+	}
+}
+
 func TestCancelledJobContextStopsAWaitingAllocation(t *testing.T) {
 	t.Parallel()
 	ctx := testContext(t)
