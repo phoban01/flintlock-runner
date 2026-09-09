@@ -20,6 +20,7 @@ package main
 import (
 	"errors"
 	"fmt"
+	"log/slog"
 	"os"
 
 	"github.com/prometheus/client_golang/prometheus"
@@ -30,6 +31,8 @@ import (
 	"gitlab.com/gitlab-org/gitlab-runner/executors"
 	"gitlab.com/gitlab-org/gitlab-runner/network"
 	_ "gitlab.com/gitlab-org/gitlab-runner/shells" // registers the bash shell (GL-041)
+
+	"github.com/phoban01/flintlock-runner/internal/config"
 )
 
 // ErrNotImplemented is returned by every subcommand whose work package has
@@ -84,11 +87,9 @@ func newApp() *cli.App {
 			Name:  "config",
 			Usage: "inspect the configuration",
 			Subcommands: []cli.Command{{
-				Name:  "show",
-				Usage: "print the effective configuration with every secret redacted (CF-006)",
-				Action: func(*cli.Context) error {
-					return notImplemented("config show", "config")
-				},
+				Name:   "show",
+				Usage:  "print the effective configuration with every secret redacted (CF-006)",
+				Action: configShow,
 			}},
 		},
 		{
@@ -120,6 +121,43 @@ func fleetCommands() []cli.Command {
 		})
 	}
 	return cmds
+}
+
+// exitInvalidConfig is the exit status when the configuration file cannot be
+// read or fails validation (CF-004).
+const exitInvalidConfig = 2
+
+//= docs/requirements/07-configuration.md#file-and-precedence
+//# The Runner SHALL provide a `config show` command that prints the
+//# effective configuration with every secret value redacted.
+
+// configShow is the action of `config show`: it loads the file named by
+// --config or FLINTLOCK_RUNNER_CONFIG and prints the effective configuration
+// with every secret redacted (config.Show).
+func configShow(c *cli.Context) error {
+	cfg, err := loadConfig(c)
+	if err != nil {
+		return err
+	}
+	return config.Show(c.App.Writer, cfg)
+}
+
+//= docs/requirements/07-configuration.md#file-and-precedence
+//# When starting, the Runner SHALL validate the configuration and,
+//# if it is invalid, SHALL exit with a non-zero status and a message naming
+//# the first invalid field and the reason.
+
+// loadConfig loads and validates the configuration for a subcommand. A
+// failure becomes a non-zero exit whose message is config.Load's error,
+// which names the first invalid field and the reason (and lists the rest).
+// Startup warnings go to the application's error writer.
+func loadConfig(c *cli.Context) (*config.Config, error) {
+	logger := slog.New(slog.NewTextHandler(c.App.ErrWriter, nil))
+	cfg, err := config.Load(c.GlobalString("config"), config.WithLogger(logger))
+	if err != nil {
+		return nil, cli.NewExitError(err.Error(), exitInvalidConfig)
+	}
+	return cfg, nil
 }
 
 // notImplemented is the action of every subcommand whose work package has

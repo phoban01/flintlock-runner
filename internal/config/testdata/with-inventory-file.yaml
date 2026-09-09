@@ -1,0 +1,26 @@
+# A configuration that references testdata/inventory.yaml instead of
+# listing Hosts inline (CF-003). The relative path is resolved against this
+# file's directory.
+gitlab:
+  url: https://gitlab.example.com
+  token: glrt-ref
+  name: ref-runner
+pool_manager:
+  endpoint: 10.0.0.5:9091
+inventory:
+  file: inventory.yaml
+profiles:
+  - name: arm
+    arch: arm64
+    kernel:
+      image: ghcr.io/example/kernel@sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
+    rootfs: ghcr.io/example/ubuntu-ci@sha256:89abcdef0123456789abcdef0123456789abcdef0123456789abcdef01234567
+    pool:
+      size: 1
+  - name: x86
+    arch: amd64
+    kernel:
+      image: ghcr.io/example/kernel@sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
+    rootfs: ghcr.io/example/ubuntu-ci@sha256:89abcdef0123456789abcdef0123456789abcdef0123456789abcdef01234567
+    pool:
+      size: 1

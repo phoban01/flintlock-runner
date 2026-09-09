@@ -1,0 +1,18 @@
+# An Inventory file as the Fleet Controller writes it (FL-060) and as
+# `inventory.file` references it (CF-003).
+generated_at: 2026-09-08T10:00:00Z
+hosts:
+  - name: host-a
+    endpoint: 10.0.1.10:9090
+    arch: arm64
+    vcpu: 62
+    memory_mb: 253952
+    labels:
+      tier: general
+  - name: host-b
+    endpoint: 10.0.1.11:9090
+    arch: amd64
+    vcpu: 94
+    memory_mb: 385024
+    labels:
+      tier: general
