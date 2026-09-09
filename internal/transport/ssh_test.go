@@ -344,3 +344,47 @@ func TestSSHReusesOneProxyStreamForEveryStage(t *testing.T) {
 		t.Errorf("the guest ran %d commands, want 3", got)
 	}
 }
+
+// TestSSHRunsStagesAsTheLoginUser covers the ordinary Profile that names an
+// ssh user of its own. The Executor runs each Stage as the Profile's user,
+// which defaults to root (EX-026), while the session can only run as the
+// user it logged in as. The two differ whenever a Profile sets ssh.user to
+// anything but its run-as user, and the Stage has to run rather than be
+// refused for it.
+func TestSSHRunsStagesAsTheLoginUser(t *testing.T) {
+	t.Parallel()
+	ctx, cancel := context.WithTimeout(context.Background(), testTimeout)
+	defer cancel()
+	key, public := generateKeyPair(t)
+
+	for _, tc := range []struct {
+		name string
+		user string
+	}{
+		{name: "the profile's default run-as user", user: "root"},
+		{name: "a run-as user the profile names", user: "builder"},
+		{name: "no user at all", user: ""},
+		{name: "the login user itself", user: "runner"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			guest := newSSHGuest(t, public, "out\n", "", 0)
+			target, _ := sshTarget(guest, key, "")
+			tr, err := transport.NewFactory().New(context.Background(), target)
+			if err != nil {
+				t.Fatalf("building the ssh transport: %v", err)
+			}
+			t.Cleanup(func() { _ = tr.Close() })
+
+			status, err := tr.Run(ctx, transport.Command{Path: "true", User: tc.user})
+			if err != nil {
+				t.Fatalf("Run as user %q over a session logged in as runner: %v", tc.user, err)
+			}
+			if status != 0 {
+				t.Errorf("Run returned exit status %d, want 0", status)
+			}
+			if got := guest.loggedInAs(); len(got) == 0 || got[0] != "runner" {
+				t.Errorf("the session logged in as %v, want the profile's ssh user runner", got)
+			}
+		})
+	}
+}

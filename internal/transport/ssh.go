@@ -97,17 +97,23 @@ func (t *sshTransport) Ready(ctx context.Context) error {
 // the environment and the program are sent as the session's command,
 // standard input is streamed into it, standard output and standard error
 // come back as they are produced, and the session's exit status is the
-// command's. The guest user is the user the connection was made as, so a
-// Command asking for a different one is refused rather than quietly run as
-// somebody else.
+// command's.
+//
+// The guest user is the user the connection was made as: an SSH session
+// runs as whoever it logged in as and cannot become somebody else. A
+// Command that names a different user is run as the login user and the
+// difference is logged, because the Profile's run-as user defaults to root
+// (EX-026) whether or not it means anything for this transport, so refusing
+// would fail every Stage of a Profile that sets an ssh user of its own.
 func (t *sshTransport) Run(ctx context.Context, cmd Command) (int, error) {
 	if cmd.Path == "" {
 		return -1, fmt.Errorf("host %s: microvm %s: command has no path", t.target.Host.Name(), t.target.VMUID)
 	}
 	login := t.loginUser(cmd.User)
 	if cmd.User != "" && cmd.User != login {
-		return -1, fmt.Errorf("host %s: microvm %s: the ssh transport runs commands as %s and cannot run this one as %s",
-			t.target.Host.Name(), t.target.VMUID, login, cmd.User)
+		t.log.Warn("the ssh transport runs stages as the ssh login user, not the profile's run-as user",
+			"host", t.target.Host.Name(), "microvm", t.target.VMUID,
+			"login_user", login, "command_user", cmd.User)
 	}
 
 	ctx, cancel := context.WithCancel(ctx)

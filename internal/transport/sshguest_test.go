@@ -44,6 +44,7 @@ type sshGuest struct {
 	mu       sync.Mutex
 	commands []string
 	stdins   []string
+	logins   []string
 	wg       sync.WaitGroup
 }
 
@@ -54,7 +55,10 @@ func newSSHGuest(t *testing.T, authorized ssh.PublicKey, stdout, stderr string, 
 	hostKey := generateSigner(t)
 	guest := &sshGuest{hostKey: hostKey, stdout: stdout, stderr: stderr, status: status}
 	guest.config = &ssh.ServerConfig{
-		PublicKeyCallback: func(_ ssh.ConnMetadata, key ssh.PublicKey) (*ssh.Permissions, error) {
+		PublicKeyCallback: func(meta ssh.ConnMetadata, key ssh.PublicKey) (*ssh.Permissions, error) {
+			guest.mu.Lock()
+			guest.logins = append(guest.logins, meta.User())
+			guest.mu.Unlock()
 			if authorized == nil {
 				return nil, errUnauthorizedKey
 			}
@@ -173,6 +177,14 @@ func (g *sshGuest) ran() []string {
 	g.mu.Lock()
 	defer g.mu.Unlock()
 	return append([]string(nil), g.commands...)
+}
+
+// loggedInAs returns the user names the client offered on the connections
+// the guest authenticated, in order.
+func (g *sshGuest) loggedInAs() []string {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	return append([]string(nil), g.logins...)
 }
 
 // stdinSeen returns the standard input the guest received, per command.
