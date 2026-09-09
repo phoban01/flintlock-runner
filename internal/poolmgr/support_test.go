@@ -14,6 +14,7 @@ import (
 	poolmgrv1 "github.com/liquidmetal-dev/battery/api/proto/poolmgr/v1alpha1"
 	"github.com/liquidmetal-dev/flintlock/api/types"
 
+	"github.com/phoban01/flintlock-runner/internal/clock"
 	"github.com/phoban01/flintlock-runner/internal/config"
 	"github.com/phoban01/flintlock-runner/internal/flintlock"
 	flintlockfake "github.com/phoban01/flintlock-runner/internal/flintlock/fake"
@@ -149,6 +150,16 @@ func (p *poolManager) decorateHosts() {
 	for name, host := range p.hostByName {
 		p.hosts.Add(name, withNetworkStatus{host.Client()}, name+":9090")
 	}
+}
+
+// host is the fake Host behind a name.
+func (p *poolManager) host(name string) *flintlockfake.Host {
+	p.t.Helper()
+	host, ok := p.hostByName[name]
+	if !ok {
+		p.t.Fatalf("no fake host named %q", name)
+	}
+	return host
 }
 
 // client dials the fake Pool Manager with the package's own client. Extra
@@ -357,6 +368,135 @@ func (g *gateAdmin) awaitCall(t *testing.T, ctx context.Context) {
 	case <-g.calls:
 	case <-ctx.Done():
 		t.Fatalf("no call reached the pool manager: %v", ctx.Err())
+	}
+}
+
+// trackerHarness is a PoolTracker with the two observation channels its
+// configuration offers, so a test can wait for the Tracker to have applied
+// something instead of polling its state.
+type trackerHarness struct {
+	*poolmgr.PoolTracker
+	clk    *clock.Fake
+	events chan *poolmgr.Event
+	polls  chan poolmgr.PoolRef
+}
+
+// newTracker builds a Tracker over c with a fake clock. It does not start
+// it; call run.
+func newTracker(t *testing.T, c poolmgr.Client, health poolmgr.Health, pollInterval time.Duration, log *slog.Logger) *trackerHarness {
+	t.Helper()
+	h := &trackerHarness{
+		clk:    clock.NewFake(testEpoch),
+		events: make(chan *poolmgr.Event, 1024),
+		polls:  make(chan poolmgr.PoolRef, 1024),
+	}
+	if log == nil {
+		log = testLogger(t)
+	}
+	tracker, err := poolmgr.NewTracker(poolmgr.TrackerConfig{
+		Events:       c,
+		Admin:        c,
+		Health:       health,
+		Clock:        h.clk,
+		PollInterval: pollInterval,
+		Log:          log,
+		OnEvent: func(e *poolmgr.Event) {
+			select {
+			case h.events <- e:
+			default:
+			}
+		},
+		OnPoll: func(ref poolmgr.PoolRef, _ poolmgr.PoolStatus) {
+			select {
+			case h.polls <- ref:
+			default:
+			}
+		},
+	})
+	if err != nil {
+		t.Fatalf("NewTracker: %v", err)
+	}
+	h.PoolTracker = tracker
+	return h
+}
+
+// run starts the Tracker and stops it with the test.
+func (h *trackerHarness) run(t *testing.T) {
+	t.Helper()
+	runInBackground(t, "Tracker.Run", h.Run)
+}
+
+// await blocks until cond holds, waking on every event and poll the Tracker
+// applies. It fails the test when ctx ends first.
+func (h *trackerHarness) await(t *testing.T, ctx context.Context, what string, cond func() bool) {
+	t.Helper()
+	for {
+		if cond() {
+			return
+		}
+		select {
+		case <-h.events:
+		case <-h.polls:
+		case <-ctx.Done():
+			if cond() {
+				return
+			}
+			t.Fatalf("timed out waiting for %s: %v", what, ctx.Err())
+		}
+	}
+}
+
+// awaitEvent blocks until an event the Tracker applied satisfies match.
+func (h *trackerHarness) awaitEvent(t *testing.T, ctx context.Context, what string, match func(*poolmgr.Event) bool) *poolmgr.Event {
+	t.Helper()
+	for {
+		select {
+		case e := <-h.events:
+			if match(e) {
+				return e
+			}
+		case <-ctx.Done():
+			t.Fatalf("timed out waiting for %s: %v", what, ctx.Err())
+		}
+	}
+}
+
+// newHealth builds a HealthMonitor over a PoolAdmin with a fake clock and
+// test-sized settings. fn adjusts the configuration.
+func newHealth(t *testing.T, admin poolmgr.PoolAdmin, clk clock.Clock, fn func(*poolmgr.HealthConfig)) *poolmgr.HealthMonitor {
+	t.Helper()
+	cfg := poolmgr.HealthConfig{
+		Admin:            admin,
+		Namespace:        testNamespace,
+		Clock:            clk,
+		Backoff:          clock.Exponential{Base: time.Second, Max: 8 * time.Second},
+		Interval:         healthInterval,
+		FailureThreshold: 3,
+		UnhealthyFor:     30 * time.Second,
+		Log:              testLogger(t),
+	}
+	if fn != nil {
+		fn(&cfg)
+	}
+	health, err := poolmgr.NewHealth(cfg)
+	if err != nil {
+		t.Fatalf("NewHealth: %v", err)
+	}
+	return health
+}
+
+// healthInterval is the probe interval the tests configure. Nothing waits
+// for it: the tests fire the health monitor's fake clock.
+const healthInterval = 10 * time.Second
+
+// awaitContact blocks until the health monitor has reached the Pool
+// Manager once.
+func awaitContact(t *testing.T, ctx context.Context, health poolmgr.Health) {
+	t.Helper()
+	select {
+	case <-health.Contacted():
+	case <-ctx.Done():
+		t.Fatalf("the pool manager was never contacted: %v", ctx.Err())
 	}
 }
 
