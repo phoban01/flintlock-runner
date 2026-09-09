@@ -242,7 +242,10 @@ func TestSandboxes(t *testing.T) {
 		t.Errorf("Sandboxes after Close = %v, want [%s]", left, b.GetSpec().GetUid())
 	}
 
-	// A Host without a configured root creates a temporary one on first use.
+	// A Host without a configured root creates a temporary one on first use
+	// and takes it away again on Close, but only once it is empty: a
+	// sandbox nobody deleted is the evidence the harness reads (TD-054) and
+	// has to outlive the Host.
 	tmp := New(flintlock.FakeHostConfig{Name: "tmp"})
 	t.Cleanup(func() {
 		_ = tmp.Close()
@@ -253,12 +256,26 @@ func TestSandboxes(t *testing.T) {
 	if tmp.SandboxRoot() != "" {
 		t.Error("SandboxRoot set before first create")
 	}
-	createVM(t, tmp, nil)
-	if root := tmp.SandboxRoot(); root == "" || filepath.Base(root) == "" {
+	leaked := createVM(t, tmp, nil)
+	root := tmp.SandboxRoot()
+	if root == "" || filepath.Base(root) == "" {
 		t.Errorf("SandboxRoot after create = %q, want a temporary directory", root)
 	}
 	if left, _ := tmp.Sandboxes(); len(left) != 1 {
 		t.Errorf("temporary root Sandboxes = %v, want one", left)
+	}
+	_ = tmp.Close()
+	if left, _ := tmp.Sandboxes(); len(left) != 1 {
+		t.Errorf("temporary root Sandboxes after Close = %v, want the undeleted sandbox to survive", left)
+	}
+	// With the sandbox gone the root holds no evidence, so Close takes the
+	// directory it invented back out of the temporary area.
+	if err := os.RemoveAll(filepath.Join(root, leaked.GetSpec().GetUid())); err != nil {
+		t.Fatal(err)
+	}
+	_ = tmp.Close()
+	if _, err := os.Stat(root); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("stat of the temporary sandbox root after an empty Close = %v, want it removed", err)
 	}
 }
 

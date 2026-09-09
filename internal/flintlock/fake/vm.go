@@ -292,6 +292,11 @@ func (h *Host) attachExec(uid string, cancel context.CancelFunc) (sandbox string
 // address when enabled, as flintlockd reports them. In the
 // ServerInfoUnimplemented mode it returns UNIMPLEMENTED, which is what a
 // flintlockd that predates the RPC answers (HO-013).
+//
+// The two flags are not the same kind of claim. ExecEnabled describes a
+// service the fake really does serve; SSHProxyEnabled is a reporting knob
+// only, because there is no MicroVMSSHProxy server behind the address it
+// advertises. See Client.SSHProxy.
 func (h *Host) serverInfo() (*mvmv1.ServerInfoResponse, error) {
 	if h.cfg.ServerInfoUnimplemented {
 		return nil, status.Error(codes.Unimplemented, "method ServerInfo not implemented")

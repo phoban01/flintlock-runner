@@ -33,6 +33,9 @@ type execCase struct {
 	// wantErrs are substrings expected in the error payloads, in order;
 	// nil means no error payload.
 	wantErrs []string
+	// check is an extra assertion about what the command left behind,
+	// beyond what it wrote to the stream.
+	check func(t *testing.T, sandbox string)
 }
 
 //= docs/requirements/10-test-doubles.md#fake-host
@@ -207,6 +210,12 @@ func TestExecCommand(t *testing.T) {
 			},
 			start:      func(uid string) *execv1.ExecStart { return shell(uid, "cat seed.txt && touch made.txt") },
 			wantStdout: fixed("seeded"),
+			check: func(t *testing.T, sandbox string) {
+				t.Helper()
+				if _, err := os.Stat(filepath.Join(sandbox, "made.txt")); err != nil {
+					t.Errorf("file made by the command not in the sandbox: %v", err)
+				}
+			},
 		},
 	}
 
@@ -245,10 +254,8 @@ func TestExecCommand(t *testing.T) {
 							t.Errorf("error payload %d = %q, want it to contain %q", i, res.errs[i], want)
 						}
 					}
-					if tc.name == "files in the sandbox are visible" {
-						if _, err := os.Stat(filepath.Join(sandbox, "made.txt")); err != nil {
-							t.Errorf("file made by the command not in the sandbox: %v", err)
-						}
+					if tc.check != nil {
+						tc.check(t, sandbox)
 					}
 				})
 			}

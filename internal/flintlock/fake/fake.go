@@ -66,8 +66,12 @@ type Host struct {
 	wg     sync.WaitGroup
 
 	// mu guards everything below it.
-	mu          sync.Mutex
+	mu sync.Mutex
+	// sandboxRoot is where the sandboxes live; tempRoot is set instead of
+	// empty when the Host made it up for itself, which is what Close needs
+	// to know before it removes it.
 	sandboxRoot string
+	tempRoot    string
 	vms         map[string]*microVM
 	addr        string
 	ready       chan struct{}
@@ -127,12 +131,24 @@ func (h *Host) Client() flintlock.PoolHostClient { return h.newClient(h.cfg.Toke
 // pending boot and waits for them. Sandbox directories are left where they
 // are (TD-054). Close is idempotent and is also what Serve does on its way
 // out.
+//
+// A sandbox root the Host made up for itself, because the configuration
+// named none, is removed on the way out when it is empty. That keeps the
+// evidence Sandboxes reads — a root with sandboxes still in it survives,
+// because a leftover sandbox is what the harness is looking for — without
+// leaving an empty directory behind in the temporary area on every run.
 func (h *Host) Close() error {
 	h.mu.Lock()
 	h.closed = true
+	temp := h.tempRoot
 	h.mu.Unlock()
 	h.cancel()
 	h.wg.Wait()
+	if temp != "" {
+		// Remove, not RemoveAll: it fails on a root that still holds a
+		// sandbox, which is exactly when it must not be removed.
+		_ = os.Remove(temp)
+	}
 	return nil
 }
 
@@ -246,6 +262,7 @@ func (h *Host) ensureSandboxRootLocked() (string, error) {
 			return "", fmt.Errorf("creating sandbox root: %w", err)
 		}
 		h.sandboxRoot = dir
+		h.tempRoot = dir
 		return dir, nil
 	}
 	if err := os.MkdirAll(h.sandboxRoot, 0o755); err != nil {

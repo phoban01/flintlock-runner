@@ -139,8 +139,14 @@ func (c *Client) Exec(ctx context.Context) (flintlock.ExecStream, error) {
 	return s, nil
 }
 
-// SSHProxy implements flintlock.HostClient. The fake serves no SSH proxy;
-// it reports the configured flag from ServerInfo and nothing more.
+// SSHProxy implements flintlock.HostClient. The fake serves no SSH proxy:
+// this always fails with flintlock.ErrUnimplemented and Serve registers no
+// MicroVMSSHProxy server.
+//
+// FakeHostConfig.SSHProxyEnabled is therefore a reporting knob and nothing
+// more. It decides what ServerInfo advertises, including an address, so that
+// a test can drive the Runner's capability handling (TD-026); it does not
+// make the service answer, so no SSH scenario can be pointed at it.
 func (c *Client) SSHProxy(ctx context.Context, _ string) (io.ReadWriteCloser, error) {
 	if err := c.admit(ctx); err != nil {
 		return nil, err
