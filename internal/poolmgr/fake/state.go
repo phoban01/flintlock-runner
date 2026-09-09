@@ -51,6 +51,11 @@ type vmState struct {
 	// deleteEvent is the VM_DELETED_* event to emit once the Host confirms
 	// the deletion, or zero for a deletion that has no event of its own.
 	deleteEvent poolmgrv1.EventType
+	// deleteInFlight is set while a DeleteMicroVM call for this MicroVM is
+	// on its Host. It keeps one deletion in flight at a time, so that a Host
+	// that is slow to answer collects neither a second outstanding call nor
+	// a second goroutine per reconcile interval. Guarded by p.mu.
+	deleteInFlight bool
 	// released is set once VM_RELEASED has been emitted for this MicroVM, so
 	// a retried ReleaseVM does not emit it twice.
 	released           bool

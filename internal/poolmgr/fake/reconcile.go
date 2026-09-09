@@ -112,7 +112,7 @@ func (p *PoolManager) tick(ctx context.Context) {
 		}
 	}
 	for _, vm := range p.vms {
-		if vm.phase == poolmgrv1.VMPhase_DELETING && vm.uid != "" {
+		if vm.phase == poolmgrv1.VMPhase_DELETING && vm.uid != "" && !vm.deleteInFlight {
 			pending = append(pending, vm)
 		}
 	}
@@ -139,7 +139,10 @@ func (p *PoolManager) tick(ctx context.Context) {
 	}
 	for _, vm := range pending {
 		p.spawn(func() {
-			if err := p.deleteVM(ctx, vm, vm.deleteEvent); err != nil {
+			// Zero, not vm.deleteEvent: the event the first attempt recorded
+			// is already on the MicroVM, and reading it here would be a read
+			// outside p.mu.
+			if err := p.deleteVM(ctx, vm, 0); err != nil {
 				p.log.Warn("microvm deletion still pending", "uid", vm.uid, "host", vm.host, "error", err)
 			}
 		})
@@ -364,10 +367,19 @@ func (p *PoolManager) applyHookFailurePolicy(ctx context.Context, vm *vmState, h
 	}
 }
 
+// errDeletionInFlight is what deleteVM reports to a caller that asks for a
+// deletion the fake has already put on the Host and is still waiting for.
+// The caller does nothing: the attempt in flight finishes the deletion, or
+// fails and leaves it to the tick.
+var errDeletionInFlight = errors.New("fake poolmgr: deletion already in flight")
+
 // deleteVM marks vm DELETING, deletes it on its Host and, when the Host
 // confirms, finishes the deletion with event as the VM_DELETED_* event to
-// emit (zero for none). On a Host error the MicroVM stays DELETING and the
-// tick retries. Not called with p.mu held.
+// emit (zero to keep the one already recorded). On a Host error the MicroVM
+// stays DELETING and the tick retries. Only one attempt per MicroVM is in
+// flight at a time, so a Host that never answers cannot accumulate calls or
+// goroutines; a caller that arrives while one is in flight gets
+// errDeletionInFlight. Not called with p.mu held.
 func (p *PoolManager) deleteVM(ctx context.Context, vm *vmState, event poolmgrv1.EventType) error {
 	p.mu.Lock()
 	if _, ok := p.vms[vm.id]; !ok {
@@ -378,22 +390,39 @@ func (p *PoolManager) deleteVM(ctx context.Context, vm *vmState, event poolmgrv1
 	if event != 0 {
 		vm.deleteEvent = event
 	}
+	if vm.deleteInFlight {
+		p.mu.Unlock()
+		return fmt.Errorf("delete microvm %s on %s: %w", vm.uid, vm.host, errDeletionInFlight)
+	}
+	vm.deleteInFlight = true
 	host, uid := vm.host, vm.uid
 	p.mu.Unlock()
 
-	if uid != "" {
-		hc, err := p.hostClient(host)
-		if err != nil {
-			return err
-		}
-		if err := hc.DeleteMicroVM(ctx, uid); err != nil && !errors.Is(err, flintlock.ErrNotFound) {
-			return fmt.Errorf("delete microvm %s on %s: %w", uid, host, err)
-		}
-	}
+	err := p.deleteOnHost(ctx, host, uid)
 
 	p.mu.Lock()
 	defer p.mu.Unlock()
+	vm.deleteInFlight = false
+	if err != nil {
+		return err
+	}
 	p.finishDeletionLocked(vm)
+	return nil
+}
+
+// deleteOnHost is the Host half of a deletion. A MicroVM the Host no longer
+// knows about counts as deleted.
+func (p *PoolManager) deleteOnHost(ctx context.Context, host, uid string) error {
+	if uid == "" {
+		return nil
+	}
+	hc, err := p.hostClient(host)
+	if err != nil {
+		return err
+	}
+	if err := hc.DeleteMicroVM(ctx, uid); err != nil && !errors.Is(err, flintlock.ErrNotFound) {
+		return fmt.Errorf("delete microvm %s on %s: %w", uid, host, err)
+	}
 	return nil
 }
 

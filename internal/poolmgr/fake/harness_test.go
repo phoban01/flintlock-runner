@@ -56,6 +56,13 @@ type stubHost struct {
 	createErr   error
 	// deleteErr is returned by DeleteMicroVM while set.
 	deleteErr error
+	// deleteGate, while non-nil, holds every DeleteMicroVM call until it is
+	// closed, so a test can keep a deletion in flight. attempted records the
+	// uid of every call that reached the Host, refused or held or answered,
+	// and every call announces itself on deleteEntered.
+	deleteGate    chan struct{}
+	attempted     []string
+	deleteEntered chan struct{}
 	// execExit is the exit code every hook command gets; execErr fails the
 	// stream instead.
 	execExit int32
@@ -63,7 +70,12 @@ type stubHost struct {
 }
 
 func newStubHost(name string) *stubHost {
-	return &stubHost{name: name, vms: make(map[string]*types.MicroVM), deletions: make(chan string, 64)}
+	return &stubHost{
+		name:          name,
+		vms:           make(map[string]*types.MicroVM),
+		deletions:     make(chan string, 64),
+		deleteEntered: make(chan struct{}, 64),
+	}
 }
 
 func (h *stubHost) Name() string { return h.name }
@@ -132,7 +144,23 @@ func (h *stubHost) CreateMicroVM(_ context.Context, spec *types.MicroVMSpec) (*t
 	return vm, nil
 }
 
-func (h *stubHost) DeleteMicroVM(_ context.Context, uid string) error {
+func (h *stubHost) DeleteMicroVM(ctx context.Context, uid string) error {
+	h.mu.Lock()
+	h.attempted = append(h.attempted, uid)
+	gate := h.deleteGate
+	h.mu.Unlock()
+	select {
+	case h.deleteEntered <- struct{}{}:
+	default:
+	}
+	if gate != nil {
+		select {
+		case <-gate:
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
+
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	if h.deleteErr != nil {
@@ -155,6 +183,20 @@ func (h *stubHost) live() int {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	return len(h.vms)
+}
+
+// deleteAttempts is how many DeleteMicroVM calls for uid reached the Host,
+// including the ones it refused and the ones still held by deleteGate.
+func (h *stubHost) deleteAttempts(uid string) int {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	n := 0
+	for _, got := range h.attempted {
+		if got == uid {
+			n++
+		}
+	}
+	return n
 }
 
 func (h *stubHost) counts() (created, deleted int) {
@@ -214,6 +256,12 @@ type harness struct {
 	events poolmgr.EventStream
 	// seen counts every event type waitEvent has read.
 	seen map[poolmgr.EventType]int
+
+	// cancel ends the fake's context; runDone carries Run's result. stop
+	// uses them, and the cleanup calls stop.
+	cancel   context.CancelFunc
+	runDone  chan error
+	stopOnce sync.Once
 }
 
 // newHarness builds and starts the fake. Zero cfg fields get test defaults:
@@ -259,17 +307,29 @@ func newHarnessWith(t *testing.T, cfg poolmgr.FakeConfig, wrap func(*Hosts) pool
 	}
 	h.events = events
 
-	runDone := make(chan error, 1)
-	go func() { runDone <- h.pm.Run(ctx) }()
+	h.cancel = cancel
+	h.runDone = make(chan error, 1)
+	go func() { h.runDone <- h.pm.Run(ctx) }()
 	t.Cleanup(func() {
-		cancel()
-		if err := <-runDone; err != nil {
-			t.Errorf("Run returned %v", err)
-		}
+		h.stop()
 		_ = events.Close()
 		_ = h.client.Close()
 	})
 	return h
+}
+
+// stop ends the fake and waits for Run to return, which waits in turn for
+// every goroutine the control loop spawned. A test calls it when it needs
+// that barrier before asserting on what the Hosts saw; the cleanup calls it
+// otherwise. It is idempotent.
+func (h *harness) stop() {
+	h.t.Helper()
+	h.stopOnce.Do(func() {
+		h.cancel()
+		if err := <-h.runDone; err != nil {
+			h.t.Errorf("Run returned %v", err)
+		}
+	})
 }
 
 func (h *harness) ref(name string) poolmgr.PoolRef {
@@ -359,6 +419,18 @@ func (h *harness) waitDeletion(host *stubHost, uid string) {
 		case <-h.ctx.Done():
 			h.t.Fatalf("waiting for host %s to delete %s: %v", host.name, uid, h.ctx.Err())
 		}
+	}
+}
+
+// waitDeleteCall blocks until one more DeleteMicroVM call has entered host,
+// whether or not the Host answers it. It is how a test waits for a deletion
+// that deleteGate is holding.
+func (h *harness) waitDeleteCall(host *stubHost) {
+	h.t.Helper()
+	select {
+	case <-host.deleteEntered:
+	case <-h.ctx.Done():
+		h.t.Fatalf("waiting for a delete call on host %s: %v", host.name, h.ctx.Err())
 	}
 }
 
