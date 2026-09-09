@@ -181,7 +181,7 @@ func (s *impl) convert(r *Reservation, h *handle) bool {
 	}
 	delete(s.reservations, r.ID)
 	s.allocations[h.id] = h
-	s.placements[h.alloc.VMUID] = h.alloc.Placement
+	s.placements[h.vmUID] = h.placement
 	return true
 }
 
@@ -196,8 +196,8 @@ func (s *impl) finish(h *handle) bool {
 		return false
 	}
 	delete(s.allocations, h.id)
-	delete(s.placements, h.alloc.VMUID)
-	s.releaseProfileLocked(h.alloc.Profile)
+	delete(s.placements, h.vmUID)
+	s.releaseProfileLocked(h.profile)
 	if len(s.allocations) == 0 && s.drain != nil {
 		close(s.drain)
 		s.drain = nil

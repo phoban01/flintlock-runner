@@ -13,6 +13,15 @@ type handle struct {
 	done chan struct{}
 	once sync.Once
 
+	// The identifiers of an Allocation never change once it exists, so they
+	// are copied out of alloc at newHandle and read without any lock. The
+	// Scheduler's own accounting needs them while it holds s.mu, and reaching
+	// into alloc for them there would be a read of mu-guarded state under the
+	// wrong lock.
+	vmUID     string
+	profile   string
+	placement Placement
+
 	mu    sync.Mutex
 	alloc Allocation
 	err   error
@@ -25,7 +34,14 @@ type handle struct {
 
 // newHandle builds a handle for an Allocation.
 func newHandle(id uint64, alloc Allocation) *handle {
-	return &handle{id: id, done: make(chan struct{}), alloc: alloc}
+	return &handle{
+		id:        id,
+		done:      make(chan struct{}),
+		vmUID:     alloc.VMUID,
+		profile:   alloc.Profile,
+		placement: alloc.Placement,
+		alloc:     alloc,
+	}
 }
 
 // Allocation implements Handle. The value is a copy; the Lease expiry moves
@@ -86,9 +102,6 @@ func (h *handle) leaseIsGone() bool {
 	return h.leaseGone
 }
 
-// placementHost is the Host of the Allocation's Placement.
-func (h *handle) placementHost() string {
-	h.mu.Lock()
-	defer h.mu.Unlock()
-	return h.alloc.Placement.Host
-}
+// placementHost is the Host of the Allocation's Placement. The Placement is
+// fixed at newHandle, so this is safe to call with the Scheduler's lock held.
+func (h *handle) placementHost() string { return h.placement.Host }

@@ -405,12 +405,41 @@ func TestAllocationRecordsEveryIdentifier(t *testing.T) {
 func TestAllocationIsLoggedWithJobProfileHostAndElapsed(t *testing.T) {
 	t.Parallel()
 	ctx := testContext(t)
+
+	// The clock moves twice, once on either side of the claim, so that the
+	// two elapsed times in the line are different non-zero values: "elapsed"
+	// is the requirement's claim-to-Placement interval and cannot be a
+	// constant, an uninitialised field or the total by mistake, and
+	// "elapsed_total" counts the wait on the Pool as well.
+	const beforeClaim = time.Second
+	const duringPlacement = 250 * time.Millisecond
+
 	client := newStubClient()
+	claims := claimsFrom("host-1")
+	e := newEnv(t, envConfig{client: client})
 	client.script(func(c *stubClient) {
-		c.claimFn = claimsFrom("host-1")
+		c.claimFn = func(ctx context.Context, ref poolmgr.PoolRef) (*poolmgr.Claim, error) {
+			e.clk.Advance(beforeClaim)
+			claim, err := claims(ctx, ref)
+			if claim != nil {
+				// No Host on the response, so the Placement is resolved by
+				// the SC-031 fan-out and the clock can move inside it.
+				claim.Host = poolmgr.HostRef{}
+			}
+			return claim, err
+		}
+		c.getPoolFn = func(_ context.Context, ref poolmgr.PoolRef) (*poolmgr.Pool, error) {
+			e.clk.Advance(duringPlacement)
+			return &poolmgr.Pool{Spec: poolmgr.PoolSpec{Ref: ref, FlintlockHosts: []string{"host-1"}}}, nil
+		}
 		c.beatFn = beatsFor(clock.NewFake(testEpoch), time.Hour)
 	})
-	e := newEnv(t, envConfig{client: client})
+	host, err := e.registry.Get("host-1")
+	if err != nil {
+		t.Fatalf("registry.Get: %v", err)
+	}
+	host.(*countingHost).holds("vm-1")
+
 	e.startBare(ctx)
 	e.tracker.setAvailable(e.poolOf("default"), 1)
 
@@ -427,7 +456,8 @@ func TestAllocationIsLoggedWithJobProfileHostAndElapsed(t *testing.T) {
 		{"profile", "default"},
 		{"host", "host-1"},
 		{"vm", "vm-1"},
-		{"elapsed", "0s"},
+		{"elapsed", duringPlacement.String()},
+		{"elapsed_total", (beforeClaim + duringPlacement).String()},
 	} {
 		if attrs[want.key] != want.value {
 			t.Errorf("log attribute %q = %q, want %q (record: %v)", want.key, attrs[want.key], want.value, attrs)
@@ -435,6 +465,9 @@ func TestAllocationIsLoggedWithJobProfileHostAndElapsed(t *testing.T) {
 	}
 	if len(e.metrics.allocations) != 1 {
 		t.Fatalf("allocation durations observed = %d, want 1", len(e.metrics.allocations))
+	}
+	if got := e.metrics.allocations[0]; got != beforeClaim+duringPlacement {
+		t.Fatalf("allocation duration observed = %v, want %v", got, beforeClaim+duringPlacement)
 	}
 }
 
