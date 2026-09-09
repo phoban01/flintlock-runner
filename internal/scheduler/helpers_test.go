@@ -201,12 +201,6 @@ func (h *stubHealth) MarkUnavailable() {
 // contact is the first successful Pool Manager call.
 func (h *stubHealth) contact() { h.once.Do(func() { close(h.contacted) }) }
 
-func (h *stubHealth) setHealthy(v bool) {
-	h.mu.Lock()
-	defer h.mu.Unlock()
-	h.healthy = v
-}
-
 func (h *stubHealth) unavailableCount() int {
 	h.mu.Lock()
 	defer h.mu.Unlock()
@@ -1118,12 +1112,13 @@ func newFakePoolManagerWith(
 	return pm, client
 }
 
-// claimsFrom is a claim function handing out unique lease and MicroVM ids on
-// a named Host.
-func claimsFrom(host string) func(context.Context, poolmgr.PoolRef) (*poolmgr.Claim, error) {
+// claimsFrom is a claim function handing out unique lease and MicroVM ids,
+// naming the given Hosts in turn.
+func claimsFrom(hosts ...string) func(context.Context, poolmgr.PoolRef) (*poolmgr.Claim, error) {
 	var n atomic.Int64
 	return func(context.Context, poolmgr.PoolRef) (*poolmgr.Claim, error) {
 		i := n.Add(1)
+		host := hosts[(int(i)-1)%len(hosts)]
 		return &poolmgr.Claim{
 			LeaseID: fmt.Sprintf("lease-%d", i),
 			VMUID:   fmt.Sprintf("vm-%d", i),

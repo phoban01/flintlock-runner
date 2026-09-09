@@ -58,16 +58,6 @@ func (h *handle) fail(err error) {
 	})
 }
 
-// failed reports whether Done has been closed.
-func (h *handle) failed() bool {
-	select {
-	case <-h.done:
-		return true
-	default:
-		return false
-	}
-}
-
 // setLease records the Lease expiry a heartbeat returned (PL-040).
 func (h *handle) setLease(l Lease) {
 	h.mu.Lock()

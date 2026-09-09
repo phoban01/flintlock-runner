@@ -237,7 +237,7 @@ func TestCancelledJobContextReleasesTheLeaseObtained(t *testing.T) {
 	if !errors.Is(err, context.Canceled) {
 		t.Fatalf("Allocate error = %v, want context.Canceled", err)
 	}
-	if got := waitForRelease(t, ctx, client, 1); got[0] != "lease-cancel" {
+	if got := waitForRelease(t, ctx, client); got != "lease-cancel" {
 		t.Fatalf("released leases = %v, want lease-cancel", got)
 	}
 	if got := e.sched.Snapshot().SlotsInUse; got != 1 {

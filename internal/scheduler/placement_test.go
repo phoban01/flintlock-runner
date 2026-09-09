@@ -296,7 +296,7 @@ func TestUnresolvedPlacementReleasesTheLease(t *testing.T) {
 		t.Fatalf("error = %v, want an AllocationError naming the profile and pool", err)
 	}
 
-	waitForRelease(t, ctx, client, 1)
+	_ = waitForRelease(t, ctx, client)
 	if got := client.releasedLeases(); got[0] != "lease-7" {
 		t.Fatalf("released leases = %v, want lease-7", got)
 	}
@@ -340,24 +340,21 @@ func TestPlacementOnAHostOutsideTheInventoryReleasesTheLease(t *testing.T) {
 		t.Fatalf("error = %v, want an AllocationError naming host-99", err)
 	}
 
-	waitForRelease(t, ctx, client, 1)
+	_ = waitForRelease(t, ctx, client)
 	if got := client.releasedLeases(); got[0] != "lease-3" {
 		t.Fatalf("released leases = %v, want lease-3", got)
 	}
 }
 
-// waitForRelease blocks until the client has seen n release calls and returns
-// the lease ids in the order they were released.
-func waitForRelease(t *testing.T, ctx context.Context, client *stubClient, n int) []string {
+// waitForRelease blocks until the client has made a release call and returns
+// the lease id it named.
+func waitForRelease(t *testing.T, ctx context.Context, client *stubClient) string {
 	t.Helper()
-	out := make([]string, 0, n)
-	for len(out) < n {
-		select {
-		case id := <-client.releasedCh:
-			out = append(out, id)
-		case <-ctx.Done():
-			t.Fatalf("waiting for %d release calls, saw %d", n, len(out))
-		}
+	select {
+	case id := <-client.releasedCh:
+		return id
+	case <-ctx.Done():
+		t.Fatal("waiting for a release call")
+		return ""
 	}
-	return out
 }

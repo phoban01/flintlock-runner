@@ -84,7 +84,7 @@ func TestHeartbeatKeepsTheLeaseAliveWithinHalfTheExpiry(t *testing.T) {
 	}
 
 	// Every heartbeat pushed the expiry out.
-	if got := h.Allocation().Lease.ExpiresAt; !got.After(testEpoch.Add(30*time.Second)) {
+	if got := h.Allocation().Lease.ExpiresAt; !got.After(testEpoch.Add(30 * time.Second)) {
 		t.Fatalf("lease expiry = %v, want it extended past the first one", got)
 	}
 	if h.Err() != nil {

@@ -13,7 +13,6 @@ import (
 	"github.com/phoban01/flintlock-runner/internal/clock"
 	"github.com/phoban01/flintlock-runner/internal/config"
 	"github.com/phoban01/flintlock-runner/internal/flintlock"
-	"github.com/phoban01/flintlock-runner/internal/poolmgr"
 )
 
 // hostHealth is the health of one Host in the Snapshot.
@@ -218,17 +217,10 @@ func TestUnhealthyHostAbortsItsJobsAndReleasesTheirLeases(t *testing.T) {
 
 	failing, healthy := newCountingHost("host-1"), newCountingHost("host-2")
 	client := newStubClient()
-	onHost := map[int64]string{1: "host-1", 2: "host-2"}
-	var next int64
 	client.script(func(c *stubClient) {
-		c.claimFn = func(context.Context, poolmgr.PoolRef) (*poolmgr.Claim, error) {
-			next++
-			return &poolmgr.Claim{
-				LeaseID: fmt.Sprintf("lease-%d", next),
-				VMUID:   fmt.Sprintf("vm-%d", next),
-				Host:    poolmgr.HostRef{Name: onHost[next], Address: onHost[next] + ":9090"},
-			}, nil
-		}
+		// The first Job lands on the Host that is about to fail, the second
+		// on the one that stays healthy.
+		c.claimFn = claimsFrom("host-1", "host-2")
 		c.beatFn = beatsFor(clock.NewFake(testEpoch), time.Hour)
 	})
 	e := newEnv(t, envConfig{
@@ -261,7 +253,7 @@ func TestUnhealthyHostAbortsItsJobsAndReleasesTheirLeases(t *testing.T) {
 	if !contains(doomed.Err().Error(), "host-1") {
 		t.Fatalf("abort error %q does not name the host", doomed.Err())
 	}
-	if got := waitForRelease(t, ctx, client, 1); got[0] != doomed.Allocation().Lease.ID {
+	if got := waitForRelease(t, ctx, client); got != doomed.Allocation().Lease.ID {
 		t.Fatalf("released lease = %v, want the aborted job's %s", got, doomed.Allocation().Lease.ID)
 	}
 

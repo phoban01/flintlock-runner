@@ -432,8 +432,9 @@ func (s *impl) declareAll(ctx context.Context) {
 	}
 }
 
-// declare declares one Pool and reports whether it succeeded.
-func (s *impl) declare(ctx context.Context, p *Profile, inventory []config.HostEntry) bool {
+// declare declares one Pool. A Pool that could not be declared is tracked as
+// undeclared, which is what makes it count as empty until a retry succeeds.
+func (s *impl) declare(ctx context.Context, p *Profile, inventory []config.HostEntry) {
 	hosts := s.deps.HostSelector.Select(p.Profile, inventory)
 	spec, err := s.deps.Specs.Build(p.Profile, poolmgr.SpecInput{
 		RunnerName: s.set.RunnerName,
@@ -444,7 +445,7 @@ func (s *impl) declare(ctx context.Context, p *Profile, inventory []config.HostE
 		s.log.Error("pool spec could not be built from the profile",
 			"profile", p.Name, "pool", p.PoolRef.String(), "error", err)
 		s.deps.Tracker.Track(p.PoolRef, false)
-		return false
+		return
 	}
 	spec.Ref = p.PoolRef
 	pool, err := s.deps.Declarer.Declare(ctx, spec)
@@ -456,11 +457,11 @@ func (s *impl) declare(ctx context.Context, p *Profile, inventory []config.HostE
 		s.log.Error("pool declaration failed, treating the pool as empty until the retry succeeds",
 			"profile", p.Name, "pool", p.PoolRef.String(), "error", err)
 		s.deps.Tracker.Track(p.PoolRef, false)
-		return false
+		return
 	}
 	s.deps.Tracker.Track(p.PoolRef, true)
 	s.compareHosts(p, pool)
-	return true
+
 }
 
 // compareHosts warns about a Pool Host that is not in the Inventory (HO-015).
