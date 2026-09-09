@@ -135,12 +135,25 @@ Stage scripts are the only channel that exists after boot.
 - **EX-051** If the Host that runs the MicroVM becomes unreachable, then the
   Guest Transport SHALL fail the in-flight operation within the configured
   transport deadline.
+- **EX-052** A Profile's root filesystem image SHALL carry a guest agent
+  that emits liveness heartbeats on the exec control channel, because
+  `flintlockd` ends an exec session whose control channel has been idle
+  for longer than its deadline.
 
 The `exec` transport is the default because the exec service is served by
 `flintlockd` over the MicroVM's vsock and needs no guest networking that is
 reachable from the Control Node. On EC2, guest addresses live behind a
 host-local bridge and are not routable in the VPC, so a TCP transport would
 require extra plumbing on every Host.
+
+EX-052 exists because `flintlockd` bounds the reads on an exec session's
+control channel. Where the guest agent emits heartbeats, upstream applies a
+flat idle deadline that those heartbeats keep re-arming, so a Stage that
+produces no output for minutes, a long compile or a quiet test suite, runs
+to completion. Where it does not, upstream falls back to a deadline derived
+from the `timeout_seconds` EX-046 sends, and a quiet Stage can be killed
+before its own timeout. A CI Job is quiet for long stretches by nature, so
+the guest agent is not optional in a Profile's image.
 
 ## Host service environment {#host-service-environment}
 
