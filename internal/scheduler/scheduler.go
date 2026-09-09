@@ -44,6 +44,9 @@ type hostState struct {
 	failures    int
 	lastProbeAt time.Time
 	info        *flintlock.HostInfo
+	// infoLogged is what the Host reported the last time logHostInfo wrote a
+	// line for it, so that an unchanging Host is logged once (HO-011).
+	infoLogged string
 }
 
 //= docs/requirements/03-scheduler.md#capacity
@@ -574,6 +577,14 @@ func (s *impl) throttled(key string) bool {
 	}
 	s.throttle[key] = now
 	return false
+}
+
+// unthrottle forgets a throttle key, so that the next line under it is
+// logged whatever is left of the window.
+func (s *impl) unthrottle(key string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	delete(s.throttle, key)
 }
 
 // nopMetrics is the Metrics sink used when Deps.Metrics is nil.

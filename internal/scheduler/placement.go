@@ -122,18 +122,28 @@ func (s *impl) placementFromLookup(ctx context.Context, p *Profile, claim *poolm
 }
 
 // poolHosts is the Host list the Pool Manager reports for a Pool. When the
-// Pool Manager cannot be asked, the whole Inventory is used instead: it is a
-// superset of the Pool's Hosts, so the fan-out still finds the MicroVM, and
-// failing an otherwise good allocation because GetPool was unavailable would
-// cost the Job a retry.
+// Pool Manager cannot be asked, or answers with no Host at all, the whole
+// Inventory is used instead: it is a superset of the Pool's Hosts, so the
+// fan-out still finds the MicroVM, and failing an otherwise good allocation
+// because GetPool was unavailable would cost the Job a retry. Both fallbacks
+// are logged, because both widen the fan-out beyond the Pool.
 func (s *impl) poolHosts(ctx context.Context, p *Profile) []string {
 	pool, err := s.deps.PoolManager.GetPool(ctx, p.PoolRef)
 	if err == nil && pool != nil && len(pool.Spec.FlintlockHosts) > 0 {
 		return pool.Spec.FlintlockHosts
 	}
-	if err != nil {
+	names := s.deps.Hosts.Names()
+	switch {
+	case err != nil:
 		s.log.Warn("pool host list could not be read, falling back to the whole inventory",
-			"pool", p.PoolRef.String(), "error", err)
+			"pool", p.PoolRef.String(), "hosts", len(names), "error", err)
+	default:
+		// A Pool the Pool Manager holds on no Host at all, which the claim
+		// that got here contradicts. The fan-out widens to every Host in the
+		// Inventory, other architectures and other Pools included, so it is
+		// worth an operator knowing about.
+		s.log.Warn("pool manager reports no hosts for the pool, falling back to the whole inventory",
+			"pool", p.PoolRef.String(), "hosts", len(names))
 	}
-	return s.deps.Hosts.Names()
+	return names
 }

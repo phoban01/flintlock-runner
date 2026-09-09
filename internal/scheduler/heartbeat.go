@@ -163,10 +163,16 @@ func (s *impl) heartbeatInterval(profile string) time.Duration {
 
 // leaseLost ends an Allocation whose Lease is gone, either because the Pool
 // Manager answered NOT_FOUND or because heartbeats kept failing until the
-// expiry passed. The Handle is failed with ErrLeaseLost, which the Executor
-// turns into a `runner_system_failure` by cancelling the Build's context with
-// that cause, and the Slot is returned. No ReleaseVM call is made: the Lease
-// the Runner would name is exactly the one that no longer exists.
+// expiry passed. The Handle is failed with ErrLeaseLost and the Slot is
+// returned. No ReleaseVM call is made: the Lease the Runner would name is
+// exactly the one that no longer exists.
+//
+// SC-061 is split across two packages, and only the abort and the dropped
+// Allocation are this one's. The `runner_system_failure` half is the
+// Executor's: it turns ErrLeaseLost from Handle.Err into a common.BuildError
+// carrying RunnerSystemFailure by cancelling the Build's context with that
+// cause. Until internal/executor lands, nothing produces the failure reason;
+// see Handle in interfaces.go.
 func (s *impl) leaseLost(h *handle, log *slog.Logger, cause error) {
 	h.markLeaseGone()
 	h.fail(cause)

@@ -178,22 +178,35 @@ func (s *impl) recordProbe(name string, info *flintlock.HostInfo, probeErr error
 
 	switch {
 	case becameHealthy:
+		// The next outage is a new one, so it gets its first warning at once
+		// rather than whatever is left of this one's throttle window.
+		s.unthrottle("probefail:" + name)
 		s.log.Info("host is healthy again", "host", name)
 	case becameUnhealthy:
 		s.log.Error("host marked unhealthy after consecutive failed probes",
 			"host", name, "failures", failures, "threshold", threshold, "error", probeErr)
 		s.hostUnhealthy(name)
 	case probeErr != nil:
-		s.log.Warn("host probe failed", "host", name, "failures", failures, "error", probeErr)
+		// A Host that is already unhealthy fails every probe, so this line
+		// repeats at the health interval for as long as the Host is down.
+		// Like every other repeating line in this package it goes through the
+		// throttle; the transition into unhealthy above is not throttled,
+		// because that one happens once.
+		if !s.throttled("probefail:" + name) {
+			s.log.Warn("host probe failed", "host", name, "failures", failures, "error", probeErr)
+		}
 	case info != nil:
 		s.logHostInfo(name, info)
 	}
 }
 
 // logHostInfo logs a Host's flintlock version and guest services the first
-// time they are seen (HO-011, HO-012).
+// time they are seen, and again whenever what the Host reports changes, which
+// is what a Host restarted on a different build looks like (HO-011, HO-012).
+// A Host that keeps reporting the same thing is logged once for the life of
+// the process, not once per probe and not once per throttle window.
 func (s *impl) logHostInfo(name string, info *flintlock.HostInfo) {
-	if s.throttled("hostinfo:" + name) {
+	if s.infoAlreadyLogged(name, info) {
 		return
 	}
 	s.log.Info("host probed",
@@ -208,16 +221,39 @@ func (s *impl) logHostInfo(name string, info *flintlock.HostInfo) {
 	}
 }
 
+// infoAlreadyLogged reports whether this Host has already been logged with
+// exactly what it is reporting now, and records it when it has not.
+func (s *impl) infoAlreadyLogged(name string, info *flintlock.HostInfo) bool {
+	seen := fmt.Sprintf("%t/%s/%t/%t",
+		info.VersionKnown, info.Version, info.Exec.Enabled, info.SSHProxy.Enabled)
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	st, ok := s.hosts[name]
+	if !ok {
+		return false
+	}
+	if st.infoLogged == seen {
+		return true
+	}
+	st.infoLogged = seen
+	return false
+}
+
 //= docs/requirements/03-scheduler.md#host-health
 //# When a Host becomes unhealthy, the Scheduler SHALL abort every
 //# Job whose MicroVM is placed on that Host with the failure reason
 //# `runner_system_failure` and release their Leases.
 
 // hostUnhealthy aborts every Job whose MicroVM is placed on a Host that has
-// just been marked unhealthy. The Handle is failed with ErrHostUnhealthy,
-// which the Executor turns into a `runner_system_failure` by cancelling the
-// Build's context with that cause rather than letting the Job sit until its
-// timeout, and each Lease is handed back to the Pool Manager.
+// just been marked unhealthy. The Handle is failed with ErrHostUnhealthy and
+// each Lease is handed back to the Pool Manager.
+//
+// SC-043 is split across two packages, and only the abort and the release are
+// this one's. The `runner_system_failure` half is the Executor's: it turns
+// ErrHostUnhealthy from Handle.Err into a common.BuildError carrying
+// RunnerSystemFailure by cancelling the Build's context with that cause,
+// rather than letting the Job sit until its timeout. Until internal/executor
+// lands, nothing produces the failure reason; see Handle in interfaces.go.
 func (s *impl) hostUnhealthy(name string) {
 	for _, h := range s.liveHandles() {
 		if h.placementHost() != name {

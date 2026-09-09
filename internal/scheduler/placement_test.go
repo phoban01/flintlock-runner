@@ -60,6 +60,18 @@ func TestPlacementFromTheClaimedHostName(t *testing.T) {
 	}
 }
 
+//= docs/requirements/03-scheduler.md#placement
+//= type=test
+//# When a claim succeeds and the response carries a `host` with a
+//# name, the Scheduler SHALL record that name as the Placement, and if the
+//# `host.address` differs from the Inventory entry of that name, then the
+//# Scheduler SHALL log a warning with both values, count the mismatch and
+//# continue using the Inventory endpoint.
+
+// TestPlacementWarnsOnAddressMismatchAndKeepsTheInventoryEndpoint carries the
+// mismatch half of SC-030. The test above it exercises only the matching path
+// and asserts the mismatch counter is zero, so it would keep passing if the
+// warning, the counter and the choice of endpoint were all dropped.
 func TestPlacementWarnsOnAddressMismatchAndKeepsTheInventoryEndpoint(t *testing.T) {
 	t.Parallel()
 	ctx := testContext(t)
