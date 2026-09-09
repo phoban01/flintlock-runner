@@ -195,3 +195,65 @@ func TestHeartbeatsFailingPastTheExpiryLoseTheLease(t *testing.T) {
 		t.Fatalf("release calls for an expired lease = %d, want 0", got)
 	}
 }
+
+// TestReleaseDuringAnInFlightHeartbeatDoesNotLoseTheLease pins the SC-061
+// boundary: the requirement is about a heartbeat finding the Lease gone under
+// a live Allocation, not about one that races the Runner's own release. The
+// keep-alive call outlives its cancellation on purpose, so Release runs
+// stopHeartbeat and ReleaseVM while a heartbeat is still in flight; the
+// NOT_FOUND that comes back is the Runner's own release, and treating it as a
+// lost Lease would fail the Handle of a Job that finished cleanly.
+func TestReleaseDuringAnInFlightHeartbeatDoesNotLoseTheLease(t *testing.T) {
+	t.Parallel()
+	ctx := testContext(t)
+
+	inFlight := make(chan struct{})
+	proceed := make(chan struct{})
+	client := newStubClient()
+	client.script(func(c *stubClient) {
+		c.claimFn = claimsFrom("host-1")
+		// The first heartbeat blocks until the test has released the Lease,
+		// and then answers as the Pool Manager does for a Lease that has
+		// just been released.
+		c.beatFn = func(context.Context, string) (time.Time, error) {
+			close(inFlight)
+			<-proceed
+			return time.Time{}, poolmgr.ErrNotFound
+		}
+	})
+	e := newEnv(t, envConfig{client: client})
+	e.startBare(ctx)
+	e.tracker.setAvailable(e.poolOf("default"), 1)
+
+	h := e.allocate(ctx, JobInfo{ID: 61}, "default")
+
+	// Fire the keep-alive timer and wait for the call to be in flight.
+	e.advance(ctx, 1, 10*time.Second)
+	select {
+	case <-inFlight:
+	case <-ctx.Done():
+		t.Fatal("the heartbeat call was never made")
+	}
+
+	// The Job finished: Release returns the Slot and hands the Lease back
+	// while that heartbeat is still waiting for an answer.
+	e.sched.Release(h)
+	close(proceed)
+
+	// Let the keep-alive loop and the background release finish.
+	e.sched.closeBackground()
+	e.sched.bgCancel()
+	e.sched.wg.Wait()
+
+	select {
+	case <-h.Done():
+		t.Fatalf("Done was closed with %v after a normal Release", h.Err())
+	default:
+	}
+	if err := h.Err(); err != nil {
+		t.Fatalf("handle error after a normal Release = %v, want nil", err)
+	}
+	if got := len(e.logs.find("lease lost, aborting the job")); got != 0 {
+		t.Fatalf("%d lease-lost error lines after a normal Release, want 0", got)
+	}
+}

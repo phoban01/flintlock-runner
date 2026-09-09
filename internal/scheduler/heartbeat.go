@@ -60,6 +60,13 @@ func (s *impl) heartbeatLoop(ctx context.Context, h *handle) {
 	attempt := 0
 
 	for {
+		// A cancelled loop outranks anything the last round learned. The
+		// Allocation is over, so neither an expiry that has since passed nor
+		// a heartbeat that failed on the way out is a lost Lease.
+		if ctx.Err() != nil {
+			return
+		}
+
 		lease := h.lease()
 		now := s.clk.Now()
 		if !now.Before(lease.ExpiresAt) {
@@ -82,6 +89,15 @@ func (s *impl) heartbeatLoop(ctx context.Context, h *handle) {
 		callCtx, cancel := s.callContext()
 		expiresAt, err := s.deps.PoolManager.Heartbeat(callCtx, lease.ID)
 		cancel()
+
+		// The call deliberately survives cancellation (callContext), so it is
+		// still in flight while Release runs stopHeartbeat and ReleaseVM. If
+		// the release reached the Pool Manager first this heartbeat answers
+		// NOT_FOUND for a Lease that was handed back on purpose; failing the
+		// Handle for it would turn a finished Job into a system failure.
+		if ctx.Err() != nil {
+			return
+		}
 
 		switch {
 		case err == nil:
