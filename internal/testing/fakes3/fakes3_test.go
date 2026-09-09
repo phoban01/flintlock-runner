@@ -209,6 +209,47 @@ func TestStoreRequests(t *testing.T) {
 //# pre-signed style requests the gitlab-runner cache client issues, so that
 //# the `cache:` keyword works end to end against a local endpoint.
 
+// TestPutETagIsTheContentDigest pins the ETag a PUT answers with: the MD5
+// digest of the body in double quotes, as S3 formats it for a single-part
+// upload. The digests are written out rather than recomputed so that the
+// test does not agree with the store by construction, and two bodies of the
+// same length are stored so that anything derived from the length alone
+// fails here.
+func TestPutETagIsTheContentDigest(t *testing.T) {
+	t.Parallel()
+	s := startStore(t)
+	base := s.Endpoint()
+
+	tests := []struct {
+		name string
+		key  string
+		body []byte
+		want string
+	}{
+		{"alpha", "/bucket/a", []byte("alpha"), `"2c1743a391305fbf367df8e4f069f9f9"`},
+		{"gamma is the same length as alpha", "/bucket/b", []byte("gamma"), `"05b048d7242cb7b8b57cfa3b1d65ecea"`},
+		{"alpha again under another key", "/bucket/c", []byte("alpha"), `"2c1743a391305fbf367df8e4f069f9f9"`},
+		{"empty body", "/bucket/d", nil, `"d41d8cd98f00b204e9800998ecf8427e"`},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			res := doRequest(t, http.MethodPut, base+tt.key, nil, tt.body)
+			if res.StatusCode != http.StatusOK {
+				t.Fatalf("PUT = %d, want 200", res.StatusCode)
+			}
+			if got := res.Header.Get("ETag"); got != tt.want {
+				t.Errorf("ETag = %s, want %s", got, tt.want)
+			}
+		})
+	}
+}
+
+//= docs/requirements/10-test-doubles.md#fake-gitlab
+//= type=test
+//# The project SHALL provide a fake object store that accepts the
+//# pre-signed style requests the gitlab-runner cache client issues, so that
+//# the `cache:` keyword works end to end against a local endpoint.
+
 // TestCacheClientRoundTrip drives the store with the gitlab-runner cache
 // client itself: the cache-archiver and cache-extractor commands the
 // generated shell scripts invoke inside the Job, on the pre-signed URLs the

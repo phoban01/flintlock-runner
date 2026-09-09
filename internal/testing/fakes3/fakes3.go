@@ -13,6 +13,8 @@ package fakes3
 import (
 	"bytes"
 	"context"
+	"crypto/md5"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
@@ -173,7 +175,7 @@ func (s *Store) put(w http.ResponseWriter, r *http.Request, key string) {
 	s.mu.Lock()
 	s.objects[key] = &object{data: data, modTime: s.now()}
 	s.mu.Unlock()
-	w.Header().Set("ETag", fmt.Sprintf("%q", fmt.Sprintf("%x", len(data))))
+	w.Header().Set("ETag", etag(data))
 	w.WriteHeader(http.StatusOK)
 }
 
@@ -192,8 +194,19 @@ func (s *Store) get(w http.ResponseWriter, r *http.Request, key string) {
 	http.ServeContent(w, r, "", obj.modTime, bytes.NewReader(obj.data))
 }
 
-// writeS3Error answers with the XML error document S3 uses. A HEAD gets the
-// status alone, as HTTP requires.
+// etag is the entity tag S3 puts on an object stored by a single-part PUT:
+// the MD5 digest of the body as lower-case hex, in double quotes. It has to
+// be the content digest rather than anything derived from the length, or two
+// different objects of the same size would compare equal to a client using
+// it for change detection. MD5 is S3's wire format here, not a security
+// choice.
+func etag(data []byte) string {
+	sum := md5.Sum(data)
+	return fmt.Sprintf("%q", hex.EncodeToString(sum[:]))
+}
+
+// writeS3Error answers with the XML error document S3 uses. The body is
+// written for a HEAD too; net/http discards it, as it does for every HEAD.
 func writeS3Error(w http.ResponseWriter, code int, s3code, message string) {
 	w.Header().Set("Content-Type", "application/xml")
 	w.WriteHeader(code)
