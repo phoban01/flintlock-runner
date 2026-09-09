@@ -300,11 +300,13 @@ func (h *harness) tick() {
 	h.clk.Advance(testInterval)
 }
 
-// advance moves the clock by d and then fires one tick at the new time.
+// advance moves the clock by d, which fires the control loop's timer on the
+// way when one was due, and waits for the loop to arm it again, so that the
+// tick that ran at the new time has finished by the time advance returns.
 func (h *harness) advance(d time.Duration) {
 	h.t.Helper()
 	h.clk.Advance(d)
-	h.tick()
+	h.waitTimers(1)
 }
 
 // waitEvent reads events until one of type typ arrives and returns it.
@@ -332,6 +334,27 @@ func (h *harness) collectUntil(typ poolmgr.EventType) []*poolmgr.Event {
 			return got
 		}
 	}
+}
+
+// eventOfType returns the first event of type typ in events.
+func eventOfType(t *testing.T, events []*poolmgr.Event, typ poolmgr.EventType) *poolmgr.Event {
+	t.Helper()
+	for _, e := range events {
+		if e.Type == typ {
+			return e
+		}
+	}
+	t.Fatalf("no %s event among %s", typ, eventTypes(events))
+	return nil
+}
+
+// eventTypes renders the types of events for a failure message.
+func eventTypes(events []*poolmgr.Event) []string {
+	out := make([]string, 0, len(events))
+	for _, e := range events {
+		out = append(out, e.Type.String())
+	}
+	return out
 }
 
 // count returns how many events of type typ are in events.
