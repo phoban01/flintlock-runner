@@ -306,6 +306,158 @@ func TestRegistryIsSafeForConcurrentUse(t *testing.T) {
 	wg.Wait()
 }
 
+// stubClient is a HostClient that does nothing but remember whether it was
+// closed. The embedded interface is nil: a test that reaches one of the
+// other methods panics rather than passing silently.
+type stubClient struct {
+	flintlock.HostClient
+	name string
+
+	mu     sync.Mutex
+	closed bool
+}
+
+// Name implements flintlock.HostClient.
+func (c *stubClient) Name() string { return c.name }
+
+// Close implements flintlock.HostClient.
+func (c *stubClient) Close() error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.closed = true
+	return nil
+}
+
+// isClosed reports whether the client's connection was released.
+func (c *stubClient) isClosed() bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.closed
+}
+
+// stubDialer hands out stubClients, records them in dial order and fails
+// the Endpoints named in fail. before, when set, runs before each dial, so
+// that a test can make something happen to the Registry in the middle of a
+// reload.
+type stubDialer struct {
+	before func(ep flintlock.Endpoint)
+
+	mu      sync.Mutex
+	fail    map[string]error
+	dialled []*stubClient
+}
+
+// Dial implements flintlock.Dialer.
+func (d *stubDialer) Dial(_ context.Context, ep flintlock.Endpoint) (flintlock.HostClient, error) {
+	if d.before != nil {
+		d.before(ep)
+	}
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if err := d.fail[ep.Name]; err != nil {
+		return nil, err
+	}
+	c := &stubClient{name: ep.Name}
+	d.dialled = append(d.dialled, c)
+	return c, nil
+}
+
+// failOn makes the Endpoint of that name fail to dial.
+func (d *stubDialer) failOn(name string, err error) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if d.fail == nil {
+		d.fail = make(map[string]error)
+	}
+	d.fail[name] = err
+}
+
+// clients returns every client the dialer handed out, in dial order.
+func (d *stubDialer) clients() []*stubClient {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return append([]*stubClient(nil), d.dialled...)
+}
+
+// TestApplyClosesWhatItDialledWhenTheReloadFails covers the two ways a
+// reload can be abandoned after it has already opened connections: a later
+// Endpoint that will not dial, and a Registry closed underneath it. Neither
+// may leave the connections it opened on the way there behind, and neither
+// may touch the clients the Registry is keeping, because the Inventory it
+// had is the one it goes on serving.
+func TestApplyClosesWhatItDialledWhenTheReloadFails(t *testing.T) {
+	t.Parallel()
+	ctx, cancel := context.WithTimeout(context.Background(), testTimeout)
+	defer cancel()
+
+	endpoint := func(name, addr string) flintlock.Endpoint {
+		return flintlock.Endpoint{Name: name, Address: addr, TLS: flintlock.TLSOptions{Insecure: true}}
+	}
+
+	t.Run("a later endpoint that will not dial", func(t *testing.T) {
+		t.Parallel()
+		dialer := &stubDialer{}
+		reg, err := flintlock.NewRegistry(ctx, dialer, []flintlock.Endpoint{endpoint("h1", "a:1")})
+		if err != nil {
+			t.Fatalf("NewRegistry: %v", err)
+		}
+		t.Cleanup(func() { _ = reg.Close() })
+		kept := dialer.clients()[0]
+
+		// h1 moves and h2 arrives, both dialled, and then h3's TLS material
+		// turns out to be unreadable.
+		dialer.failOn("h3", errors.New("reading client certificate"))
+		if err := reg.Apply(ctx, []flintlock.Endpoint{
+			endpoint("h1", "a:2"), endpoint("h2", "b:1"), endpoint("h3", "c:1"),
+		}); err == nil {
+			t.Fatal("Apply accepted an inventory whose last endpoint could not be dialled")
+		}
+
+		opened := dialer.clients()[1:]
+		if len(opened) != 2 {
+			t.Fatalf("the reload dialled %d hosts before the failure, want 2", len(opened))
+		}
+		for _, c := range opened {
+			if !c.isClosed() {
+				t.Errorf("the connection the reload opened to %s was left open after the reload failed", c.Name())
+			}
+		}
+		if kept.isClosed() {
+			t.Error("the failed reload closed the client of a host it was keeping")
+		}
+		if got, want := reg.Names(), []string{"h1"}; !reflect.DeepEqual(got, want) {
+			t.Errorf("after the failed reload the registry holds %v, want the inventory it had, %v", got, want)
+		}
+	})
+
+	t.Run("a registry closed mid-reload", func(t *testing.T) {
+		t.Parallel()
+		dialer := &stubDialer{}
+		reg, err := flintlock.NewRegistry(ctx, dialer, []flintlock.Endpoint{endpoint("h1", "a:1")})
+		if err != nil {
+			t.Fatalf("NewRegistry: %v", err)
+		}
+		// The Runner shuts down while the reload is dialling.
+		dialer.before = func(ep flintlock.Endpoint) {
+			if ep.Name == "h2" {
+				_ = reg.Close()
+			}
+		}
+		if err := reg.Apply(ctx, []flintlock.Endpoint{
+			endpoint("h1", "a:1"), endpoint("h2", "b:1"),
+		}); err == nil {
+			t.Fatal("Apply on a closed registry returned no error")
+		}
+		opened := dialer.clients()[1:]
+		if len(opened) != 1 {
+			t.Fatalf("the reload dialled %d hosts, want 1", len(opened))
+		}
+		if !opened[0].isClosed() {
+			t.Error("the connection the reload opened was left open when the registry closed under it")
+		}
+	})
+}
+
 // TestRegistryRejectsADuplicateInventory checks that two entries claiming
 // the same Host name are refused rather than one silently winning.
 func TestRegistryRejectsADuplicateInventory(t *testing.T) {
