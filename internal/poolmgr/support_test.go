@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -356,6 +358,144 @@ func (g *gateAdmin) awaitCall(t *testing.T, ctx context.Context) {
 	case <-ctx.Done():
 		t.Fatalf("no call reached the pool manager: %v", ctx.Err())
 	}
+}
+
+// recordingTracker is a Tracker that records what it was told, for the
+// units whose contract is what they report to it.
+type recordingTracker struct {
+	mu        sync.Mutex
+	tracked   map[poolmgr.PoolRef]bool
+	dropped   []poolmgr.PoolRef
+	exhausted []poolmgr.PoolRef
+}
+
+func newRecordingTracker() *recordingTracker {
+	return &recordingTracker{tracked: make(map[poolmgr.PoolRef]bool)}
+}
+
+func (r *recordingTracker) Run(ctx context.Context) error { <-ctx.Done(); return nil }
+
+func (r *recordingTracker) Track(pool poolmgr.PoolRef, declared bool) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.tracked[pool] = declared
+}
+
+func (r *recordingTracker) Untrack(pool poolmgr.PoolRef) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	delete(r.tracked, pool)
+	r.dropped = append(r.dropped, pool)
+}
+
+func (r *recordingTracker) Available(pool poolmgr.PoolRef) int32 {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.tracked[pool] {
+		return 1
+	}
+	return 0
+}
+
+func (r *recordingTracker) MarkExhausted(pool poolmgr.PoolRef) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.exhausted = append(r.exhausted, pool)
+}
+
+func (r *recordingTracker) Wait(poolmgr.PoolRef) <-chan struct{} { return make(chan struct{}) }
+
+func (r *recordingTracker) Pools() []poolmgr.PoolAvailability { return nil }
+
+// state reports what the Tracker was last told about a Pool.
+func (r *recordingTracker) state(pool poolmgr.PoolRef) (declared, tracked bool) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	declared, tracked = r.tracked[pool]
+	return declared, tracked
+}
+
+// untracked is every Pool the Tracker was told to forget.
+func (r *recordingTracker) untracked() []poolmgr.PoolRef {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return append([]poolmgr.PoolRef(nil), r.dropped...)
+}
+
+// exhaustedPools is every Pool a claim reported exhausted.
+func (r *recordingTracker) exhaustedPools() []poolmgr.PoolRef {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return append([]poolmgr.PoolRef(nil), r.exhausted...)
+}
+
+// logRecorder captures what a unit logged, for the requirements whose
+// response is a log line.
+type logRecorder struct {
+	t  *testing.T
+	mu sync.Mutex
+	// lines is every record written, as text.
+	lines []string
+}
+
+func newLogRecorder(t *testing.T) *logRecorder { return &logRecorder{t: t} }
+
+// logger is the slog.Logger to hand to the unit under test.
+func (r *logRecorder) logger() *slog.Logger {
+	return slog.New(slog.NewTextHandler(r, &slog.HandlerOptions{Level: slog.LevelDebug}))
+}
+
+// Write implements io.Writer.
+func (r *logRecorder) Write(p []byte) (int, error) {
+	r.mu.Lock()
+	r.lines = append(r.lines, string(p))
+	r.mu.Unlock()
+	r.t.Logf("%s", p)
+	return len(p), nil
+}
+
+// contains reports whether any record contains sub.
+func (r *logRecorder) contains(sub string) bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for _, line := range r.lines {
+		if strings.Contains(line, sub) {
+			return true
+		}
+	}
+	return false
+}
+
+// containsAll reports whether one record contains every one of subs.
+func (r *logRecorder) containsAll(subs ...string) bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for _, line := range r.lines {
+		matched := true
+		for _, sub := range subs {
+			if !strings.Contains(line, sub) {
+				matched = false
+				break
+			}
+		}
+		if matched {
+			return true
+		}
+	}
+	return false
+}
+
+// atLevel reports whether one record at the given level contains every one
+// of subs.
+func (r *logRecorder) atLevel(level string, subs ...string) bool {
+	return r.containsAll(append([]string{"level=" + level}, subs...)...)
+}
+
+// text is everything that was logged, for a failure message.
+func (r *logRecorder) text() string {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return strings.Join(r.lines, "")
 }
 
 // runInBackground runs fn until the test ends, failing the test if it

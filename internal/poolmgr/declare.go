@@ -88,7 +88,6 @@ type Declaration struct {
 	cfg   DeclarationConfig
 	log   *slog.Logger
 	clk   clock.Clock
-	kick  chan struct{}
 	mu    sync.Mutex
 	pools map[PoolRef]*declaredPool
 }
@@ -126,7 +125,6 @@ func NewDeclaration(cfg DeclarationConfig) (*Declaration, error) {
 		cfg:   cfg,
 		log:   cfg.Log.With("component", "poolmgr-declaration"),
 		clk:   cfg.Clock,
-		kick:  make(chan struct{}, 1),
 		pools: make(map[PoolRef]*declaredPool),
 	}, nil
 }
@@ -217,7 +215,6 @@ func (d *Declaration) Run(ctx context.Context) error {
 		select {
 		case <-ctx.Done():
 			return nil
-		case <-d.kick:
 		case <-timer.C():
 		}
 		d.retryFailed(ctx)
@@ -290,7 +287,6 @@ func (d *Declaration) declare(ctx context.Context, ref PoolRef) error {
 		if d.cfg.Tracker != nil {
 			d.cfg.Tracker.Track(ref, false)
 		}
-		d.requestRetry()
 		return err
 	}
 	d.log.Info("pool declared", "pool", ref.String(), "profile", state.profile,
@@ -299,14 +295,6 @@ func (d *Declaration) declare(ctx context.Context, ref PoolRef) error {
 		d.cfg.Tracker.Track(ref, true)
 	}
 	return nil
-}
-
-// requestRetry wakes Run without blocking.
-func (d *Declaration) requestRetry() {
-	select {
-	case d.kick <- struct{}{}:
-	default:
-	}
 }
 
 // refs returns the declared Pools in a stable order.
