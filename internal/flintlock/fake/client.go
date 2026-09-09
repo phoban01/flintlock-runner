@@ -272,7 +272,9 @@ func (s *memExecStream) Send(req *execv1.ExecCommandRequest) error {
 // buffered response always wins, the handler's own result comes next, and
 // the context error is only reached while the handler is still running,
 // which is when the caller or the Host, rather than the command, ended the
-// stream.
+// stream. The ranking cannot rest on the checks alone: finish can land
+// between them and the select below, so the context branch re-checks done
+// and yields to it.
 func (s *memExecStream) Recv() (*execv1.ExecCommandResponse, error) {
 	for {
 		select {
@@ -292,6 +294,16 @@ func (s *memExecStream) Recv() (*execv1.ExecCommandResponse, error) {
 			// Loop so that anything the handler sent before finishing is
 			// delivered ahead of the result.
 		case <-s.ctx.Done():
+			// The ranking above is a hint, not a guarantee: finish closes
+			// done and then cancels, so both can become ready while this
+			// select is being entered, and the poll then picks at random.
+			// A cancellation that merely accompanies the handler's result
+			// must not be reported in its place.
+			select {
+			case <-s.done:
+				continue
+			default:
+			}
 			return nil, statusToSentinel(s.host, status.FromContextError(s.ctx.Err()).Err())
 		}
 	}
