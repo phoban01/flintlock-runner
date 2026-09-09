@@ -128,8 +128,8 @@ func TestPlacementFallsBackToAskingEachPoolHost(t *testing.T) {
 		client:    client,
 		inventory: []config.HostEntry{testHostEntry("host-1"), testHostEntry("host-2")},
 		hosts: map[string]flintlock.HostClient{
-			"host-1": first.Client(),
-			"host-2": second.Client(),
+			"host-1": runnerClient(t, first),
+			"host-2": runnerClient(t, second),
 		},
 	})
 	e.declarer.admin = client

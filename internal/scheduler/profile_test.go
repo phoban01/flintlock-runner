@@ -171,12 +171,12 @@ func TestUnknownImageConsumesNoWarmMicroVM(t *testing.T) {
 
 	host := newFakeHost(t, "host-1")
 	pm, client := newFakePoolManager(t, ctx, map[string]flintlock.PoolHostClient{"host-1": host.Client()})
-	counting := &countingClient{Client: client}
+	counting := newCountingClient(client)
 
 	e := newEnv(t, envConfig{
 		client:   counting,
 		profiles: profileFixtures(),
-		hosts:    map[string]flintlock.HostClient{"host-1": host.Client()},
+		hosts:    map[string]flintlock.HostClient{"host-1": runnerClient(t, host)},
 	})
 	e.declarer.admin = client
 	e.startBare(ctx)

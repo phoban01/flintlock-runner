@@ -583,9 +583,27 @@ func (c *stubClient) script(fn func(*stubClient)) {
 type countingClient struct {
 	poolmgr.Client
 
-	mu       sync.Mutex
-	releases []string
-	claims   int
+	mu         sync.Mutex
+	releases   []string
+	claims     int
+	releasedCh chan string
+}
+
+// newCountingClient wraps a real Pool Manager client with call counters.
+func newCountingClient(c poolmgr.Client) *countingClient {
+	return &countingClient{Client: c, releasedCh: make(chan string, 64)}
+}
+
+// awaitRelease blocks until the client has made a release call.
+func (c *countingClient) awaitRelease(t *testing.T, ctx context.Context) string {
+	t.Helper()
+	select {
+	case id := <-c.releasedCh:
+		return id
+	case <-ctx.Done():
+		t.Fatal("waiting for a release call")
+		return ""
+	}
 }
 
 func (c *countingClient) ClaimVM(ctx context.Context, ref poolmgr.PoolRef) (*poolmgr.Claim, error) {
@@ -598,7 +616,14 @@ func (c *countingClient) ClaimVM(ctx context.Context, ref poolmgr.PoolRef) (*poo
 func (c *countingClient) ReleaseVM(ctx context.Context, leaseID string) error {
 	c.mu.Lock()
 	c.releases = append(c.releases, leaseID)
+	ch := c.releasedCh
 	c.mu.Unlock()
+	if ch != nil {
+		select {
+		case ch <- leaseID:
+		default:
+		}
+	}
 	return c.Client.ReleaseVM(ctx, leaseID)
 }
 
@@ -981,6 +1006,20 @@ func (e *env) advance(ctx context.Context, n int, d time.Duration) {
 	e.clk.Advance(d)
 }
 
+// waitFor blocks until cond is true or the test's context ends. It is how a
+// test waits for a background goroutine to have made a change that has no
+// channel of its own; the timing is bounded by the context, not by a sleep.
+func waitFor(t *testing.T, ctx context.Context, cond func() bool) {
+	t.Helper()
+	for !cond() {
+		select {
+		case <-ctx.Done():
+			t.Fatal("the condition was not met before the test timeout")
+		case <-time.After(time.Millisecond):
+		}
+	}
+}
+
 // ------------------------------------------------------------- fixtures
 
 // testProfile is a Profile with a Pool of that size.
@@ -1023,6 +1062,19 @@ func newFakeHost(t *testing.T, name string) *flfake.Host {
 	})
 	t.Cleanup(func() { _ = h.Close() })
 	return h
+}
+
+// runnerClient is the Runner-side client of a fake Host. It comes from the
+// fake Dialer, which hides the admin methods exactly as the real Runner-side
+// client does, so a test that holds one cannot create or delete a MicroVM
+// (HO-007).
+func runnerClient(t *testing.T, h *flfake.Host) flintlock.HostClient {
+	t.Helper()
+	c, err := flfake.NewDialer(h).Dial(context.Background(), flintlock.Endpoint{Name: h.Config().Name})
+	if err != nil {
+		t.Fatalf("dialling the fake host %q: %v", h.Config().Name, err)
+	}
+	return c
 }
 
 // newFakePoolManager starts a fake Pool Manager over fake Hosts and returns
