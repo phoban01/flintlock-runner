@@ -38,6 +38,12 @@ const (
 	// jitter keeps a fleet of Hosts from reconnecting in lockstep.
 	reconnectMultiplier = 1.6
 	reconnectJitter     = 0.2
+	// minConnectTimeout is how long one connection attempt is given before
+	// gRPC abandons it and backs off, which is a different thing from the
+	// delay between attempts: a Host whose TCP connect hangs is dropped
+	// after this rather than after the backoff ceiling. It is gRPC's own
+	// default, and is deliberately not tied to WithReconnectBackoff.
+	minConnectTimeout = 20 * time.Second
 )
 
 // DialerOption configures a Dialer built by NewDialer.
@@ -145,7 +151,7 @@ func (g *grpcDialer) Dial(_ context.Context, ep Endpoint) (HostClient, error) {
 				Jitter:     reconnectJitter,
 				MaxDelay:   g.backoffMax,
 			},
-			MinConnectTimeout: g.backoffMax,
+			MinConnectTimeout: minConnectTimeout,
 		}),
 		grpc.WithChainUnaryInterceptor(deadlineInterceptor(g.deadline)),
 	}
