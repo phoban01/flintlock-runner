@@ -479,12 +479,11 @@ func TestLoadWarnsForTaggedImages(t *testing.T) {
 //= docs/requirements/07-configuration.md#distributed-cache-section
 //= type=test
 //# If the Distributed cache section is absent, then the Runner
-//# SHALL log at startup that the `cache:` keyword is unavailable and SHALL
-//# fail Jobs that use it with the failure reason `runner_unsupported`.
+//# SHALL log at startup that the `cache:` keyword is unavailable
 
 // TestLoadLogsWhenDistributedCacheAbsent checks the startup line and the
-// CacheConfigured flag the Executor uses to fail `cache:` Jobs with
-// runner_unsupported.
+// CacheConfigured flag the Executor work package (issue #7) will read to fail
+// `cache:` Jobs with runner_unsupported.
 func TestLoadLogsWhenDistributedCacheAbsent(t *testing.T) {
 	t.Parallel()
 	var buf bytes.Buffer

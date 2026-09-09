@@ -251,16 +251,23 @@ func (l *loader) logStartup(cfg *Config) {
 	}
 	//= docs/requirements/07-configuration.md#distributed-cache-section
 	//# If the Distributed cache section is absent, then the Runner
-	//# SHALL log at startup that the `cache:` keyword is unavailable and SHALL
-	//# fail Jobs that use it with the failure reason `runner_unsupported`.
+	//# SHALL log at startup that the `cache:` keyword is unavailable
 	if !cfg.CacheConfigured() {
 		l.logger.Info("no distributed_cache section: the cache: keyword is unavailable and jobs that use it fail with runner_unsupported")
 	}
 }
 
+//= docs/requirements/07-configuration.md#distributed-cache-section
+//= type=todo
+//= tracking-issue=7
+//# SHALL
+//# fail Jobs that use it with the failure reason `runner_unsupported`.
+
 // CacheConfigured reports whether the Distributed cache section is present.
-// The Executor takes it as Deps.CacheConfigured and fails Jobs that use
-// `cache:` with runner_unsupported when it is false (CF-083).
+// It is the input half of CF-083: the Executor work package (issue #7) reads
+// it as Deps.CacheConfigured and is what will fail a Job that uses `cache:`
+// with runner_unsupported. Nothing reads it yet, so the failing half of
+// CF-083 is not implemented on this branch.
 func (c *Config) CacheConfigured() bool { return c.DistributedCache != nil }
 
 // IsNotExist reports whether err is a Load failure caused by a missing
