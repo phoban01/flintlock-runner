@@ -212,7 +212,17 @@ func newMemExecStream(ctx, clientCtx context.Context) *memExecStream {
 }
 
 // finish records the handler's result and ends the stream.
+//
+// A handler error that wraps io.EOF is flattened to its text first. Recv
+// reports io.EOF only for a stream that ended normally, and the handler
+// wraps the io.EOF it gets when a client half-closes before the start
+// message, exactly as flintlockd does; over gRPC that becomes an Unknown
+// status carrying the text, so the in-memory stream must not hand it back
+// as something errors.Is(err, io.EOF) accepts.
 func (s *memExecStream) finish(err error) {
+	if err != nil && errors.Is(err, io.EOF) {
+		err = errors.New(err.Error())
+	}
 	s.mu.Lock()
 	s.err = err
 	s.mu.Unlock()

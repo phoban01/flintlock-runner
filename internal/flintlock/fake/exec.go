@@ -63,12 +63,6 @@ const (
 func (h *Host) execCommand(stream execStream) error {
 	first, err := stream.Recv()
 	if err != nil {
-		// io.EOF is never propagated: to a client it is the marker of a
-		// clean end of stream, and a client that half-closed without ever
-		// starting a command has to see a failure instead.
-		if errors.Is(err, io.EOF) {
-			return errors.New("exec stream closed before the start message")
-		}
 		return fmt.Errorf("receiving exec start message: %w", err)
 	}
 	start := first.GetStart()
