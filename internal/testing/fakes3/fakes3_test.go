@@ -5,6 +5,8 @@ import (
 	"context"
 	"io"
 	"net/http"
+	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"testing"
@@ -13,6 +15,8 @@ import (
 	"gitlab.com/gitlab-org/gitlab-runner/cache"
 	"gitlab.com/gitlab-org/gitlab-runner/cache/cacheconfig"
 	_ "gitlab.com/gitlab-org/gitlab-runner/cache/s3" // registers the s3 adapter the Runner's cache config selects
+	cmdhelpers "gitlab.com/gitlab-org/gitlab-runner/commands/helpers"
+	runnerhelpers "gitlab.com/gitlab-org/gitlab-runner/helpers"
 
 	"github.com/phoban01/flintlock-runner/internal/testing/fakes3"
 )
@@ -197,6 +201,88 @@ func TestStoreRequests(t *testing.T) {
 	if s.Endpoint() != "" {
 		t.Error("Endpoint after Close is not empty")
 	}
+}
+
+//= docs/requirements/10-test-doubles.md#fake-gitlab
+//= type=test
+//# The project SHALL provide a fake object store that accepts the
+//# pre-signed style requests the gitlab-runner cache client issues, so that
+//# the `cache:` keyword works end to end against a local endpoint.
+
+// TestCacheClientRoundTrip drives the store with the gitlab-runner cache
+// client itself: the cache-archiver and cache-extractor commands the
+// generated shell scripts invoke inside the Job, on the pre-signed URLs the
+// real S3 adapter produces. Nothing here builds a request by hand, so the
+// method, the path, the headers and the body are exactly the ones the
+// helper binary sends and the store has to accept for `cache:` to work.
+func TestCacheClientRoundTrip(t *testing.T) {
+	// Not parallel: the helper commands read and write the process working
+	// directory and MakeFatalToPanic replaces the global logrus hooks.
+	defer runnerhelpers.MakeFatalToPanic()()
+
+	work := t.TempDir()
+	t.Chdir(work)
+	if err := os.MkdirAll(filepath.Join(work, "src"), 0o750); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	const content = "cached file\n"
+	if err := os.WriteFile(filepath.Join(work, "src", "hello.txt"), []byte(content), 0o600); err != nil {
+		t.Fatalf("write file: %v", err)
+	}
+
+	s := startStore(t)
+	adapter := cacheAdapter(t, s, "main-cache")
+	ctx := context.Background()
+	upload := adapter.GetUploadURL(ctx)
+
+	archiver := &cmdhelpers.CacheArchiverCommand{
+		File:    filepath.Join(t.TempDir(), "cache.zip"),
+		URL:     upload.URL.String(),
+		Timeout: 1,
+	}
+	archiver.Paths = []string{"src"}
+	for name, values := range upload.Headers {
+		for _, value := range values {
+			archiver.Headers = append(archiver.Headers, name+":"+value)
+		}
+	}
+	archiver.Execute(nil)
+
+	const wantKey = "runner-cache/prefix/runner/abcdefgh/project/42/main-cache"
+	stored, ok := s.Objects()[wantKey]
+	if !ok {
+		t.Fatalf("cache-archiver stored nothing under %q, objects: %v", wantKey, keys(s.Objects()))
+	}
+	if !bytes.HasPrefix(stored, []byte("PK")) {
+		t.Errorf("stored object is not the zip archive the archiver uploaded: %q", firstBytes(stored))
+	}
+
+	// The extractor downloads from the pre-signed GET URL and unpacks into
+	// the working directory, so a clean one proves the round trip.
+	restore := t.TempDir()
+	t.Chdir(restore)
+	extractor := &cmdhelpers.CacheExtractorCommand{
+		File:    filepath.Join(t.TempDir(), "cache.zip"),
+		URL:     adapter.GetDownloadURL(ctx).URL.String(),
+		Timeout: 1,
+	}
+	extractor.Execute(nil)
+
+	got, err := os.ReadFile(filepath.Join(restore, "src", "hello.txt"))
+	if err != nil {
+		t.Fatalf("read extracted file: %v", err)
+	}
+	if string(got) != content {
+		t.Errorf("extracted file = %q, want %q", got, content)
+	}
+}
+
+// firstBytes is a short, printable prefix of b for a failure message.
+func firstBytes(b []byte) []byte {
+	if len(b) > 16 {
+		return b[:16]
+	}
+	return b
 }
 
 func keys(m map[string][]byte) []string {
