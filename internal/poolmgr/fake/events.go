@@ -87,7 +87,8 @@ func (s *subscriber) drop() { s.once.Do(func() { close(s.dropped) }) }
 func (b *eventBus) publish(key poolKey, e *poolmgrv1.Event) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	log := append(b.recent[key], e)
+	log := b.recent[key]
+	log = append(log, e)
 	if len(log) > b.replay {
 		log = log[len(log)-b.replay:]
 	}

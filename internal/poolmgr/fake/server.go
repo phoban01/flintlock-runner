@@ -56,6 +56,9 @@ type poolAdminServer struct {
 	pm *PoolManager
 }
 
+// CreatePool implements poolmgrv1.PoolAdminServer. It is ALREADY_EXISTS for a
+// Pool that is already declared, which is what makes the Declarer update
+// instead (PL-010).
 func (s *poolAdminServer) CreatePool(_ context.Context, req *poolmgrv1.CreatePoolRequest) (*poolmgrv1.Pool, error) {
 	spec, err := specFromProto(req.GetSpec())
 	if err != nil {
@@ -68,6 +71,8 @@ func (s *poolAdminServer) CreatePool(_ context.Context, req *poolmgrv1.CreatePoo
 	return poolToProto(pool), nil
 }
 
+// UpdatePool implements poolmgrv1.PoolAdminServer. Existing MicroVMs are
+// kept; the new spec applies to every later decision.
 func (s *poolAdminServer) UpdatePool(_ context.Context, req *poolmgrv1.UpdatePoolRequest) (*poolmgrv1.Pool, error) {
 	spec, err := specFromProto(req.GetSpec())
 	if err != nil {
@@ -80,6 +85,8 @@ func (s *poolAdminServer) UpdatePool(_ context.Context, req *poolmgrv1.UpdatePoo
 	return poolToProto(pool), nil
 }
 
+// DeletePool implements poolmgrv1.PoolAdminServer. It refuses while a Lease
+// is outstanding and otherwise deletes the Pool's MicroVMs (FL-081).
 func (s *poolAdminServer) DeletePool(ctx context.Context, req *poolmgrv1.DeletePoolRequest) (*emptypb.Empty, error) {
 	if err := s.pm.deletePool(ctx, refFromProto(req.GetRef())); err != nil {
 		return nil, err
@@ -87,6 +94,8 @@ func (s *poolAdminServer) DeletePool(ctx context.Context, req *poolmgrv1.DeleteP
 	return &emptypb.Empty{}, nil
 }
 
+// GetPool implements poolmgrv1.PoolAdminServer. Its status is the Tracker's
+// polling fallback while the Events stream is down (PL-051).
 func (s *poolAdminServer) GetPool(_ context.Context, req *poolmgrv1.GetPoolRequest) (*poolmgrv1.Pool, error) {
 	pool, err := s.pm.getPool(refFromProto(req.GetRef()))
 	if err != nil {
@@ -95,6 +104,8 @@ func (s *poolAdminServer) GetPool(_ context.Context, req *poolmgrv1.GetPoolReque
 	return poolToProto(pool), nil
 }
 
+// ListPools implements poolmgrv1.PoolAdminServer. An empty namespace lists
+// every Pool; it is also the health probe (PL-005).
 func (s *poolAdminServer) ListPools(_ context.Context, req *poolmgrv1.ListPoolsRequest) (*poolmgrv1.ListPoolsResponse, error) {
 	resp := &poolmgrv1.ListPoolsResponse{}
 	for _, pool := range s.pm.listPools(req.GetNamespace()) {
@@ -129,6 +140,8 @@ func (s *leaseServer) ClaimVM(ctx context.Context, req *poolmgrv1.ClaimVMRequest
 	return resp, nil
 }
 
+// Heartbeat implements poolmgrv1.LeaseServer. It returns the Lease's new
+// expiry, and NOT_FOUND once the Lease has expired (SC-061).
 func (s *leaseServer) Heartbeat(_ context.Context, req *poolmgrv1.HeartbeatRequest) (*poolmgrv1.HeartbeatResponse, error) {
 	expires, err := s.pm.heartbeat(req.GetLeaseId())
 	if err != nil {
@@ -137,6 +150,8 @@ func (s *leaseServer) Heartbeat(_ context.Context, req *poolmgrv1.HeartbeatReque
 	return &poolmgrv1.HeartbeatResponse{ExpiresAt: timestamppb.New(expires)}, nil
 }
 
+// ReleaseVM implements poolmgrv1.LeaseServer. The Lease stays until the Host
+// confirms the deletion; until then a retry gets UNAVAILABLE (PL-043).
 func (s *leaseServer) ReleaseVM(ctx context.Context, req *poolmgrv1.ReleaseVMRequest) (*emptypb.Empty, error) {
 	if err := s.pm.releaseVM(ctx, req.GetLeaseId()); err != nil {
 		return nil, err

@@ -2,6 +2,7 @@ package fake
 
 import (
 	"context"
+	"errors"
 	"sync"
 	"testing"
 	"time"
@@ -247,6 +248,71 @@ func TestMicroVMsGoThroughTheHostClient(t *testing.T) {
 		}
 		if len(deleted) != 1 || deleted[0] != claim.VMUID {
 			t.Fatalf("deleted on the Hosts = %v, want [%s]", deleted, claim.VMUID)
+		}
+	})
+
+	t.Run("pool hooks run in the microvm through the host client", func(t *testing.T) {
+		h := newHarness(t, poolmgr.FakeConfig{}, "host-a")
+		spec := h.spec("pool", 1, "host-a")
+		spec.CreateCommands = []string{"/opt/setup.sh"}
+		spec.PreLeaseCommands = []string{"/opt/pre-lease.sh"}
+		// The claim must not start a replacement, whose own create hooks
+		// would run while the assertion below reads the Host's log.
+		spec.Replenishment = poolmgr.ReplenishmentStrategy{
+			Type:    poolmgrv1.ReplenishmentStrategyType_MIN_SIZE_THRESHOLD,
+			MinSize: minSize(1),
+		}
+		h.createPool(spec)
+		claim := h.claim("pool")
+
+		// The guest-agent readiness probe comes first, then the create
+		// commands, then the pre-lease commands of the claim.
+		want := []string{"true", "/opt/setup.sh", "/opt/pre-lease.sh"}
+		got := h.stubs["host-a"].commands()
+		if len(got) != len(want) {
+			t.Fatalf("commands run on the host = %v, want %v", got, want)
+		}
+		for i := range want {
+			if got[i] != want[i] {
+				t.Fatalf("commands run on the host = %v, want %v", got, want)
+			}
+		}
+		h.release(claim.LeaseID)
+	})
+
+	t.Run("a deletion the host refuses is retried", func(t *testing.T) {
+		h := newHarness(t, poolmgr.FakeConfig{}, "host-a")
+		host := h.stubs["host-a"]
+		spec := h.spec("pool", 1, "host-a")
+		spec.Replenishment = poolmgr.ReplenishmentStrategy{
+			Type:    poolmgrv1.ReplenishmentStrategyType_MIN_SIZE_THRESHOLD,
+			MinSize: minSize(1),
+		}
+		h.createPool(spec)
+		claim := h.claim("pool")
+
+		host.set(func(s *stubHost) { s.deleteErr = errors.New("host busy") })
+		err := h.client.ReleaseVM(h.ctx, claim.LeaseID)
+		if !errors.Is(err, poolmgr.ErrUnavailable) {
+			t.Fatalf("ReleaseVM while the host refuses = %v, want ErrUnavailable", err)
+		}
+		if _, deleted := host.counts(); deleted != 0 {
+			t.Fatalf("%d microvms deleted, want none: the host refused", deleted)
+		}
+		if live := host.live(); live != 1 {
+			t.Fatalf("%d microvms on the host, want the one the host would not delete", live)
+		}
+
+		// The control loop retries until the Host takes it.
+		host.set(func(s *stubHost) { s.deleteErr = nil })
+		h.advance(testInterval)
+		deleted := h.waitEvent(poolmgrv1.EventType_VM_DELETED_ON_RELEASE)
+		if deleted.VMUID != claim.VMUID {
+			t.Fatalf("VM_DELETED_ON_RELEASE for %q, want the released microvm %q", deleted.VMUID, claim.VMUID)
+		}
+		assertDeleted(t, host, claim.VMUID)
+		if leases := h.pm.Leases(); len(leases) != 0 {
+			t.Fatalf("leases after the retried deletion = %+v, want none", leases)
 		}
 	})
 

@@ -91,10 +91,14 @@ type basicToken struct {
 	secure bool
 }
 
+// GetRequestMetadata implements credentials.PerRPCCredentials.
 func (b basicToken) GetRequestMetadata(context.Context, ...string) (map[string]string, error) {
 	return map[string]string{"authorization": b.header}, nil
 }
 
+// RequireTransportSecurity implements credentials.PerRPCCredentials. The
+// token is sent over a plaintext connection only when the Endpoint asked for
+// one explicitly (SE-021).
 func (b basicToken) RequireTransportSecurity() bool { return b.secure }
 
 // grpcHost is a flintlock.PoolHostClient over one connection to flintlockd.

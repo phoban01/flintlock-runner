@@ -52,13 +52,19 @@ const (
 	defaultEventReplay       = 100
 )
 
-func main() {
+func main() { os.Exit(command(os.Args[1:], os.Stdout)) }
+
+// command runs the binary under a context cancelled by SIGINT or SIGTERM and
+// returns the exit status, releasing the signal handler before it returns so
+// that main's os.Exit does not skip it.
+func command(args []string, out io.Writer) int {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
-	if err := run(ctx, os.Args[1:], os.Stdout); err != nil {
+	if err := run(ctx, args, out); err != nil {
 		fmt.Fprintf(os.Stderr, "fake-poolmgr: %v\n", err)
-		os.Exit(1)
+		return 1
 	}
+	return 0
 }
 
 //= docs/requirements/10-test-doubles.md#fake-pool-manager
@@ -126,16 +132,16 @@ func parseFlags(args []string, out io.Writer) (*options, error) {
 	fs := flag.NewFlagSet("fake-poolmgr", flag.ContinueOnError)
 	fs.SetOutput(out)
 	var (
-		listen     = fs.String("listen", defaultListen, "gRPC listen address; :0 picks a free port")
-		inventory  = fs.String("inventory", "", "path of a YAML inventory of flintlockd hosts")
-		insecure   = fs.Bool("insecure", false, "dial the -host endpoints in plaintext instead of TLS")
-		namespace  = fs.String("namespace", "", "serve only Pools in this namespace; empty serves every namespace")
-		placement  = fs.String("placement", string(poolmgr.PlacementLeastVMs), "placement strategy: least_vms or round_robin")
-		reconcile  = fs.Duration("reconcile-interval", defaultReconcileInterval, "how often pools are topped up and expired leases swept")
-		ready      = fs.Duration("ready-timeout", defaultReadyTimeout, "how long a microvm has to reach CREATED and run its create hooks")
-		replay     = fs.Int("event-replay", defaultEventReplay, "how many recent events per pool a new subscriber is replayed")
-		omitHost = fs.Bool("omit-host-on-claim", false, "leave the host field of ClaimVMResponse unset, as a pool manager that predates it does")
-		logLevel = fs.String("log-level", "info", "log level: debug, info, warn or error")
+		listen    = fs.String("listen", defaultListen, "gRPC listen address; :0 picks a free port")
+		inventory = fs.String("inventory", "", "path of a YAML inventory of flintlockd hosts")
+		insecure  = fs.Bool("insecure", false, "dial the -host endpoints in plaintext instead of TLS")
+		namespace = fs.String("namespace", "", "serve only Pools in this namespace; empty serves every namespace")
+		placement = fs.String("placement", string(poolmgr.PlacementLeastVMs), "placement strategy: least_vms or round_robin")
+		reconcile = fs.Duration("reconcile-interval", defaultReconcileInterval, "how often pools are topped up and expired leases swept")
+		ready     = fs.Duration("ready-timeout", defaultReadyTimeout, "how long a microvm has to reach CREATED and run its create hooks")
+		replay    = fs.Int("event-replay", defaultEventReplay, "how many recent events per pool a new subscriber is replayed")
+		omitHost  = fs.Bool("omit-host-on-claim", false, "leave the host field of ClaimVMResponse unset, as a pool manager that predates it does")
+		logLevel  = fs.String("log-level", "info", "log level: debug, info, warn or error")
 	)
 	var hostFlags hostList
 	fs.Var(&hostFlags, "host", "a flintlockd host as name=address; repeat for more")

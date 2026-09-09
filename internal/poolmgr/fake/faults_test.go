@@ -233,6 +233,9 @@ func TestFaultDropEventsStream(t *testing.T) {
 		}
 	}
 
+	if open := h.pm.events.open(); open != 2 {
+		t.Fatalf("%d open Events streams, want the harness's and this test's", open)
+	}
 	h.pm.SetFaults(poolmgr.Faults{DropEventsStream: true})
 	for name, stream := range map[string]poolmgr.EventStream{"harness": h.events, "second": second} {
 		_, err := stream.Recv(h.ctx)
