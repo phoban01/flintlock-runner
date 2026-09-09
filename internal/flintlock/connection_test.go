@@ -278,15 +278,21 @@ func startPingRelay(t *testing.T, target string) *pingRelay {
 				_ = client.Close()
 				continue
 			}
+			// Either direction ending closes both connections, so neither
+			// goroutine is left reading from a peer that has gone quiet.
+			closeBoth := func() {
+				_ = client.Close()
+				_ = upstream.Close()
+			}
 			wg.Add(2)
 			go func() {
 				defer wg.Done()
-				defer func() { _ = upstream.Close() }()
+				defer closeBoth()
 				relay.copyCountingPings(client, upstream)
 			}()
 			go func() {
 				defer wg.Done()
-				defer func() { _ = client.Close() }()
+				defer closeBoth()
 				_, _ = io.Copy(client, upstream)
 			}()
 		}

@@ -242,12 +242,14 @@ func (t *execTransport) execError(payload string) error {
 }
 
 // streamFailure wraps a stream failure so that it names the Host and the
-// MicroVM and satisfies errors.Is(err, ErrStreamFailed).
+// MicroVM and satisfies errors.Is(err, ErrStreamFailed). The cause is joined
+// rather than flattened, so that a caller can still tell an unauthenticated
+// Host from an unreachable one.
 func (t *execTransport) streamFailure(what string, cause error) error {
 	if cause == nil {
 		return fmt.Errorf("host %s: microvm %s: %s: %w", t.hostName(), t.vmUID(), what, ErrStreamFailed)
 	}
-	return fmt.Errorf("host %s: microvm %s: %s: %v: %w", t.hostName(), t.vmUID(), what, cause, ErrStreamFailed)
+	return fmt.Errorf("host %s: microvm %s: %s: %w", t.hostName(), t.vmUID(), what, errors.Join(cause, ErrStreamFailed))
 }
 
 //= docs/requirements/02-executor.md#guest-transport

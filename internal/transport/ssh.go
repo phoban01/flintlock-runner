@@ -340,12 +340,14 @@ func (t *sshTransport) loginUser(commandUser string) string {
 }
 
 // streamFailure wraps a failure so that it names the Host and the MicroVM
-// and satisfies errors.Is(err, ErrStreamFailed).
+// and satisfies errors.Is(err, ErrStreamFailed). The cause is joined rather
+// than flattened, so that a Host which refuses the proxy stream is still
+// reported as having refused it.
 func (t *sshTransport) streamFailure(what string, cause error) error {
 	if cause == nil {
 		return fmt.Errorf("host %s: microvm %s: %s: %w", t.target.Host.Name(), t.target.VMUID, what, ErrStreamFailed)
 	}
-	return fmt.Errorf("host %s: microvm %s: %s: %v: %w", t.target.Host.Name(), t.target.VMUID, what, cause, ErrStreamFailed)
+	return fmt.Errorf("host %s: microvm %s: %s: %w", t.target.Host.Name(), t.target.VMUID, what, errors.Join(cause, ErrStreamFailed))
 }
 
 // commandLine renders a Command as the single command string an SSH session
