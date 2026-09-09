@@ -23,6 +23,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/phoban01/flintlock-runner/internal/clock"
 )
 
 const (
@@ -30,6 +32,15 @@ const (
 	// maxObjectBytes bounds a single PUT body.
 	maxObjectBytes = 1 << 30
 )
+
+// Options configure a Store.
+type Options struct {
+	// Clock stamps a stored object with the time it was written, which GET
+	// and HEAD report as Last-Modified. It is the one value a test may want
+	// to control, since the cache extractor compares Last-Modified with the
+	// local archive. Nil means clock.Real.
+	Clock clock.Clock
+}
 
 // object is one stored blob with the time it was written, which GET and
 // HEAD report as Last-Modified since the cache extractor compares it with
@@ -50,7 +61,7 @@ type object struct {
 type Store struct {
 	mu      sync.Mutex
 	objects map[string]*object
-	now     func() time.Time
+	clock   clock.Clock
 
 	listener net.Listener
 	server   *http.Server
@@ -58,7 +69,12 @@ type Store struct {
 }
 
 // New builds an empty Store. Start serves it.
-func New() *Store { return &Store{objects: map[string]*object{}, now: time.Now} }
+func New(opts Options) *Store {
+	if opts.Clock == nil {
+		opts.Clock = clock.Real{}
+	}
+	return &Store{objects: map[string]*object{}, clock: opts.Clock}
+}
 
 // Start begins serving on a free loopback port.
 func (s *Store) Start() error {
@@ -124,7 +140,7 @@ func (s *Store) Addr() string {
 func (s *Store) Put(key string, data []byte) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.objects[strings.TrimPrefix(key, "/")] = &object{data: append([]byte(nil), data...), modTime: s.now()}
+	s.objects[strings.TrimPrefix(key, "/")] = &object{data: append([]byte(nil), data...), modTime: s.clock.Now()}
 }
 
 // Objects returns a copy of every stored object keyed by bucket/key.
@@ -173,7 +189,7 @@ func (s *Store) put(w http.ResponseWriter, r *http.Request, key string) {
 		return
 	}
 	s.mu.Lock()
-	s.objects[key] = &object{data: data, modTime: s.now()}
+	s.objects[key] = &object{data: data, modTime: s.clock.Now()}
 	s.mu.Unlock()
 	w.Header().Set("ETag", etag(data))
 	w.WriteHeader(http.StatusOK)

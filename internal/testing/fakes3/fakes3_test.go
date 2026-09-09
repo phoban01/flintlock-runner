@@ -18,18 +18,32 @@ import (
 	cmdhelpers "gitlab.com/gitlab-org/gitlab-runner/commands/helpers"
 	runnerhelpers "gitlab.com/gitlab-org/gitlab-runner/helpers"
 
+	"github.com/phoban01/flintlock-runner/internal/clock"
 	"github.com/phoban01/flintlock-runner/internal/testing/fakes3"
 )
 
 func startStore(t *testing.T) *fakes3.Store {
 	t.Helper()
-	s := fakes3.New()
+	return startStoreWithOptions(t, fakes3.Options{})
+}
+
+func startStoreWithOptions(t *testing.T, opts fakes3.Options) *fakes3.Store {
+	t.Helper()
+	s := fakes3.New(opts)
 	if err := s.Start(); err != nil {
 		t.Fatalf("Start: %v", err)
 	}
 	t.Cleanup(s.Close)
 	return s
 }
+
+// fixedClock reports one time, so a test can pin what the store stamps an
+// object with and therefore what Last-Modified says.
+type fixedClock struct{ now time.Time }
+
+func (c fixedClock) Now() time.Time                     { return c.now }
+func (fixedClock) After(time.Duration) <-chan time.Time { panic("not used") }
+func (fixedClock) NewTimer(time.Duration) clock.Timer   { panic("not used") }
 
 // cacheAdapter builds the real gitlab-runner S3 cache adapter against the
 // store, the way the Runner does from its [runners.cache] configuration, so
@@ -133,7 +147,7 @@ func TestPresignedCacheRoundTrip(t *testing.T) {
 	}
 	res = doRequest(t, http.MethodGet, adapter.GetDownloadURL(ctx).URL.String(), http.Header{"Range": {"bytes=0-0"}}, nil)
 	body, _ = io.ReadAll(res.Body)
-	if res.StatusCode != http.StatusPartialContent || string(body) != "c" || !strings.HasSuffix(res.Header.Get("Content-Range"), "/"+itoa(len(archive))) {
+	if res.StatusCode != http.StatusPartialContent || string(body) != "c" || !strings.HasSuffix(res.Header.Get("Content-Range"), "/"+strconv.Itoa(len(archive))) {
 		t.Fatalf("Range GET = %d %q Content-Range %q, want 206 with the first byte", res.StatusCode, body, res.Header.Get("Content-Range"))
 	}
 
@@ -188,6 +202,14 @@ func TestStoreRequests(t *testing.T) {
 			if res.StatusCode != tt.wantCode {
 				t.Fatalf("code = %d (%s), want %d", res.StatusCode, body, tt.wantCode)
 			}
+			// An empty wantBody is an assertion in its own right: a HEAD, a
+			// PUT and a DELETE answer with no body at all.
+			if tt.wantBody == "" {
+				if len(body) != 0 {
+					t.Errorf("body = %q, want none", body)
+				}
+				return
+			}
 			if !strings.Contains(string(body), tt.wantBody) {
 				t.Errorf("body = %q, want it to contain %q", body, tt.wantBody)
 			}
@@ -200,6 +222,38 @@ func TestStoreRequests(t *testing.T) {
 	s.Close() // idempotent
 	if s.Endpoint() != "" {
 		t.Error("Endpoint after Close is not empty")
+	}
+}
+
+//= docs/requirements/10-test-doubles.md#fake-gitlab
+//= type=test
+//# The project SHALL provide a fake object store that accepts the
+//# pre-signed style requests the gitlab-runner cache client issues, so that
+//# the `cache:` keyword works end to end against a local endpoint.
+
+// TestLastModifiedComesFromTheClock pins that Options.Clock is what stamps a
+// stored object, so a test can control the Last-Modified the cache extractor
+// compares with its local archive rather than being stuck with wall time.
+func TestLastModifiedComesFromTheClock(t *testing.T) {
+	t.Parallel()
+	stamp := time.Date(2021, time.March, 4, 5, 6, 7, 0, time.UTC)
+	s := startStoreWithOptions(t, fakes3.Options{Clock: fixedClock{now: stamp}})
+	base := s.Endpoint()
+	want := stamp.Format(http.TimeFormat)
+
+	// Both ways in: the direct Put and a PUT over HTTP.
+	s.Put("bucket/seeded", []byte("seeded"))
+	if res := doRequest(t, http.MethodPut, base+"/bucket/uploaded", nil, []byte("uploaded")); res.StatusCode != http.StatusOK {
+		t.Fatalf("PUT = %d, want 200", res.StatusCode)
+	}
+	for _, key := range []string{"/bucket/seeded", "/bucket/uploaded"} {
+		res := doRequest(t, http.MethodHead, base+key, nil, nil)
+		if res.StatusCode != http.StatusOK {
+			t.Fatalf("HEAD %s = %d, want 200", key, res.StatusCode)
+		}
+		if got := res.Header.Get("Last-Modified"); got != want {
+			t.Errorf("HEAD %s Last-Modified = %q, want %q", key, got, want)
+		}
 	}
 }
 
@@ -333,5 +387,3 @@ func keys(m map[string][]byte) []string {
 	}
 	return out
 }
-
-func itoa(n int) string { return strconv.Itoa(n) }
