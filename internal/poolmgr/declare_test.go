@@ -17,15 +17,14 @@ import (
 // Declaration's fake clock.
 const declareRetryInterval = 30 * time.Second
 
-// declaration builds a Declaration over a client, with a fake clock and an
-// optional Tracker.
-func declaration(t *testing.T, c poolmgr.Client, clk clock.Clock, tracker poolmgr.Tracker) *poolmgr.Declaration {
+// declaration builds a Declaration over a client with a fake clock. The
+// tests that watch what the Tracker is told build their own.
+func declaration(t *testing.T, c poolmgr.Client, clk clock.Clock) *poolmgr.Declaration {
 	t.Helper()
 	d, err := poolmgr.NewDeclaration(poolmgr.DeclarationConfig{
 		Builder:       poolmgr.NewSpecBuilder(),
 		Selector:      poolmgr.NewHostSelector(),
 		Declarer:      poolmgr.NewDeclarer(c),
-		Tracker:       tracker,
 		RunnerName:    testRunner,
 		Namespace:     testNamespace,
 		Clock:         clk,
@@ -55,8 +54,8 @@ func TestPoolsAreDeclaredForEveryProfile(t *testing.T) {
 	defer cancel()
 
 	pm := startPoolManager(t, ctx, poolmgr.FakeConfig{}, "arm-fast", "arm-slow")
-	c := pm.client(nil)
-	d := declaration(t, c, clock.NewFake(testEpoch), nil)
+	c := pm.client()
+	d := declaration(t, c, clock.NewFake(testEpoch))
 
 	small := testProfile("small", 1)
 	large := testProfile("large", 2)
@@ -126,7 +125,7 @@ func TestDeclaringAPoolThatExistsWithADifferentSpecUpdatesIt(t *testing.T) {
 	defer cancel()
 
 	pm := startPoolManager(t, ctx, poolmgr.FakeConfig{}, "host-a")
-	c := pm.client(nil)
+	c := pm.client()
 
 	old := specFor(t, testProfile("small", 1), "host-a")
 	pm.fillPool(c, old)
@@ -168,7 +167,7 @@ func TestRemovedProfileLeavesItsPoolAlone(t *testing.T) {
 	defer cancel()
 
 	pm := startPoolManager(t, ctx, poolmgr.FakeConfig{}, "host-a")
-	c := pm.client(nil)
+	c := pm.client()
 	tracker := newRecordingTracker()
 	logs := newLogRecorder(t)
 	d, err := poolmgr.NewDeclaration(poolmgr.DeclarationConfig{
@@ -230,7 +229,7 @@ func TestFailedDeclarationIsLoggedCountedEmptyAndRetried(t *testing.T) {
 	defer cancel()
 
 	pm := startPoolManager(t, ctx, poolmgr.FakeConfig{}, "host-a")
-	c := pm.client(nil)
+	c := pm.client()
 	clk := clock.NewFake(testEpoch)
 	tracker := newRecordingTracker()
 	logs := newLogRecorder(t)
@@ -308,8 +307,8 @@ func TestRedeclareBringsBackADeletedPool(t *testing.T) {
 	defer cancel()
 
 	pm := startPoolManager(t, ctx, poolmgr.FakeConfig{}, "host-a")
-	c := pm.client(nil)
-	d := declaration(t, c, clock.NewFake(testEpoch), nil)
+	c := pm.client()
+	d := declaration(t, c, clock.NewFake(testEpoch))
 
 	if err := d.Sync(ctx, []config.Profile{testProfile("small", 1)}, testInventory()); err != nil {
 		t.Fatalf("Sync: %v", err)
@@ -341,8 +340,8 @@ func TestDeclarationRejectsTwoProfilesSharingAPool(t *testing.T) {
 	defer cancel()
 
 	pm := startPoolManager(t, ctx, poolmgr.FakeConfig{}, "host-a")
-	c := pm.client(nil)
-	d := declaration(t, c, clock.NewFake(testEpoch), nil)
+	c := pm.client()
+	d := declaration(t, c, clock.NewFake(testEpoch))
 
 	first := testProfile("one", 1)
 	second := testProfile("two", 1)

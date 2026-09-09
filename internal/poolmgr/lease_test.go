@@ -18,9 +18,9 @@ import (
 )
 
 // claimOne fills a Pool with one MicroVM and claims it.
-func claimOne(t *testing.T, ctx context.Context, pm *poolManager, c poolmgr.Client, name string) (poolmgr.PoolSpec, *poolmgr.Claim) {
+func claimOne(t *testing.T, ctx context.Context, pm *poolManager, c poolmgr.Client) (poolmgr.PoolSpec, *poolmgr.Claim) {
 	t.Helper()
-	spec := specFor(t, testProfile(name, 1), "host-a")
+	spec := specFor(t, testProfile("small", 1), "host-a")
 	pm.fillPool(c, spec)
 	claim, err := c.ClaimVM(ctx, spec.Ref)
 	if err != nil {
@@ -55,8 +55,8 @@ func TestLeaseIsHeartbeatedAndTheExpiryFollows(t *testing.T) {
 	defer cancel()
 
 	pm := startPoolManager(t, ctx, poolmgr.FakeConfig{}, "host-a")
-	c := pm.client(nil)
-	_, claim := claimOne(t, ctx, pm, c, "small")
+	c := pm.client()
+	_, claim := claimOne(t, ctx, pm, c)
 
 	// The expiry comes from the Pool Manager's clock, so the keeper's fake
 	// clock starts at the wall clock: the two are then comparable and the
@@ -118,8 +118,8 @@ func TestHeartbeatOnALeaseThatIsGoneStops(t *testing.T) {
 	defer cancel()
 
 	pm := startPoolManager(t, ctx, poolmgr.FakeConfig{}, "host-a")
-	c := pm.client(nil)
-	_, claim := claimOne(t, ctx, pm, c, "small")
+	c := pm.client()
+	_, claim := claimOne(t, ctx, pm, c)
 	pm.setFaults(poolmgr.Faults{RefuseHeartbeats: true})
 
 	clk := clock.NewFake(time.Now())
@@ -163,8 +163,8 @@ func TestHeartbeatsThatKeepFailingEndAtTheExpiry(t *testing.T) {
 	defer cancel()
 
 	pm := startPoolManager(t, ctx, poolmgr.FakeConfig{}, "host-a")
-	c := pm.client(nil)
-	_, claim := claimOne(t, ctx, pm, c, "small")
+	c := pm.client()
+	_, claim := claimOne(t, ctx, pm, c)
 
 	start := time.Now()
 	clk := clock.NewFake(start)
@@ -231,9 +231,9 @@ func TestReleaseGivesTheLeaseBackAndDeletesNothing(t *testing.T) {
 	defer cancel()
 
 	pm := startPoolManager(t, ctx, poolmgr.FakeConfig{}, "host-a")
-	c := pm.client(nil)
+	c := pm.client()
 	stream := pm.events(c)
-	spec, claim := claimOne(t, ctx, pm, c, "small")
+	spec, claim := claimOne(t, ctx, pm, c)
 
 	releaser, err := poolmgr.NewReleaser(poolmgr.ReleaserConfig{
 		Lease:      c,
@@ -282,8 +282,8 @@ func TestReleasingALeaseThatIsGoneSucceeds(t *testing.T) {
 	defer cancel()
 
 	pm := startPoolManager(t, ctx, poolmgr.FakeConfig{}, "host-a")
-	c := pm.client(nil)
-	_, claim := claimOne(t, ctx, pm, c, "small")
+	c := pm.client()
+	_, claim := claimOne(t, ctx, pm, c)
 
 	releaser, err := poolmgr.NewReleaser(poolmgr.ReleaserConfig{
 		Lease:      c,
@@ -326,8 +326,8 @@ func TestReleaseRetriesWithBackoffThenLogsTheLeaseID(t *testing.T) {
 		defer cancel()
 
 		pm := startPoolManager(t, ctx, poolmgr.FakeConfig{}, "host-a")
-		c := pm.client(nil)
-		_, claim := claimOne(t, ctx, pm, c, "small")
+		c := pm.client()
+		_, claim := claimOne(t, ctx, pm, c)
 		pm.setFaults(poolmgr.Faults{UnavailableFor: time.Hour})
 
 		clk := clock.NewFake(testEpoch)
@@ -384,8 +384,8 @@ func TestReleaseRetriesWithBackoffThenLogsTheLeaseID(t *testing.T) {
 		defer cancel()
 
 		pm := startPoolManager(t, ctx, poolmgr.FakeConfig{}, "host-a")
-		c := pm.client(nil)
-		_, claim := claimOne(t, ctx, pm, c, "small")
+		c := pm.client()
+		_, claim := claimOne(t, ctx, pm, c)
 		pm.setFaults(poolmgr.Faults{UnavailableFor: time.Hour})
 
 		clk := clock.NewFake(testEpoch)

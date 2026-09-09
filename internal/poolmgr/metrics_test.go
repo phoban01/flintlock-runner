@@ -26,7 +26,7 @@ func TestAvailableCountIsExposedAsAMetric(t *testing.T) {
 	defer cancel()
 
 	pm := startPoolManager(t, ctx, poolmgr.FakeConfig{}, "host-a")
-	c := pm.client(nil)
+	c := pm.client()
 	spec := specFor(t, testProfile("small", 2), "host-a")
 	pm.fillPool(c, spec)
 

@@ -406,7 +406,7 @@ func TestTwoRunnersDoNotCollide(t *testing.T) {
 	defer cancel()
 
 	pm := startPoolManager(t, ctx, poolmgr.FakeConfig{}, "host-a")
-	c := pm.client(nil)
+	c := pm.client()
 
 	// The same Profile, with no namespace of its own, seen by two Runners.
 	profile := config.Profile{

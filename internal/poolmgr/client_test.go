@@ -33,7 +33,7 @@ func TestClientSpeaksEveryService(t *testing.T) {
 	defer cancel()
 
 	pm := startPoolManager(t, ctx, poolmgr.FakeConfig{}, "host-a")
-	c := pm.client(nil)
+	c := pm.client()
 	spec := specFor(t, testProfile("small", 1), "host-a")
 
 	// PoolAdmin: create, get, list, update.
@@ -108,7 +108,7 @@ func TestClaimCarriesEveryFieldOfTheResponse(t *testing.T) {
 
 	pm := startPoolManager(t, ctx, poolmgr.FakeConfig{}, "host-a")
 	pm.decorateHosts()
-	c := pm.client(nil)
+	c := pm.client()
 	spec := specFor(t, testProfile("small", 1), "host-a")
 	pm.fillPool(c, spec)
 
@@ -398,7 +398,7 @@ func TestOneConnectionThatReconnects(t *testing.T) {
 		stopFirst()
 		second := startPoolManager(t, ctx, poolmgr.FakeConfig{}, "host-a")
 		marker := specFor(t, testProfile("second-pool-manager", 0), "host-a")
-		direct := second.client(nil)
+		direct := second.client()
 		if _, err := direct.CreatePool(ctx, marker); err != nil {
 			t.Fatalf("declaring the marker pool: %v", err)
 		}
@@ -419,7 +419,7 @@ func TestErrorsMapToSentinels(t *testing.T) {
 	defer cancel()
 
 	pm := startPoolManager(t, ctx, poolmgr.FakeConfig{Namespace: testNamespace}, "host-a")
-	c := pm.client(nil)
+	c := pm.client()
 	spec := specFor(t, testProfile("small", 1), "host-a")
 
 	tests := []struct {
@@ -489,7 +489,7 @@ func TestUnavailableIsReportedAsUnavailable(t *testing.T) {
 	defer cancel()
 
 	pm := startPoolManager(t, ctx, poolmgr.FakeConfig{}, "host-a")
-	c := pm.client(nil)
+	c := pm.client()
 	pm.setFaults(poolmgr.Faults{UnavailableFor: time.Hour})
 	if _, err := c.ListPools(ctx, testNamespace); !errors.Is(err, poolmgr.ErrUnavailable) {
 		t.Errorf("ListPools during the unavailable period = %v, want ErrUnavailable", err)
@@ -509,7 +509,7 @@ func TestSubscribeReportsADroppedStream(t *testing.T) {
 	defer cancel()
 
 	pm := startPoolManager(t, ctx, poolmgr.FakeConfig{}, "host-a")
-	c := pm.client(nil)
+	c := pm.client()
 	stream, err := c.Subscribe(ctx, poolmgr.EventFilter{})
 	if err != nil {
 		t.Fatalf("Subscribe: %v", err)

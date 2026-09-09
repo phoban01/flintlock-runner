@@ -27,7 +27,7 @@ func TestUnreachableAtStartupIsRetriedWithBackoff(t *testing.T) {
 	defer cancel()
 
 	pm := startPoolManager(t, ctx, poolmgr.FakeConfig{}, "host-a")
-	gate := newGateAdmin(pm.client(nil), true)
+	gate := newGateAdmin(pm.client(), true)
 	clk := clock.NewFake(testEpoch)
 	health := newHealth(t, gate, clk, func(cfg *poolmgr.HealthConfig) {
 		cfg.Backoff = clock.Exponential{Base: time.Second, Max: 4 * time.Second}
@@ -85,7 +85,7 @@ func TestProbesMarkUnhealthyAfterTheThresholdAndHealthyAgain(t *testing.T) {
 
 	const threshold = 3
 	pm := startPoolManager(t, ctx, poolmgr.FakeConfig{}, "host-a")
-	gate := newGateAdmin(pm.client(nil), false)
+	gate := newGateAdmin(pm.client(), false)
 	clk := clock.NewFake(testEpoch)
 	health := newHealth(t, gate, clk, func(cfg *poolmgr.HealthConfig) {
 		cfg.FailureThreshold = threshold
@@ -98,7 +98,7 @@ func TestProbesMarkUnhealthyAfterTheThresholdAndHealthyAgain(t *testing.T) {
 	// probe: the gate counts the calls that reached the Pool Manager.
 	gate.set(true)
 	for probe := 1; probe <= threshold; probe++ {
-		probeOnce(t, ctx, clk, gate, healthInterval)
+		probeOnce(t, ctx, clk, gate)
 		wantHealthy := probe < threshold
 		if got := health.Healthy(); got != wantHealthy {
 			t.Errorf("after %d consecutive failures healthy = %v, want %v", probe, got, wantHealthy)
@@ -107,7 +107,7 @@ func TestProbesMarkUnhealthyAfterTheThresholdAndHealthyAgain(t *testing.T) {
 
 	// One good probe is enough to come back.
 	gate.set(false)
-	probeOnce(t, ctx, clk, gate, healthInterval)
+	probeOnce(t, ctx, clk, gate)
 	if !health.Healthy() {
 		t.Fatal("the pool manager is still unhealthy after a successful probe")
 	}
@@ -115,7 +115,7 @@ func TestProbesMarkUnhealthyAfterTheThresholdAndHealthyAgain(t *testing.T) {
 	// The failure count started again, so two failures are not enough.
 	gate.set(true)
 	for probe := 1; probe < threshold; probe++ {
-		probeOnce(t, ctx, clk, gate, healthInterval)
+		probeOnce(t, ctx, clk, gate)
 		if !health.Healthy() {
 			t.Errorf("the pool manager is unhealthy after %d failures since the last success, want the count to have restarted", probe)
 		}
@@ -124,12 +124,12 @@ func TestProbesMarkUnhealthyAfterTheThresholdAndHealthyAgain(t *testing.T) {
 
 // probeOnce fires the health monitor's timer and waits until the probe it
 // triggered has been answered and the next one armed.
-func probeOnce(t *testing.T, ctx context.Context, clk *clock.Fake, gate *gateAdmin, interval time.Duration) {
+func probeOnce(t *testing.T, ctx context.Context, clk *clock.Fake, gate *gateAdmin) {
 	t.Helper()
 	if err := clk.BlockUntil(ctx, 1); err != nil {
 		t.Fatalf("waiting for the probe timer: %v", err)
 	}
-	clk.Advance(interval)
+	clk.Advance(healthInterval)
 	gate.awaitCall(t, ctx)
 	if err := clk.BlockUntil(ctx, 1); err != nil {
 		t.Fatalf("waiting for the probe to finish: %v", err)
@@ -145,7 +145,7 @@ func TestContactedClosesOnceAndStaysClosed(t *testing.T) {
 	defer cancel()
 
 	pm := startPoolManager(t, ctx, poolmgr.FakeConfig{}, "host-a")
-	gate := newGateAdmin(pm.client(nil), false)
+	gate := newGateAdmin(pm.client(), false)
 	clk := clock.NewFake(testEpoch)
 	health := newHealth(t, gate, clk, func(cfg *poolmgr.HealthConfig) {
 		cfg.FailureThreshold = 1
@@ -155,7 +155,7 @@ func TestContactedClosesOnceAndStaysClosed(t *testing.T) {
 	first := health.Contacted()
 
 	gate.set(true)
-	probeOnce(t, ctx, clk, gate, healthInterval)
+	probeOnce(t, ctx, clk, gate)
 	if health.Healthy() {
 		t.Error("the pool manager is healthy after the threshold was reached")
 	}

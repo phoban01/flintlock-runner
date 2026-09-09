@@ -162,21 +162,17 @@ func (p *poolManager) host(name string) *flintlockfake.Host {
 	return host
 }
 
-// client dials the fake Pool Manager with the package's own client. Extra
-// configuration is applied by fn.
-func (p *poolManager) client(fn func(*poolmgr.ClientConfig)) poolmgr.Client {
+// client dials the fake Pool Manager with the package's own client. The
+// tests that are about the connection itself build their own instead.
+func (p *poolManager) client() poolmgr.Client {
 	p.t.Helper()
-	cfg := poolmgr.ClientConfig{
+	c, err := poolmgr.NewClient(poolmgr.ClientConfig{
 		Endpoint:      p.addr,
 		TLS:           config.ClientTLS{Insecure: true},
 		Deadline:      testTimeout,
 		ReconnectBase: 10 * time.Millisecond,
 		ReconnectMax:  50 * time.Millisecond,
-	}
-	if fn != nil {
-		fn(&cfg)
-	}
-	c, err := poolmgr.NewClient(cfg)
+	})
 	if err != nil {
 		p.t.Fatalf("NewClient: %v", err)
 	}
@@ -281,35 +277,6 @@ func (p *poolManager) setFaults(f poolmgr.Faults) {
 	p.pm.SetFaults(f)
 }
 
-// stubLease is a Lease that answers from a script. It stands in where a
-// test needs an outcome the fake Pool Manager cannot be made to produce on
-// demand, such as a heartbeat that fails without the Lease being gone.
-type stubLease struct {
-	claim     func(context.Context, poolmgr.PoolRef) (*poolmgr.Claim, error)
-	heartbeat func(context.Context, string) (time.Time, error)
-	release   func(context.Context, string) error
-}
-
-func (s *stubLease) ClaimVM(ctx context.Context, ref poolmgr.PoolRef) (*poolmgr.Claim, error) {
-	if s.claim == nil {
-		return nil, errors.New("stub: no ClaimVM")
-	}
-	return s.claim(ctx, ref)
-}
-
-func (s *stubLease) Heartbeat(ctx context.Context, leaseID string) (time.Time, error) {
-	if s.heartbeat == nil {
-		return time.Time{}, errors.New("stub: no Heartbeat")
-	}
-	return s.heartbeat(ctx, leaseID)
-}
-
-func (s *stubLease) ReleaseVM(ctx context.Context, leaseID string) error {
-	if s.release == nil {
-		return errors.New("stub: no ReleaseVM")
-	}
-	return s.release(ctx, leaseID)
-}
 
 // gateAdmin wraps a PoolAdmin and fails every call with ErrUnavailable
 // while it is closed, so that a test can take the Pool Manager away from a

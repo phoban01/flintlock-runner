@@ -41,7 +41,7 @@ func TestAvailabilityFollowsTheEventStream(t *testing.T) {
 	defer cancel()
 
 	pm := startPoolManager(t, ctx, poolmgr.FakeConfig{}, "host-a")
-	c := pm.client(nil)
+	c := pm.client()
 	spec := specFor(t, testProfile("small", 2), "host-a")
 	pm.fillPool(c, spec)
 
@@ -111,7 +111,7 @@ func TestPollingWhileTheEventStreamIsDown(t *testing.T) {
 	defer cancel()
 
 	pm := startPoolManager(t, ctx, poolmgr.FakeConfig{}, "host-a")
-	c := pm.client(nil)
+	c := pm.client()
 	gate := &eventGate{Client: c}
 	gate.block(true)
 
@@ -180,7 +180,7 @@ func TestPoolBelowTargetIsWarned(t *testing.T) {
 	defer cancel()
 
 	pm := startPoolManager(t, ctx, poolmgr.FakeConfig{}, "host-a")
-	c := pm.client(nil)
+	c := pm.client()
 	spec := specFor(t, testProfile("small", 2), "host-a")
 	pm.fillPool(c, spec)
 
@@ -236,7 +236,7 @@ func TestHookFailureIsWarned(t *testing.T) {
 			defer cancel()
 
 			pm := startPoolManager(t, ctx, poolmgr.FakeConfig{}, "host-a")
-			c := pm.client(nil)
+			c := pm.client()
 			spec := specFor(t, testProfile("small", 1), "host-a")
 			spec.HookFailurePolicy = tc.policy
 
@@ -285,7 +285,7 @@ func TestUnhealthyPoolManagerZeroesEveryPool(t *testing.T) {
 
 	const backoff = 30 * time.Second
 	pm := startPoolManager(t, ctx, poolmgr.FakeConfig{}, "host-a")
-	c := pm.client(nil)
+	c := pm.client()
 	first := specFor(t, testProfile("first", 1), "host-a")
 	second := specFor(t, testProfile("second", 2), "host-a")
 	pm.fillPool(c, first)
@@ -339,7 +339,7 @@ func TestUntrackedPoolCountsAsEmpty(t *testing.T) {
 	defer cancel()
 
 	pm := startPoolManager(t, ctx, poolmgr.FakeConfig{}, "host-a")
-	c := pm.client(nil)
+	c := pm.client()
 	spec := specFor(t, testProfile("small", 1), "host-a")
 	pm.fillPool(c, spec)
 

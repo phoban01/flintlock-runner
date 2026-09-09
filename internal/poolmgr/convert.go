@@ -15,7 +15,6 @@ func refToProto(r PoolRef) *poolmgrv1.PoolRef {
 	return &poolmgrv1.PoolRef{Name: r.Name, Namespace: r.Namespace}
 }
 
-
 // specToProto renders a PoolSpec. The template is cloned so that a caller
 // that keeps its spec cannot see the message the client sent mutated, and
 // so that the Pool Manager's reply cannot alias it.

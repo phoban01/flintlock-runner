@@ -47,7 +47,7 @@ func TestClaimTakesFromThePoolOfThatProfile(t *testing.T) {
 	defer cancel()
 
 	pm := startPoolManager(t, ctx, poolmgr.FakeConfig{}, "host-a")
-	c := pm.client(nil)
+	c := pm.client()
 	small := specFor(t, testProfile("small", 1), "host-a")
 	large := specFor(t, testProfile("large", 1), "host-a")
 	pm.fillPool(c, small)
@@ -97,7 +97,7 @@ func TestExhaustedPoolCountsAsEmpty(t *testing.T) {
 	defer cancel()
 
 	pm := startPoolManager(t, ctx, poolmgr.FakeConfig{}, "host-a")
-	c := pm.client(nil)
+	c := pm.client()
 	spec := specFor(t, testProfile("small", 1), "host-a")
 	pm.fillPool(c, spec)
 
@@ -147,8 +147,8 @@ func TestClaimOnAnUnknownPoolRedeclaresIt(t *testing.T) {
 	defer cancel()
 
 	pm := startPoolManager(t, ctx, poolmgr.FakeConfig{}, "arm-fast", "arm-slow")
-	c := pm.client(nil)
-	d := declaration(t, c, clock.NewFake(testEpoch), nil)
+	c := pm.client()
+	d := declaration(t, c, clock.NewFake(testEpoch))
 	profile := testProfile("small", 1)
 	if err := d.Sync(ctx, []config.Profile{profile}, testInventory()); err != nil {
 		t.Fatalf("Sync: %v", err)
@@ -195,7 +195,7 @@ func TestUnavailableClaimMarksThePoolManagerUnhealthy(t *testing.T) {
 
 	const backoff = 45 * time.Second
 	pm := startPoolManager(t, ctx, poolmgr.FakeConfig{}, "host-a")
-	c := pm.client(nil)
+	c := pm.client()
 	clk := clock.NewFake(testEpoch)
 	health := newHealth(t, c, clk, func(cfg *poolmgr.HealthConfig) {
 		cfg.UnhealthyFor = backoff
@@ -235,7 +235,7 @@ func TestClaimWithoutPolicyUnitsStillWorks(t *testing.T) {
 	defer cancel()
 
 	pm := startPoolManager(t, ctx, poolmgr.FakeConfig{}, "host-a")
-	c := pm.client(nil)
+	c := pm.client()
 	logs := newLogRecorder(t)
 	cl := claimer(t, c, nil, nil, nil, logs)
 

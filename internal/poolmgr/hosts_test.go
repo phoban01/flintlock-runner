@@ -106,7 +106,7 @@ func TestSelectedHostsAreWhereTheMicroVMsLand(t *testing.T) {
 	defer cancel()
 
 	pm := startPoolManager(t, ctx, poolmgr.FakeConfig{}, "arm-fast", "arm-slow")
-	c := pm.client(nil)
+	c := pm.client()
 
 	profile := testProfile("nvme-only", 2)
 	profile.HostSelector = map[string]string{"disk": "nvme"}
@@ -118,5 +118,12 @@ func TestSelectedHostsAreWhereTheMicroVMsLand(t *testing.T) {
 		if vm.Host != "arm-fast" {
 			t.Errorf("microvm %s is on %q, want the only selected host arm-fast", vm.UID, vm.Host)
 		}
+	}
+	sandboxes, err := pm.host("arm-slow").Sandboxes()
+	if err != nil {
+		t.Fatalf("listing the sandboxes of the host that was not selected: %v", err)
+	}
+	if len(sandboxes) != 0 {
+		t.Errorf("the host the selector left out holds %v, want nothing", sandboxes)
 	}
 }
