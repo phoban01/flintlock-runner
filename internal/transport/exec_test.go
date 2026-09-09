@@ -20,12 +20,12 @@ import (
 )
 
 // newExecTransport builds the exec Guest Transport for a target.
-func newExecTransport(t *testing.T, target transport.Target) transport.Transport {
+func newExecTransport(t *testing.T, target transport.Target, opts ...transport.FactoryOption) transport.Transport {
 	t.Helper()
 	if target.Kind == "" {
 		target.Kind = transport.KindExec
 	}
-	tr, err := transport.NewFactory().New(context.Background(), target)
+	tr, err := transport.NewFactory(opts...).New(context.Background(), target)
 	if err != nil {
 		t.Fatalf("building the %s transport: %v", target.Kind, err)
 	}
@@ -395,6 +395,10 @@ func TestExitCodeIsTheStatusAndAnErrorWithoutOneFails(t *testing.T) {
 // names the Host, and not hang until the Job's own timeout. The second half
 // of the test is the case that makes this hard: a Stage that is merely
 // quiet, on a Host that is answering, has to be left alone.
+//
+// The deadline is measured on a fake clock the Factory is given, so the
+// test says when it has passed rather than waiting for it: no subtest turns
+// on whether a loaded machine answered inside a few tens of milliseconds.
 func TestRunFailsWhenTheHostStopsAnswering(t *testing.T) {
 	t.Parallel()
 	ctx, cancel := context.WithTimeout(context.Background(), testTimeout)
@@ -402,8 +406,9 @@ func TestRunFailsWhenTheHostStopsAnswering(t *testing.T) {
 
 	t.Run("a host that stops answering", func(t *testing.T) {
 		host, client, uid := newFakeHost(t, flintlock.FakeHostConfig{Name: "h1", ExecEnabled: true})
-		const deadline = 500 * time.Millisecond
-		tr := newExecTransport(t, transport.Target{Host: client, VMUID: uid, Deadline: deadline})
+		const deadline = 2 * time.Second
+		clk := clock.NewFake(time.Now())
+		tr := newExecTransport(t, transport.Target{Host: client, VMUID: uid, Deadline: deadline}, transport.WithClock(clk))
 
 		started := make(chan struct{})
 		var once sync.Once
@@ -435,6 +440,14 @@ func TestRunFailsWhenTheHostStopsAnswering(t *testing.T) {
 		}
 		host.SetFaults(flintlock.HostFaults{Unresponsive: true})
 
+		// Half the deadline passes with nothing received, so the watch asks
+		// the Host about the MicroVM; the Host no longer answers, and the
+		// other half of the deadline is what that call gets.
+		if err := clk.BlockUntil(ctx, 1); err != nil {
+			t.Fatalf("the transport never armed its liveness timer: %v", err)
+		}
+		clk.Advance(deadline / 2)
+
 		select {
 		case r := <-results:
 			if !errors.Is(r.err, transport.ErrStreamFailed) {
@@ -443,6 +456,8 @@ func TestRunFailsWhenTheHostStopsAnswering(t *testing.T) {
 			if !strings.Contains(r.err.Error(), "h1") {
 				t.Errorf("the failure %q does not name the host", r.err)
 			}
+			// The watch bounds this by the probe's own deadline; the command
+			// itself would have run for a minute.
 			if r.took > 10*deadline {
 				t.Errorf("Run took %s to give up on an unreachable host, want about %s", r.took, deadline)
 			}
@@ -458,8 +473,9 @@ func TestRunFailsWhenTheHostStopsAnswering(t *testing.T) {
 		// to come back: an operation whose stdin cannot drain must not hold
 		// the caller for ever.
 		host, client, uid := newFakeHost(t, flintlock.FakeHostConfig{Name: "h1", ExecEnabled: true})
-		const deadline = 500 * time.Millisecond
-		tr := newExecTransport(t, transport.Target{Host: client, VMUID: uid, Deadline: deadline})
+		const deadline = 2 * time.Second
+		clk := clock.NewFake(time.Now())
+		tr := newExecTransport(t, transport.Target{Host: client, VMUID: uid, Deadline: deadline}, transport.WithClock(clk))
 
 		script := strings.NewReader(strings.Repeat("# a line of a very long script\n", 400_000))
 		done := make(chan error, 1)
@@ -471,8 +487,15 @@ func TestRunFailsWhenTheHostStopsAnswering(t *testing.T) {
 			})
 			done <- err
 		}()
+		// Give the stdin goroutine time to fill the stream's buffer and
+		// block in a Send, which is the state this subtest is about; then
+		// stop the Host and let the deadline pass on the transport's clock.
 		time.Sleep(100 * time.Millisecond)
+		if err := clk.BlockUntil(ctx, 1); err != nil {
+			t.Fatalf("the transport never armed its liveness timer: %v", err)
+		}
 		host.SetFaults(flintlock.HostFaults{Unresponsive: true})
+		clk.Advance(deadline / 2)
 
 		select {
 		case err := <-done:
@@ -487,19 +510,50 @@ func TestRunFailsWhenTheHostStopsAnswering(t *testing.T) {
 	t.Run("a quiet stage on a healthy host", func(t *testing.T) {
 		_, client, uid := newFakeHost(t, flintlock.FakeHostConfig{Name: "h1", ExecEnabled: true})
 		// The command says nothing for several deadlines, which is what a
-		// compile or a quiet test suite does.
-		tr := newExecTransport(t, transport.Target{Host: client, VMUID: uid, Deadline: 100 * time.Millisecond})
-		var out bytes.Buffer
-		status, err := tr.Run(ctx, transport.Command{
-			Path:   "sh",
-			Args:   []string{"-c", "sleep 1; echo done"},
-			Stdout: &out,
-		})
-		if err != nil {
-			t.Fatalf("Run killed a quiet stage on a healthy host: %v", err)
+		// compile or a quiet test suite does. Each deadline is passed on the
+		// transport's clock rather than waited for, and the Host has the
+		// other half of a whole second to answer each probe, so a slow
+		// machine cannot make this look like a dead Host.
+		const deadline = 2 * time.Second
+		clk := clock.NewFake(time.Now())
+		tr := newExecTransport(t, transport.Target{Host: client, VMUID: uid, Deadline: deadline}, transport.WithClock(clk))
+
+		type result struct {
+			status int
+			out    string
+			err    error
 		}
-		if status != 0 || !strings.Contains(out.String(), "done") {
-			t.Errorf("Run returned (%d, %q), want (0, done)", status, out.String())
+		results := make(chan result, 1)
+		go func() {
+			var out bytes.Buffer
+			status, err := tr.Run(ctx, transport.Command{
+				Path:   "sh",
+				Args:   []string{"-c", "sleep 2; echo done"},
+				Stdout: &out,
+			})
+			results <- result{status: status, out: out.String(), err: err}
+		}()
+
+		// Three deadlines pass in silence. Each one makes the watch probe
+		// the Host, which answers, so the watch arms again and the Stage is
+		// left alone.
+		for i := 0; i < 3; i++ {
+			if err := clk.BlockUntil(ctx, 1); err != nil {
+				t.Fatalf("the transport did not re-arm its liveness timer after probe %d: %v", i, err)
+			}
+			clk.Advance(deadline / 2)
+		}
+
+		select {
+		case r := <-results:
+			if r.err != nil {
+				t.Fatalf("Run killed a quiet stage on a healthy host: %v", r.err)
+			}
+			if r.status != 0 || !strings.Contains(r.out, "done") {
+				t.Errorf("Run returned (%d, %q), want (0, done)", r.status, r.out)
+			}
+		case <-time.After(testTimeout):
+			t.Fatal("Run never returned for a quiet stage on a healthy host")
 		}
 	})
 }
