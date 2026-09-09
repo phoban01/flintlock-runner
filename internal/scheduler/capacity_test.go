@@ -280,8 +280,10 @@ func TestProfileMaximumConcurrencyIsNotExceeded(t *testing.T) {
 	}()
 
 	// Give the blocked allocation the chance to claim: it must not, so no
-	// second claim reaches the Pool Manager while the limit is reached.
-	if err := e.clk.BlockUntil(ctx, 1); err != nil {
+	// second claim reaches the Pool Manager while the limit is reached. Two
+	// timers are pending by then: the first Allocation's heartbeat and the
+	// second allocation's timeout.
+	if err := e.clk.BlockUntil(ctx, 2); err != nil {
 		t.Fatalf("waiting for the allocation timeout timer: %v", err)
 	}
 	if got := client.claimCount(); got != 1 {
@@ -328,7 +330,9 @@ func TestProfileLimitTimesOut(t *testing.T) {
 		_, err := e.sched.Allocate(ctx, r, JobInfo{ID: 2}, e.profile("default"))
 		errCh <- err
 	}()
-	e.advance(ctx, 1, 2*time.Minute)
+	// The held Allocation's heartbeat timer and the waiting allocation's
+	// timeout are both pending; moving past the timeout ends the wait.
+	e.advance(ctx, 2, 2*time.Minute)
 
 	err := <-errCh
 	if !errors.Is(err, ErrProfileLimit) {

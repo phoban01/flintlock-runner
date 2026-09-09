@@ -935,23 +935,22 @@ func (e *env) run(ctx context.Context) func() {
 	e.cancel = cancel
 	e.runDone = make(chan error, 1)
 	go func() { e.runDone <- e.sched.Run(runCtx) }()
-	stopped := false
+	var once sync.Once
 	stop := func() {
-		if stopped {
-			return
-		}
-		stopped = true
-		cancel()
-		select {
-		case err := <-e.runDone:
-			if err != nil {
-				e.t.Errorf("Run: %v", err)
+		once.Do(func() {
+			cancel()
+			select {
+			case err := <-e.runDone:
+				if err != nil {
+					e.t.Errorf("Run: %v", err)
+				}
+			case <-ctx.Done():
+				e.t.Error("Run did not return")
 			}
-		case <-ctx.Done():
-			e.t.Error("Run did not return")
-		}
+		})
 	}
 	e.t.Cleanup(stop)
+	waitFor(e.t, ctx, func() bool { return e.sched.runningState() == stateRunning })
 	return stop
 }
 
