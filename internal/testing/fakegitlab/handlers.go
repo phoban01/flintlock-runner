@@ -177,13 +177,19 @@ func jobToken(r *http.Request, bodyToken string) string {
 //# requests, as the real API does.
 
 // authJobLocked resolves a job-scoped request the way authenticate_job!
-// does: unknown job is 404, wrong token is 403, and a job that is no longer
-// processing on a runner is 403 with its status in Job-Status so that the
-// Runner aborts. The caller holds s.mu.
+// does. The convention is that every refusal to serve a job-scoped request
+// is 403, never 404: an unknown Job, a token belonging to another Job and a
+// Job that is no longer processing on a runner are answered alike, so that
+// Job ids cannot be enumerated by their status codes, which is why the real
+// API refuses an unresolvable Job with 403 as well. The refusal for a
+// finished Job carries its status in Job-Status so that the Runner aborts.
+// handleDownloadArtifacts follows the same convention for the Job whose
+// artifacts are asked for; 404 there means the Job exists but has no
+// archive. The caller holds s.mu.
 func (s *Server) authJobLocked(id int64, token string) (*jobState, *apiError) {
 	j := s.jobs[id]
 	if j == nil {
-		return nil, &apiError{code: http.StatusNotFound, message: "404 Job Not Found"}
+		return nil, &apiError{code: http.StatusForbidden, message: "403 Forbidden - Job not found"}
 	}
 	if token == "" || token != j.rec.Token {
 		return nil, &apiError{code: http.StatusForbidden, message: "403 Forbidden - Job token invalid"}

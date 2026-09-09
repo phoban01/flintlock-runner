@@ -376,14 +376,14 @@ func TestAuthentication(t *testing.T) {
 		{"update with runner token", http.MethodPut, "/api/v4/jobs/11", http.Header{"Job-Token": {testRunnerToken}}, updateBody(""), http.StatusForbidden, ""},
 		{"update with another job's token", http.MethodPut, "/api/v4/jobs/11", http.Header{"Job-Token": {"glcbt-12"}}, updateBody(""), http.StatusForbidden, ""},
 		{"update without token", http.MethodPut, "/api/v4/jobs/11", nil, updateBody(""), http.StatusForbidden, ""},
-		{"update unknown job", http.MethodPut, "/api/v4/jobs/99", http.Header{"Job-Token": {"glcbt-11"}}, updateBody(""), http.StatusNotFound, ""},
+		{"update unknown job", http.MethodPut, "/api/v4/jobs/99", http.Header{"Job-Token": {"glcbt-11"}}, updateBody(""), http.StatusForbidden, ""},
 		{"update finished job", http.MethodPut, "/api/v4/jobs/12", http.Header{"Job-Token": {"glcbt-12"}}, updateBody(""), http.StatusForbidden, StatusSuccess},
 		{"update with bad state", http.MethodPut, "/api/v4/jobs/11", http.Header{"Job-Token": {"glcbt-11"}}, jsonBody(t, map[string]any{"state": "bogus"}), http.StatusBadRequest, ""},
 		{"update with bad id", http.MethodPut, "/api/v4/jobs/abc", http.Header{"Job-Token": {"glcbt-11"}}, updateBody(""), http.StatusBadRequest, ""},
 		{"trace without token", http.MethodPatch, "/api/v4/jobs/11/trace", http.Header{"Content-Range": {"0-0"}}, []byte("x"), http.StatusForbidden, ""},
 		{"trace with query token", http.MethodPatch, "/api/v4/jobs/11/trace?token=glcbt-11", http.Header{"Content-Range": {"0-0"}}, []byte("x"), http.StatusAccepted, StatusRunning},
 		{"upload without token", http.MethodPost, "/api/v4/jobs/11/artifacts", nil, nil, http.StatusForbidden, ""},
-		{"upload unknown job", http.MethodPost, "/api/v4/jobs/99/artifacts", http.Header{"Job-Token": {"glcbt-11"}}, nil, http.StatusNotFound, ""},
+		{"upload unknown job", http.MethodPost, "/api/v4/jobs/99/artifacts", http.Header{"Job-Token": {"glcbt-11"}}, nil, http.StatusForbidden, ""},
 		{"download without token", http.MethodGet, "/api/v4/jobs/12/artifacts", nil, nil, http.StatusUnauthorized, ""},
 		{"download with unrelated token", http.MethodGet, "/api/v4/jobs/12/artifacts", http.Header{"Job-Token": {"glcbt-11"}}, nil, http.StatusForbidden, ""},
 		{"download with own token", http.MethodGet, "/api/v4/jobs/12/artifacts", http.Header{"Job-Token": {"glcbt-12"}}, nil, http.StatusOK, ""},
@@ -416,6 +416,75 @@ func TestAuthentication(t *testing.T) {
 			}
 		})
 	}
+}
+
+//= docs/requirements/10-test-doubles.md#fake-gitlab
+//= type=test
+//# The fake GitLab SHALL require the runner token and a system
+//# identifier on runner-scoped requests and the Job token on job-scoped
+//# requests, as the real API does.
+
+// TestUnknownJobIsAlwaysForbidden pins the convention documented on
+// authJobLocked: every job-scoped endpoint refuses a Job it cannot resolve
+// with 403, never 404, so that Job ids cannot be enumerated. Download is
+// where the difference is observable, because the network client maps 403 to
+// DownloadForbidden and 404 to DownloadNotFound, so the shared
+// authentication path and the download handler have to agree (TD-033).
+func TestUnknownJobIsAlwaysForbidden(t *testing.T) {
+	t.Parallel()
+	s, url := newHandlerServer(t, Options{})
+	s.Enqueue(&spec.Job{ID: 11, Token: "glcbt-11"})
+	if r := do(t, url, http.MethodPost, "/api/v4/jobs/request", nil, requestJobBody(t, "")); r.code != http.StatusCreated {
+		t.Fatalf("request job = %d, want 201", r.code)
+	}
+
+	body, contentType := uploadBody(t)
+	tests := []struct {
+		name   string
+		method string
+		path   string
+		header http.Header
+		body   []byte
+	}{
+		{"update", http.MethodPut, "/api/v4/jobs/99", http.Header{"Job-Token": {"glcbt-11"}}, jsonBody(t, map[string]any{"state": "running"})},
+		{"trace", http.MethodPatch, "/api/v4/jobs/99/trace", http.Header{"Job-Token": {"glcbt-11"}, "Content-Range": {"0-1"}}, []byte("x")},
+		{"upload", http.MethodPost, "/api/v4/jobs/99/artifacts", http.Header{"Job-Token": {"glcbt-11"}, "Content-Type": {contentType}}, body},
+		{"download", http.MethodGet, "/api/v4/jobs/99/artifacts", http.Header{"Job-Token": {"glcbt-11"}}, nil},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			r := do(t, url, tt.method, tt.path, tt.header, tt.body)
+			if r.code != http.StatusForbidden {
+				t.Errorf("code = %d (%s), want 403", r.code, r.body)
+			}
+		})
+	}
+
+	// A Job that exists but has no archive is the one 404 download answers,
+	// so the two cases are still told apart.
+	s.Enqueue(&spec.Job{ID: 13, Token: "glcbt-13"})
+	if r := do(t, url, http.MethodPost, "/api/v4/jobs/request", nil, requestJobBody(t, "")); r.code != http.StatusCreated {
+		t.Fatalf("request second job = %d, want 201", r.code)
+	}
+	if r := do(t, url, http.MethodGet, "/api/v4/jobs/13/artifacts", http.Header{"Job-Token": {"glcbt-13"}}, nil); r.code != http.StatusNotFound {
+		t.Errorf("download of a known job without an archive = %d (%s), want 404", r.code, r.body)
+	}
+}
+
+// uploadBody is a minimal artifact upload multipart form.
+func uploadBody(t *testing.T) ([]byte, string) {
+	t.Helper()
+	var buf bytes.Buffer
+	mw := multipart.NewWriter(&buf)
+	fw, err := mw.CreateFormFile("file", "artifacts.zip")
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, _ = fw.Write([]byte("zip"))
+	if err := mw.Close(); err != nil {
+		t.Fatal(err)
+	}
+	return buf.Bytes(), mw.FormDataContentType()
 }
 
 //= docs/requirements/10-test-doubles.md#fake-gitlab
