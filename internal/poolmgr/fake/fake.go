@@ -56,6 +56,14 @@ const (
 // been started; a PoolManager runs once.
 var ErrAlreadyRunning = errors.New("fake poolmgr: already running or stopped")
 
+// ErrStopped is what every call on a Client taken after the fake has shut
+// down returns. The fake keeps nothing across a shutdown, so such a client
+// could only fail; it says so plainly rather than pointing at a stopped
+// server. A client taken before the shutdown fails with
+// poolmgr.ErrUnavailable from then on, as a client of a real Pool Manager
+// that went away does.
+var ErrStopped = errors.New("fake poolmgr: shut down")
+
 // PoolManager is the fake Pool Manager. It is constructed from a
 // poolmgr.FakeConfig and served with Serve, or run in process with Run and
 // used through Client. It implements poolmgr.FaultInjector and
@@ -75,8 +83,16 @@ type PoolManager struct {
 	leases           map[string]*leaseState
 	nextVM           int64
 	// runCtx is the control loop's context: nil before Run, done after it.
-	runCtx  context.Context
+	runCtx context.Context
+	// started is set by Run, stopped once it has begun shutting down. Both
+	// are read under mu, so a caller that holds it and finds the fake
+	// running can start background work knowing stop has not begun waiting
+	// for it.
 	started bool
+	stopped bool
+	// serving is claimed by Serve before it listens, so that the single
+	// listener and the single close of ready belong to one call.
+	serving bool
 	wg      sync.WaitGroup
 
 	events *eventBus
@@ -88,8 +104,9 @@ type PoolManager struct {
 	// ready is closed once Serve is listening.
 	ready chan struct{}
 
-	loopOnce sync.Once
-	loop     *loopback
+	// loop is the in-memory server behind Client. New builds it, before any
+	// goroutine can see the PoolManager, and nothing writes it afterwards.
+	loop *loopback
 }
 
 // New builds a fake Pool Manager from cfg. Zero fields take the defaults
@@ -117,7 +134,7 @@ func New(cfg poolmgr.FakeConfig) *PoolManager {
 	if cfg.Hosts == nil {
 		cfg.Hosts = NewHosts()
 	}
-	return &PoolManager{
+	p := &PoolManager{
 		cfg:     cfg,
 		log:     slog.Default().With("component", "fake-poolmgr"),
 		pools:   make(map[poolKey]*poolState),
@@ -128,6 +145,8 @@ func New(cfg poolmgr.FakeConfig) *PoolManager {
 		kick:    make(chan struct{}, 1),
 		ready:   make(chan struct{}),
 	}
+	p.loop = p.newLoopback()
+	return p
 }
 
 // Config returns the configuration the fake was built with, defaults
@@ -140,6 +159,9 @@ func (p *PoolManager) Config() poolmgr.FakeConfig { return p.cfg }
 // from its Host. A PoolManager serves once. cmd/fake-poolmgr is the
 // standalone binary over it (TD-009).
 func (p *PoolManager) Serve(ctx context.Context) error {
+	if err := p.claimServe(); err != nil {
+		return err
+	}
 	lis, err := net.Listen("tcp", p.cfg.Listen)
 	if err != nil {
 		return fmt.Errorf("fake poolmgr: listen %s: %w", p.cfg.Listen, err)
@@ -175,6 +197,20 @@ func (p *PoolManager) Serve(ctx context.Context) error {
 		}
 		return errors.New("fake poolmgr: control loop stopped while serving")
 	}
+}
+
+// claimServe reserves this PoolManager's single serve. Serve calls it
+// before it listens, so that a second Serve returns ErrAlreadyRunning
+// instead of binding a second listener and closing the already closed ready
+// channel, which panicked on the caller's goroutine.
+func (p *PoolManager) claimServe() error {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.serving || p.started || p.stopped {
+		return ErrAlreadyRunning
+	}
+	p.serving = true
+	return nil
 }
 
 // Addr is the bound listen address once Serve is running, empty before.
@@ -228,13 +264,19 @@ func (p *PoolManager) Run(ctx context.Context) error {
 
 // stop ends the control loop: it cancels background work, waits for it,
 // deletes every MicroVM on its Host and shuts the loopback server down.
+// Marking the fake stopped under p.mu before the wait is what keeps a
+// handler from starting work between the cancellation and the wait: a
+// handler that reaches provisionNLocked either holds the lock first, and so
+// adds to the WaitGroup before stop takes it, or finds the fake stopped.
 func (p *PoolManager) stop(cancel context.CancelFunc) {
 	cancel()
+	p.mu.Lock()
+	p.stopped = true
+	p.mu.Unlock()
+
 	p.wg.Wait()
 	p.cleanupAll()
-	if p.loop != nil {
-		p.loop.srv.Stop()
-	}
+	p.loop.srv.Stop()
 }
 
 // cleanupAll deletes every MicroVM the fake still knows about. The fake has
@@ -274,9 +316,19 @@ func (p *PoolManager) kickReconcile() {
 // exposes, so it behaves exactly like the Runner's client against the
 // standalone binary. Each call returns an independent client; Close closes
 // only that client's connection.
+//
+// The lifecycle is the fake's, not the client's. Taken before Run, the
+// client works: every RPC is served, and only provisioning waits for the
+// control loop. Taken after Run has returned, every call fails with
+// ErrStopped rather than pointing at a server that is not there; a client
+// taken earlier and kept fails with poolmgr.ErrUnavailable from the
+// shutdown on.
 func (p *PoolManager) Client() poolmgr.Client {
 	conn, err := p.loopbackConn()
-	if err != nil {
+	switch {
+	case errors.Is(err, ErrStopped):
+		return &Client{err: err}
+	case err != nil:
 		return &Client{err: fmt.Errorf("fake poolmgr: loopback: %w", err)}
 	}
 	return newClient(conn)

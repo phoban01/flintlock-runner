@@ -26,15 +26,26 @@ type loopback struct {
 	srv *grpc.Server
 }
 
-// loopbackConn starts the in-memory server on first use and returns a new
-// connection to it. The server is stopped when Run returns.
+// newLoopback starts the in-memory gRPC server behind Client. New calls it,
+// so that p.loop is written once before any goroutine can see the
+// PoolManager and read without synchronisation afterwards; stop shuts the
+// server down.
+func (p *PoolManager) newLoopback() *loopback {
+	lis := bufconn.Listen(loopbackBuffer)
+	srv := p.newGRPCServer()
+	go func() { _ = srv.Serve(lis) }()
+	return &loopback{lis: lis, srv: srv}
+}
+
+// loopbackConn returns a new connection to the in-memory server, or
+// ErrStopped once the fake has shut down and the server is gone.
 func (p *PoolManager) loopbackConn() (*grpc.ClientConn, error) {
-	p.loopOnce.Do(func() {
-		lis := bufconn.Listen(loopbackBuffer)
-		srv := p.newGRPCServer()
-		go func() { _ = srv.Serve(lis) }()
-		p.loop = &loopback{lis: lis, srv: srv}
-	})
+	p.mu.Lock()
+	stopped := p.stopped
+	p.mu.Unlock()
+	if stopped {
+		return nil, ErrStopped
+	}
 	lis := p.loop.lis
 	return grpc.NewClient("passthrough:///fake-poolmgr",
 		grpc.WithContextDialer(func(ctx context.Context, _ string) (net.Conn, error) { return lis.DialContext(ctx) }),

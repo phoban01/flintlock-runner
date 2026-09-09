@@ -170,8 +170,10 @@ func (p *PoolManager) spawn(fn func()) {
 // provisionNLocked reserves n MicroVMs in ps, placing each (TD-007), and
 // starts their provisioning. Nothing happens before Run or after it stops;
 // the first tick catches up. It emits POOL_REPLENISHING when it starts any.
+// The stopped check is what makes it safe to add to p.wg here: stop sets
+// that field under the same lock before it waits.
 func (p *PoolManager) provisionNLocked(ps *poolState, n int, reason string) {
-	if n <= 0 || p.runCtx == nil || p.runCtx.Err() != nil {
+	if n <= 0 || p.stopped || p.runCtx == nil || p.runCtx.Err() != nil {
 		return
 	}
 	var reserved []*vmState
