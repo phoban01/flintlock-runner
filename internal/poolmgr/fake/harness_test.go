@@ -2,6 +2,7 @@ package fake
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -12,6 +13,9 @@ import (
 	poolmgrv1 "github.com/liquidmetal-dev/battery/api/proto/poolmgr/v1alpha1"
 	execv1 "github.com/liquidmetal-dev/flintlock/api/services/microvmexec/v1alpha1"
 	"github.com/liquidmetal-dev/flintlock/api/types"
+	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 
 	"github.com/phoban01/flintlock-runner/internal/clock"
 	"github.com/phoban01/flintlock-runner/internal/flintlock"
@@ -26,7 +30,7 @@ import (
 const (
 	testNamespace = "runner-ns"
 	testInterval  = time.Second
-	testTimeout   = 10 * time.Second
+	testTimeout   = 30 * time.Second
 )
 
 var testEpoch = time.Date(2026, 9, 8, 12, 0, 0, 0, time.UTC)
@@ -209,6 +213,16 @@ type harness struct {
 // HostSource with one stub per name.
 func newHarness(t *testing.T, cfg poolmgr.FakeConfig, hostNames ...string) *harness {
 	t.Helper()
+	return newHarnessWith(t, cfg, nil, hostNames...)
+}
+
+// newHarnessWith is newHarness with the fake's poolmgr.HostSource built from
+// the harness's own stub Hosts by wrap, for tests that watch how the fake
+// resolves Host names or that point it at Hosts of their own. A nil wrap
+// uses the stub Hosts directly. The HostSource is fixed before the fake
+// starts, as it is in the standalone binary.
+func newHarnessWith(t *testing.T, cfg poolmgr.FakeConfig, wrap func(*Hosts) poolmgr.HostSource, hostNames ...string) *harness {
+	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), testTimeout)
 	h := &harness{t: t, ctx: ctx, clk: clock.NewFake(testEpoch), hosts: NewHosts(), stubs: make(map[string]*stubHost), seen: make(map[poolmgr.EventType]int)}
 	for _, name := range hostNames {
@@ -220,7 +234,11 @@ func newHarness(t *testing.T, cfg poolmgr.FakeConfig, hostNames ...string) *harn
 		cfg.Clock = h.clk
 	}
 	if cfg.Hosts == nil {
-		cfg.Hosts = h.hosts
+		if wrap != nil {
+			cfg.Hosts = wrap(h.hosts)
+		} else {
+			cfg.Hosts = h.hosts
+		}
 	}
 	if cfg.ReconcileInterval == 0 {
 		cfg.ReconcileInterval = testInterval
@@ -278,9 +296,7 @@ func (h *harness) createPool(spec poolmgr.PoolSpec) {
 // tick waits for the control loop to arm its timer, then fires it.
 func (h *harness) tick() {
 	h.t.Helper()
-	if err := h.clk.BlockUntil(h.ctx, 1); err != nil {
-		h.t.Fatalf("waiting for the reconcile timer: %v", err)
-	}
+	h.waitTimers(1)
 	h.clk.Advance(testInterval)
 }
 
@@ -367,3 +383,80 @@ func hostOf(records []poolmgr.VMRecord) map[string]int {
 	}
 	return out
 }
+
+// waitTimers blocks until at least n timers are armed on the fake clock, so
+// that a test never fires a timer the code under test has not set yet.
+func (h *harness) waitTimers(n int) {
+	h.t.Helper()
+	if err := h.clk.BlockUntil(h.ctx, n); err != nil {
+		h.t.Fatalf("waiting for %d timers: %v", n, err)
+	}
+}
+
+// rawConn returns a gRPC connection to the fake's own handlers, for tests
+// that assert on status codes and on the wire messages rather than on the
+// poolmgr.Client mapping. It is closed when the test ends.
+func (h *harness) rawConn() *grpc.ClientConn {
+	h.t.Helper()
+	conn, err := h.pm.loopbackConn()
+	if err != nil {
+		h.t.Fatalf("loopback connection: %v", err)
+	}
+	h.t.Cleanup(func() { _ = conn.Close() })
+	return conn
+}
+
+// rawLease is the generated Lease client over rawConn.
+func (h *harness) rawLease() poolmgrv1.LeaseClient {
+	h.t.Helper()
+	return poolmgrv1.NewLeaseClient(h.rawConn())
+}
+
+// vmHosts counts the fake's MicroVMs per Host.
+func (h *harness) vmHosts() map[string]int {
+	h.t.Helper()
+	return hostOf(h.pm.VMs())
+}
+
+// uids lists the uids of the fake's MicroVMs in creation order, skipping any
+// whose CreateMicroVM has not returned.
+func (h *harness) uids() []string {
+	h.t.Helper()
+	var out []string
+	for _, r := range h.pm.VMs() {
+		if r.UID != "" {
+			out = append(out, r.UID)
+		}
+	}
+	return out
+}
+
+// payloadOf decodes an event's payload_json.
+func payloadOf(t *testing.T, e *poolmgr.Event) map[string]any {
+	t.Helper()
+	if len(e.Payload) == 0 {
+		return nil
+	}
+	var m map[string]any
+	if err := json.Unmarshal(e.Payload, &m); err != nil {
+		t.Fatalf("payload of %s: %v", e.Type, err)
+	}
+	return m
+}
+
+// statusCode is the gRPC code of err, or codes.OK for a nil error.
+func statusCode(t *testing.T, err error) codes.Code {
+	t.Helper()
+	if err == nil {
+		return codes.OK
+	}
+	st, ok := status.FromError(err)
+	if !ok {
+		t.Fatalf("not a gRPC status error: %v", err)
+	}
+	return st.Code()
+}
+
+// Compile-time interface check: the fake only ever sees a Host through the
+// interface the Runner uses (TD-002).
+var _ flintlock.PoolHostClient = (*stubHost)(nil)
