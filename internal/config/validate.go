@@ -244,6 +244,12 @@ func (v *validator) profiles(c *Config) {
 			defaults++
 		}
 		v.poolSettings(f+".pool", &p.Pool)
+		//= docs/requirements/07-configuration.md#profiles-section
+		//# If two Profiles resolve to the same Pool name and namespace,
+		//# then the Runner SHALL reject the configuration.
+		//
+		// The key is the resolved pair, so a collision reached through the
+		// defaults of CF-028 is caught as well as an explicit one.
 		key := p.Pool.Namespace + "/" + p.Pool.Name
 		if j, dup := pools[key]; dup {
 			v.errorf(f+".pool", "resolves to pool %q in namespace %q, the same as profiles[%d]", p.Pool.Name, p.Pool.Namespace, j)
