@@ -206,54 +206,38 @@ SPECIFICATION: [Executor](docs/requirements/02-executor.md)
     TEXT[!MUST]:   releasing it and SHALL write the MicroVM uid and Host name to the Job log.
 
   SECTION: [Guest Transport](#guest-transport)
-    TEXT[!MUST]: - **EX-040**
-    TEXT[!MUST,implementation,test]: The Guest Transport SHALL provide an operation that runs a
-    TEXT[!MUST,implementation,test]:   command in a MicroVM with a working directory, environment, user, standard
-    TEXT[!MUST,implementation,test]:   input stream, standard output stream, standard error stream and returns the
-    TEXT[!MUST,implementation,test]:   command's exit status.
-    TEXT[!MUST]: - **EX-041**
-    TEXT[!MUST,implementation,test]: The Guest Transport SHALL provide a readiness operation that
-    TEXT[!MUST,implementation,test]:   succeeds only when a trivial command can be executed in the guest.
-    TEXT[!MUST]: - **EX-042**
-    TEXT[!MUST,implementation,test]: The Guest Transport SHALL be selectable per Profile from the
-    TEXT[!MUST,implementation,test]:   implementations `exec` and `ssh`, with `exec` as the default.
-    TEXT[!MUST]: - **EX-043**
-    TEXT[!MUST,implementation,test]: The `exec` Guest Transport SHALL use the flintlock
-    TEXT[!MUST,implementation,test]:   `MicroVMExec.ExecCommand` streaming RPC of the Host that runs the MicroVM.
-    TEXT[!MUST]: - **EX-044**
-    TEXT[!MUST,implementation,test]: The `exec` Guest Transport SHALL send an `ExecStart` message
-    TEXT[!MUST,implementation,test]:   with `has_stdin` set, followed by the Stage script as `stdin` chunks,
-    TEXT[!MUST,implementation,test]:   followed by `stdin_eof`.
-    TEXT[!MUST]: - **EX-045**
-    TEXT[!MUST,implementation,test]: The `exec` Guest Transport SHALL treat an `exit_code`
-    TEXT[!MUST,implementation,test]:   payload as the command's exit status and SHALL treat an `error` payload
-    TEXT[!MUST,implementation,test]:   as a transport failure only where the stream ends without an `exit_code`.
-    TEXT[!MUST]: - **EX-046**
-    TEXT[!MUST,implementation,test]: The `exec` Guest Transport SHALL set the `timeout_seconds` field
-    TEXT[!MUST,implementation,test]:   of `ExecStart` from the remaining time on the operation's context.
-    TEXT[!MUST]: - **EX-047**
-    TEXT[!MUST,implementation,test]: The `ssh` Guest Transport SHALL connect to the guest's SSH
-    TEXT[!MUST,implementation,test]:   service through the flintlock `MicroVMSSHProxy.SSHProxy` streaming RPC of
-    TEXT[!MUST,implementation,test]:   the Host that runs the MicroVM.
-    TEXT[!MUST]: - **EX-048**
-    TEXT[!MUST,implementation,test]: The `ssh` Guest Transport SHALL NOT offer a direct TCP mode,
-    TEXT[!MUST,implementation,test]:   because pool MicroVMs are created from one shared template and flintlock
-    TEXT[!MUST,implementation,test]:   reports no guest address the Runner could connect to.
-    TEXT[!MUST]: - **EX-049**
-    TEXT[!MUST,implementation,test]: The `ssh` Guest Transport SHALL authenticate with the private
-    TEXT[!MUST,implementation,test]:   key named by the Profile and SHALL verify the guest host key only where the
-    TEXT[!MUST,implementation,test]:   Profile provides a known host key.
-    TEXT[!MUST]: - **EX-050**
-    TEXT[!MUST,implementation,test]: The Guest Transport SHALL reuse the Host client's gRPC
-    TEXT[!MUST,implementation,test]:   connection rather than opening a new connection per Stage.
-    TEXT[!MUST]: - **EX-051**
-    TEXT[!MUST,implementation,test]: If the Host that runs the MicroVM becomes unreachable, then the
-    TEXT[!MUST,implementation,test]:   Guest Transport SHALL fail the in-flight operation within the configured
-    TEXT[!MUST,implementation,test]:   transport deadline.
-    TEXT[!MUST]: - **EX-052** A Profile's root filesystem image SHALL carry a guest agent
-    TEXT[!MUST]:   that emits liveness heartbeats on the exec control channel, because
-    TEXT[!MUST]:   `flintlockd` ends an exec session whose control channel has been idle
-    TEXT[!MUST]:   for longer than its deadline.
+    TEXT[!MUST]: - **EX-040** The Guest Transport SHALL provide an operation that runs a
+    TEXT[!MUST]:   command in a MicroVM with a working directory, environment, user, standard
+    TEXT[!MUST]:   input stream, standard output stream, standard error stream and returns the
+    TEXT[!MUST]:   command's exit status.
+    TEXT[!MUST]: - **EX-041** The Guest Transport SHALL provide a readiness operation that
+    TEXT[!MUST]:   succeeds only when a trivial command can be executed in the guest.
+    TEXT[!MUST]: - **EX-042** The Guest Transport SHALL be selectable per Profile from the
+    TEXT[!MUST]:   implementations `exec` and `ssh`, with `exec` as the default.
+    TEXT[!MUST]: - **EX-043** The `exec` Guest Transport SHALL use the flintlock
+    TEXT[!MUST]:   `MicroVMExec.ExecCommand` streaming RPC of the Host that runs the MicroVM.
+    TEXT[!MUST]: - **EX-044** The `exec` Guest Transport SHALL send an `ExecStart` message
+    TEXT[!MUST]:   with `has_stdin` set, followed by the Stage script as `stdin` chunks,
+    TEXT[!MUST]:   followed by `stdin_eof`.
+    TEXT[!MUST]: - **EX-045** The `exec` Guest Transport SHALL treat an `error` payload in the
+    TEXT[!MUST]:   response stream as a transport failure and SHALL treat an `exit_code`
+    TEXT[!MUST]:   payload as the command's exit status.
+    TEXT[!MUST]: - **EX-046** The `exec` Guest Transport SHALL set the `timeout_seconds` field
+    TEXT[!MUST]:   of `ExecStart` from the remaining time on the operation's context.
+    TEXT[!MUST]: - **EX-047** The `ssh` Guest Transport SHALL connect to the guest's SSH
+    TEXT[!MUST]:   service through the flintlock `MicroVMSSHProxy.SSHProxy` streaming RPC of
+    TEXT[!MUST]:   the Host that runs the MicroVM.
+    TEXT[!MUST]: - **EX-048** The `ssh` Guest Transport SHALL NOT offer a direct TCP mode,
+    TEXT[!MUST]:   because pool MicroVMs are created from one shared template and flintlock
+    TEXT[!MUST]:   reports no guest address the Runner could connect to.
+    TEXT[!MUST]: - **EX-049** The `ssh` Guest Transport SHALL authenticate with the private
+    TEXT[!MUST]:   key named by the Profile and SHALL verify the guest host key only where the
+    TEXT[!MUST]:   Profile provides a known host key.
+    TEXT[!MUST]: - **EX-050** The Guest Transport SHALL reuse the Host client's gRPC
+    TEXT[!MUST]:   connection rather than opening a new connection per Stage.
+    TEXT[!MUST]: - **EX-051** If the Host that runs the MicroVM becomes unreachable, then the
+    TEXT[!MUST]:   Guest Transport SHALL fail the in-flight operation within the configured
+    TEXT[!MUST]:   transport deadline.
 
   SECTION: [Host service environment](#host-service-environment)
     TEXT[!MUST]: - **EX-060** When the Placement of a Job's MicroVM is known, the Executor
@@ -517,61 +501,47 @@ SPECIFICATION: [Pool Manager integration](docs/requirements/04-pool-manager.md)
 
 SPECIFICATION: [Hosts](docs/requirements/05-hosts.md)
   SECTION: [Client](#flintlock-client)
-    TEXT[!MUST]: - **HO-001**
-    TEXT[!MUST,implementation,test]: The Runner SHALL communicate with Hosts through the flintlock
-    TEXT[!MUST,implementation,test]:   `microvm.services.api.v1alpha1`, `microvmexec.services.api.v1alpha1` and
-    TEXT[!MUST,implementation,test]:   `microvmsshproxy.services.api.v1alpha1` gRPC APIs using the generated
-    TEXT[!MUST,implementation,test]:   clients from the flintlock `api` module.
-    TEXT[!MUST]: - **HO-002**
-    TEXT[!MUST,implementation,test]: The Runner SHALL maintain one long-lived gRPC connection per
-    TEXT[!MUST,implementation,test]:   Host, with keepalive enabled, and SHALL reconnect with exponential backoff
-    TEXT[!MUST,implementation,test]:   when a connection is lost.
-    TEXT[!MUST]: - **HO-003**
-    TEXT[!MUST,implementation,test]: The Runner SHALL apply the configured deadline to every unary
-    TEXT[!MUST,implementation,test]:   flintlock call.
-    TEXT[!MUST]: - **HO-004**
-    TEXT[!MUST,implementation,test]: Where a Host is configured with a basic auth token, the Runner
-    TEXT[!MUST,implementation,test]:   SHALL send an `authorization` header with the value `Basic` followed by the
-    TEXT[!MUST,implementation,test]:   base64 encoding of the token on every call to that Host.
-    TEXT[!MUST]: - **HO-005**
-    TEXT[!MUST,implementation,test]: The Runner SHALL connect to Hosts with TLS, verifying the server
-    TEXT[!MUST,implementation,test]:   certificate against the configured certificate authority, unless the Host
-    TEXT[!MUST,implementation,test]:   is explicitly marked insecure.
-    TEXT[!MUST]: - **HO-006**
-    TEXT[!MUST,implementation,test]: Where client certificate and key files are configured for a
-    TEXT[!MUST,implementation,test]:   Host, the Runner SHALL present them for mutual TLS.
-    TEXT[!MUST]: - **HO-007**
-    TEXT[!MUST,implementation,test]: The Runner SHALL NOT call `CreateMicroVM` or `DeleteMicroVM` on
-    TEXT[!MUST,implementation,test]:   any Host.
-    TEXT[!MUST]: - **HO-008**
-    TEXT[!MUST,implementation,test]: The Runner SHALL only call `ListMicroVMs` with its own namespace
-    TEXT[!MUST,implementation,test]:   and only as a health probe fallback.
+    TEXT[!MUST]: - **HO-001** The Runner SHALL communicate with Hosts through the flintlock
+    TEXT[!MUST]:   `microvm.services.api.v1alpha1`, `microvmexec.services.api.v1alpha1` and
+    TEXT[!MUST]:   `microvmsshproxy.services.api.v1alpha1` gRPC APIs using the generated
+    TEXT[!MUST]:   clients from the flintlock `api` module.
+    TEXT[!MUST]: - **HO-002** The Runner SHALL maintain one long-lived gRPC connection per
+    TEXT[!MUST]:   Host, with keepalive enabled, and SHALL reconnect with exponential backoff
+    TEXT[!MUST]:   when a connection is lost.
+    TEXT[!MUST]: - **HO-003** The Runner SHALL apply the configured deadline to every unary
+    TEXT[!MUST]:   flintlock call.
+    TEXT[!MUST]: - **HO-004** Where a Host is configured with a basic auth token, the Runner
+    TEXT[!MUST]:   SHALL send an `authorization` header with the value `Basic` followed by the
+    TEXT[!MUST]:   base64 encoding of the token on every call to that Host.
+    TEXT[!MUST]: - **HO-005** The Runner SHALL connect to Hosts with TLS, verifying the server
+    TEXT[!MUST]:   certificate against the configured certificate authority, unless the Host
+    TEXT[!MUST]:   is explicitly marked insecure.
+    TEXT[!MUST]: - **HO-006** Where client certificate and key files are configured for a
+    TEXT[!MUST]:   Host, the Runner SHALL present them for mutual TLS.
+    TEXT[!MUST]: - **HO-007** The Runner SHALL NOT call `CreateMicroVM` or `DeleteMicroVM` on
+    TEXT[!MUST]:   any Host.
+    TEXT[!MUST]: - **HO-008** The Runner SHALL only call `ListMicroVMs` with its own namespace
+    TEXT[!MUST]:   and only as a health probe fallback.
 
   SECTION: [Inventory](#inventory)
-    TEXT[!MUST]: - **HO-010**
-    TEXT[!MUST,implementation,test]: The Runner SHALL load the set of Hosts from the Inventory
-    TEXT[!MUST,implementation,test]:   section of its configuration, keyed by the Host names the Pool Manager
-    TEXT[!MUST,implementation,test]:   uses in `flintlock_hosts`.
-    TEXT[!MUST]: - **HO-011**
-    TEXT[!MUST,implementation,test]: When starting, the Runner SHALL call `ServerInfo` on every Host
-    TEXT[!MUST,implementation,test]:   and SHALL log the Host's flintlock version and whether the exec and SSH
-    TEXT[!MUST,implementation,test]:   proxy services are enabled.
-    TEXT[!MUST]: - **HO-012**
-    TEXT[!MUST,implementation,test]: If a Host reports that the exec service is disabled, then the
-    TEXT[!MUST,implementation,test]:   Runner SHALL log a warning naming the Host, because Jobs the Pool Manager
-    TEXT[!MUST,implementation,test]:   places there cannot be run over the `exec` Guest Transport.
-    TEXT[!MUST]: - **HO-013**
-    TEXT[!MUST,implementation,test]: If `ServerInfo` is not implemented by a Host, then the Runner
-    TEXT[!MUST,implementation,test]:   SHALL treat the Host's version as unknown and continue.
-    TEXT[!MUST]: - **HO-014**
-    TEXT[!MUST,implementation,test]: When the configuration is reloaded, the Runner SHALL add new
-    TEXT[!MUST,implementation,test]:   Hosts, stop probing removed Hosts and keep serving Jobs on removed Hosts
-    TEXT[!MUST,implementation,test]:   until they finish.
-    TEXT[!MUST]: - **HO-015**
-    TEXT[!MUST,implementation,test]: When starting, the Runner SHALL compare the Inventory with the
-    TEXT[!MUST,implementation,test]:   Hosts the Pool Manager reports for each Pool and SHALL log a warning for
-    TEXT[!MUST,implementation,test]:   any Pool Host missing from the Inventory, because a MicroVM placed there
-    TEXT[!MUST,implementation,test]:   could not be reached.
+    TEXT[!MUST]: - **HO-010** The Runner SHALL load the set of Hosts from the Inventory
+    TEXT[!MUST]:   section of its configuration, keyed by the Host names the Pool Manager
+    TEXT[!MUST]:   uses in `flintlock_hosts`.
+    TEXT[!MUST]: - **HO-011** When starting, the Runner SHALL call `ServerInfo` on every Host
+    TEXT[!MUST]:   and SHALL log the Host's flintlock version and whether the exec and SSH
+    TEXT[!MUST]:   proxy services are enabled.
+    TEXT[!MUST]: - **HO-012** If a Host reports that the exec service is disabled, then the
+    TEXT[!MUST]:   Runner SHALL log a warning naming the Host, because Jobs the Pool Manager
+    TEXT[!MUST]:   places there cannot be run over the `exec` Guest Transport.
+    TEXT[!MUST]: - **HO-013** If `ServerInfo` is not implemented by a Host, then the Runner
+    TEXT[!MUST]:   SHALL treat the Host's version as unknown and continue.
+    TEXT[!MUST]: - **HO-014** When the configuration is reloaded, the Runner SHALL add new
+    TEXT[!MUST]:   Hosts, stop probing removed Hosts and keep serving Jobs on removed Hosts
+    TEXT[!MUST]:   until they finish.
+    TEXT[!MUST]: - **HO-015** When starting, the Runner SHALL compare the Inventory with the
+    TEXT[!MUST]:   Hosts the Pool Manager reports for each Pool and SHALL log a warning for
+    TEXT[!MUST]:   any Pool Host missing from the Inventory, because a MicroVM placed there
+    TEXT[!MUST]:   could not be reached.
 
 SPECIFICATION: [Fleet](docs/requirements/06-fleet.md)
   SECTION: [Discovery](#discovery)
@@ -798,183 +768,140 @@ SPECIFICATION: [Fleet](docs/requirements/06-fleet.md)
 
 SPECIFICATION: [Configuration](docs/requirements/07-configuration.md)
   SECTION: [File and precedence](#file-and-precedence)
-    TEXT[!MUST]: - **CF-001**
-    TEXT[!MUST,implementation,test]: The Runner SHALL read its configuration from a single YAML file
-    TEXT[!MUST,implementation,test]:   whose path is given by the `--config` flag or the `FLINTLOCK_RUNNER_CONFIG`
-    TEXT[!MUST,implementation,test]:   environment variable.
-    TEXT[!MUST]: - **CF-002**
-    TEXT[!MUST,implementation,test]: The Runner SHALL allow every secret value in the configuration
-    TEXT[!MUST,implementation,test]:   to be supplied by an environment variable named in the field's
-    TEXT[!MUST,implementation,test]:   documentation, with the environment variable taking precedence over the
-    TEXT[!MUST,implementation,test]:   file.
-    TEXT[!MUST]: - **CF-003**
-    TEXT[!MUST,implementation,test]: The Runner SHALL allow an Inventory to be supplied inline in the
-    TEXT[!MUST,implementation,test]:   configuration file or by reference to a separate Inventory file.
-    TEXT[!MUST]: - **CF-004**
-    TEXT[!MUST,implementation,test]: When starting, the Runner SHALL validate the configuration and,
-    TEXT[!MUST,implementation,test]:   if it is invalid, SHALL exit with a non-zero status and a message naming
-    TEXT[!MUST,implementation,test]:   the first invalid field and the reason.
-    TEXT[!MUST]: - **CF-005**
-    TEXT[!MUST,implementation,test]: The Runner SHALL apply documented defaults to every optional
-    TEXT[!MUST,implementation,test]:   field so that a minimal configuration contains only the GitLab URL, the
-    TEXT[!MUST,implementation,test]:   runner token, the Pool Manager endpoint, one Host and one Profile with a
-    TEXT[!MUST,implementation,test]:   Pool size.
-    TEXT[!MUST]: - **CF-006**
-    TEXT[!MUST,implementation,test]: The Runner SHALL provide a `config show` command that prints the
-    TEXT[!MUST,implementation,test]:   effective configuration with every secret value redacted.
-    TEXT[!MUST]: - **CF-007**
-    TEXT[!MUST,implementation,test]: When the Runner receives `SIGHUP`, the Runner SHALL reload the
-    TEXT[!MUST,implementation,test]:   Profiles and the Inventory from disk without interrupting running Jobs.
-    TEXT[!MUST]: - **CF-008**
-    TEXT[!MUST,implementation,test]: If a reload produces an invalid configuration, then the Runner
-    TEXT[!MUST,implementation,test]:   SHALL keep the previous configuration and log the validation error.
+    TEXT[!MUST]: - **CF-001** The Runner SHALL read its configuration from a single YAML file
+    TEXT[!MUST]:   whose path is given by the `--config` flag or the `FLINTLOCK_RUNNER_CONFIG`
+    TEXT[!MUST]:   environment variable.
+    TEXT[!MUST]: - **CF-002** The Runner SHALL allow every secret value in the configuration
+    TEXT[!MUST]:   to be supplied by an environment variable named in the field's
+    TEXT[!MUST]:   documentation, with the environment variable taking precedence over the
+    TEXT[!MUST]:   file.
+    TEXT[!MUST]: - **CF-003** The Runner SHALL allow an Inventory to be supplied inline in the
+    TEXT[!MUST]:   configuration file or by reference to a separate Inventory file.
+    TEXT[!MUST]: - **CF-004** When starting, the Runner SHALL validate the configuration and,
+    TEXT[!MUST]:   if it is invalid, SHALL exit with a non-zero status and a message naming
+    TEXT[!MUST]:   the first invalid field and the reason.
+    TEXT[!MUST]: - **CF-005** The Runner SHALL apply documented defaults to every optional
+    TEXT[!MUST]:   field so that a minimal configuration contains only the GitLab URL, the
+    TEXT[!MUST]:   runner token, the Pool Manager endpoint, one Host and one Profile with a
+    TEXT[!MUST]:   Pool size.
+    TEXT[!MUST]: - **CF-006** The Runner SHALL provide a `config show` command that prints the
+    TEXT[!MUST]:   effective configuration with every secret value redacted.
+    TEXT[!MUST]: - **CF-007** When the Runner receives `SIGHUP`, the Runner SHALL reload the
+    TEXT[!MUST]:   Profiles and the Inventory from disk without interrupting running Jobs.
+    TEXT[!MUST]: - **CF-008** If a reload produces an invalid configuration, then the Runner
+    TEXT[!MUST]:   SHALL keep the previous configuration and log the validation error.
 
   SECTION: [GitLab section](#gitlab-section)
-    TEXT[!MUST]: - **CF-010**
-    TEXT[!MUST,implementation,test]: The GitLab section SHALL contain the GitLab URL, the runner
-    TEXT[!MUST,implementation,test]:   authentication token, the runner name, the concurrency limit, the check
-    TEXT[!MUST,implementation,test]:   interval, the output limit, the shutdown timeout and optional TLS
-    TEXT[!MUST,implementation,test]:   certificate authority, client certificate and client key paths.
-    TEXT[!MUST]: - **CF-011**
-    TEXT[!MUST,implementation,test]: The Runner SHALL map the GitLab section onto the `RunnerConfig`
-    TEXT[!MUST,implementation,test]:   and `Config` structures of the gitlab-runner `common` package.
-    TEXT[!MUST]: - **CF-012**
-    TEXT[!MUST,implementation,test]: The Runner SHALL default the concurrency limit to twice the sum
-    TEXT[!MUST,implementation,test]:   of the declared Pool sizes, because immediate-on-lease replenishment keeps
-    TEXT[!MUST,implementation,test]:   Jobs flowing beyond the idle Pool size.
+    TEXT[!MUST]: - **CF-010** The GitLab section SHALL contain the GitLab URL, the runner
+    TEXT[!MUST]:   authentication token, the runner name, the concurrency limit, the check
+    TEXT[!MUST]:   interval, the output limit, the shutdown timeout and optional TLS
+    TEXT[!MUST]:   certificate authority, client certificate and client key paths.
+    TEXT[!MUST]: - **CF-011** The Runner SHALL map the GitLab section onto the `RunnerConfig`
+    TEXT[!MUST]:   and `Config` structures of the gitlab-runner `common` package.
+    TEXT[!MUST]: - **CF-012** The Runner SHALL default the concurrency limit to twice the sum
+    TEXT[!MUST]:   of the declared Pool sizes, because immediate-on-lease replenishment keeps
+    TEXT[!MUST]:   Jobs flowing beyond the idle Pool size.
 
   SECTION: [Profiles section](#profiles-section)
-    TEXT[!MUST]: - **CF-020**
-    TEXT[!MUST,implementation,test]: A Profile SHALL have a unique name, an architecture, a vCPU
-    TEXT[!MUST,implementation,test]:   count, a memory size in megabytes, a kernel image, a root filesystem image,
-    TEXT[!MUST,implementation,test]:   a shell path, a builds directory, a cache directory, a helper binary path
-    TEXT[!MUST,implementation,test]:   and pool settings.
-    TEXT[!MAY]: - **CF-021**
-    TEXT[!MAY,implementation,test]: A Profile MAY declare image names and image glob patterns that
-    TEXT[!MAY,implementation,test]:   map Job Images onto it, a kernel command line, an initrd image, additional
-    TEXT[!MAY,implementation,test]:   volumes, a hypervisor provider, cloud-init user-data, a Guest Transport, a
-    TEXT[!MAY,implementation,test]:   user, a ready timeout, a Host selector and a maximum concurrency.
-    TEXT[!MAY]: - **CF-022**
-    TEXT[!MAY,implementation,test]: Exactly one Profile MAY be marked as the Default Profile.
-    TEXT[!MUST]: - **CF-023**
-    TEXT[!MUST,implementation,test]: If two Profiles declare the same image name, then the Runner
-    TEXT[!MUST,implementation,test]:   SHALL reject the configuration.
-    TEXT[!MUST]: - **CF-024**
-    TEXT[!MUST,implementation,test]: A Profile's Host selector SHALL be expressed as label
-    TEXT[!MUST,implementation,test]:   requirements matched against Inventory labels and SHALL determine the
-    TEXT[!MUST,implementation,test]:   Pool's host list.
-    TEXT[!MUST]: - **CF-025**
-    TEXT[!MUST,implementation,test]: A Profile's pool settings SHALL contain the Pool size and MAY
-    TEXT[!MUST,implementation,test]:   contain the Pool name and namespace, replenishment strategy, minimum size,
-    TEXT[!MUST,implementation,test]:   create hooks, pre-lease hooks, hook failure policy, heartbeat interval and
-    TEXT[!MUST,implementation,test]:   heartbeat expiry threshold.
-    TEXT[!MUST]: - **CF-028**
-    TEXT[!MUST,implementation,test]: The Runner SHALL default a Pool's name to the Profile name and
-    TEXT[!MUST,implementation,test]:   its namespace to the Runner namespace.
-    TEXT[!MUST]: - **CF-029**
-    TEXT[!MUST,implementation,test]: If two Profiles resolve to the same Pool name and namespace,
-    TEXT[!MUST,implementation,test]:   then the Runner SHALL reject the configuration.
-    TEXT[!MUST]: - **CF-026**
-    TEXT[!MUST,implementation,test]: The Runner SHALL reject a Profile whose images are specified by
-    TEXT[!MUST,implementation,test]:   neither a digest nor a tag.
-    TEXT[!MUST]: - **CF-027**
-    TEXT[!MUST,implementation,test]: Where a Profile image is specified by tag rather than by digest,
-    TEXT[!MUST,implementation,test]:   the Runner SHALL log a warning at startup naming the Profile and the image.
+    TEXT[!MUST]: - **CF-020** A Profile SHALL have a unique name, an architecture, a vCPU
+    TEXT[!MUST]:   count, a memory size in megabytes, a kernel image, a root filesystem image,
+    TEXT[!MUST]:   a shell path, a builds directory, a cache directory, a helper binary path
+    TEXT[!MUST]:   and pool settings.
+    TEXT[!MAY]: - **CF-021** A Profile MAY declare image names and image glob patterns that
+    TEXT[!MAY]:   map Job Images onto it, a kernel command line, an initrd image, additional
+    TEXT[!MAY]:   volumes, a hypervisor provider, cloud-init user-data, a Guest Transport, a
+    TEXT[!MAY]:   user, a ready timeout, a Host selector and a maximum concurrency.
+    TEXT[!MAY]: - **CF-022** Exactly one Profile MAY be marked as the Default Profile.
+    TEXT[!MUST]: - **CF-023** If two Profiles declare the same image name, then the Runner
+    TEXT[!MUST]:   SHALL reject the configuration.
+    TEXT[!MUST]: - **CF-024** A Profile's Host selector SHALL be expressed as label
+    TEXT[!MUST]:   requirements matched against Inventory labels and SHALL determine the
+    TEXT[!MUST]:   Pool's host list.
+    TEXT[!MUST]: - **CF-025** A Profile's pool settings SHALL contain the Pool size and MAY
+    TEXT[!MUST]:   contain the Pool name and namespace, replenishment strategy, minimum size,
+    TEXT[!MUST]:   create hooks, pre-lease hooks, hook failure policy, heartbeat interval and
+    TEXT[!MUST]:   heartbeat expiry threshold.
+    TEXT[!MUST]: - **CF-028** The Runner SHALL default a Pool's name to the Profile name and
+    TEXT[!MUST]:   its namespace to the Runner namespace.
+    TEXT[!MUST]: - **CF-029** If two Profiles resolve to the same Pool name and namespace,
+    TEXT[!MUST]:   then the Runner SHALL reject the configuration.
+    TEXT[!MUST]: - **CF-026** The Runner SHALL reject a Profile whose images are specified by
+    TEXT[!MUST]:   neither a digest nor a tag.
+    TEXT[!MUST]: - **CF-027** Where a Profile image is specified by tag rather than by digest,
+    TEXT[!MUST]:   the Runner SHALL log a warning at startup naming the Profile and the image.
 
   SECTION: [Inventory section](#inventory-section)
-    TEXT[!MUST]: - **CF-030**
-    TEXT[!MUST,implementation,test]: An Inventory entry SHALL contain a Host name, a `flintlockd`
-    TEXT[!MUST,implementation,test]:   gRPC endpoint, an architecture, a vCPU capacity and a memory capacity, and
-    TEXT[!MUST,implementation,test]:   MAY contain labels, a basic auth token, TLS settings, Host Service
-    TEXT[!MUST,implementation,test]:   addresses and installed version information.
-    TEXT[!MUST]: - **CF-032**
-    TEXT[!MUST,implementation,test]: The Host name in an Inventory entry SHALL be the name the Pool
-    TEXT[!MUST,implementation,test]:   Manager uses for that Host in `flintlock_hosts`.
-    TEXT[!MUST]: - **CF-031**
-    TEXT[!MUST,implementation,test]: The Runner SHALL reject an Inventory with duplicate Host names or
-    TEXT[!MUST,implementation,test]:   duplicate endpoints.
+    TEXT[!MUST]: - **CF-030** An Inventory entry SHALL contain a Host name, a `flintlockd`
+    TEXT[!MUST]:   gRPC endpoint, an architecture, a vCPU capacity and a memory capacity, and
+    TEXT[!MUST]:   MAY contain labels, a basic auth token, TLS settings, Host Service
+    TEXT[!MUST]:   addresses and installed version information.
+    TEXT[!MUST]: - **CF-032** The Host name in an Inventory entry SHALL be the name the Pool
+    TEXT[!MUST]:   Manager uses for that Host in `flintlock_hosts`.
+    TEXT[!MUST]: - **CF-031** The Runner SHALL reject an Inventory with duplicate Host names or
+    TEXT[!MUST]:   duplicate endpoints.
 
   SECTION: [Pool Manager section](#pool-manager-section)
-    TEXT[!MUST]: - **CF-040**
-    TEXT[!MUST,implementation,test]: The Pool Manager section SHALL contain an endpoint, TLS
-    TEXT[!MUST,implementation,test]:   settings, a request deadline, a health backoff period, a health probe
-    TEXT[!MUST,implementation,test]:   interval, an events poll interval, a pool declaration retry interval and a
-    TEXT[!MUST,implementation,test]:   release retry limit.
-    TEXT[!MUST]: - **CF-041**
-    TEXT[!MUST,implementation,test]: If the Pool Manager section is absent or has no endpoint, then
-    TEXT[!MUST,implementation,test]:   the Runner SHALL reject the configuration.
+    TEXT[!MUST]: - **CF-040** The Pool Manager section SHALL contain an endpoint, TLS
+    TEXT[!MUST]:   settings, a request deadline, a health backoff period, a health probe
+    TEXT[!MUST]:   interval, an events poll interval, a pool declaration retry interval and a
+    TEXT[!MUST]:   release retry limit.
+    TEXT[!MUST]: - **CF-041** If the Pool Manager section is absent or has no endpoint, then
+    TEXT[!MUST]:   the Runner SHALL reject the configuration.
 
   SECTION: [Scheduler section](#scheduler-section)
-    TEXT[!MUST]: - **CF-050**
-    TEXT[!MUST,implementation,test]: The Scheduler section SHALL contain the Runner namespace, the
-    TEXT[!MUST,implementation,test]:   allocation timeout, the Host health probe interval, the unhealthy probe
-    TEXT[!MUST,implementation,test]:   threshold, the keep-on-failure flag and the keep duration.
-    TEXT[!MUST]: - **CF-051**
-    TEXT[!MUST,implementation,test]: The Runner SHALL default the Runner namespace to the runner
-    TEXT[!MUST,implementation,test]:   name so that two Runners sharing one Pool Manager declare their Pools in
-    TEXT[!MUST,implementation,test]:   separate namespaces.
+    TEXT[!MUST]: - **CF-050** The Scheduler section SHALL contain the Runner namespace, the
+    TEXT[!MUST]:   allocation timeout, the Host health probe interval, the unhealthy probe
+    TEXT[!MUST]:   threshold, the keep-on-failure flag and the keep duration.
+    TEXT[!MUST]: - **CF-051** The Runner SHALL default the Runner namespace to the runner
+    TEXT[!MUST]:   name so that two Runners sharing one Pool Manager declare their Pools in
+    TEXT[!MUST]:   separate namespaces.
 
   SECTION: [Fleet section](#fleet-section)
-    TEXT[!MUST]: - **CF-060**
-    TEXT[!MUST,implementation,test]: The Fleet section SHALL contain the AWS region, the discovery
-    TEXT[!MUST,implementation,test]:   tag key and value or explicit instance ids, the remote execution mode and
-    TEXT[!MUST,implementation,test]:   its SSH settings, the provisioning parallelism, the pinned versions of
-    TEXT[!MUST,implementation,test]:   flintlock, Firecracker, Cloud Hypervisor, containerd and the Pool Manager,
-    TEXT[!MUST,implementation,test]:   the thin pool device, the guest subnet, the `flintlockd`
-    TEXT[!MUST,implementation,test]:   port and auth settings, the Host reserve, and the paths for the generated
-    TEXT[!MUST,implementation,test]:   Inventory and Runner configuration.
-    TEXT[!MAY]: - **CF-061**
-    TEXT[!MAY,implementation,test]: The Fleet section MAY contain launch template settings naming
-    TEXT[!MAY,implementation,test]:   the Systems Manager parameters that hold secrets.
+    TEXT[!MUST]: - **CF-060** The Fleet section SHALL contain the AWS region, the discovery
+    TEXT[!MUST]:   tag key and value or explicit instance ids, the remote execution mode and
+    TEXT[!MUST]:   its SSH settings, the provisioning parallelism, the pinned versions of
+    TEXT[!MUST]:   flintlock, Firecracker, Cloud Hypervisor, containerd and the Pool Manager,
+    TEXT[!MUST]:   the thin pool device, the guest subnet, the `flintlockd`
+    TEXT[!MUST]:   port and auth settings, the Host reserve, and the paths for the generated
+    TEXT[!MUST]:   Inventory and Runner configuration.
+    TEXT[!MAY]: - **CF-061** The Fleet section MAY contain launch template settings naming
+    TEXT[!MAY]:   the Systems Manager parameters that hold secrets.
 
   SECTION: [Host services section](#host-services-section)
-    TEXT[!MUST]: - **CF-070**
-    TEXT[!MUST,implementation,test]: The Host services section SHALL contain, for each of
-    TEXT[!MUST,implementation,test]:   `buildkit`, `go_proxy`, `registry_mirror` and `http_cache`, an enabled flag
-    TEXT[!MUST,implementation,test]:   that defaults to true and a port.
-    TEXT[!MAY]: - **CF-071**
-    TEXT[!MAY,implementation,test]: The `buildkit` entry MAY contain a storage limit and a garbage
-    TEXT[!MAY,implementation,test]:   collection policy.
-    TEXT[!MAY]: - **CF-072**
-    TEXT[!MAY,implementation,test]: The `go_proxy` entry MAY contain the upstream proxy, a list of
-    TEXT[!MAY,implementation,test]:   private module patterns, the version control host those patterns resolve
-    TEXT[!MAY,implementation,test]:   to, the Systems Manager parameter holding the read-only credential for
-    TEXT[!MAY,implementation,test]:   them, a private module revalidation interval, a storage limit and a list of
-    TEXT[!MAY,implementation,test]:   modules to pre-warm.
-    TEXT[!MUST]: - **CF-076**
-    TEXT[!MUST,implementation,test]: If the `go_proxy` entry lists private module patterns without a
-    TEXT[!MUST,implementation,test]:   credential parameter, then the Runner SHALL reject the configuration.
-    TEXT[!MAY]: - **CF-073**
-    TEXT[!MAY,implementation,test]: The `registry_mirror` entry MAY contain a list of upstream
-    TEXT[!MAY,implementation,test]:   registries with optional credential parameter names, a storage limit and a
-    TEXT[!MAY,implementation,test]:   list of images to pre-warm.
-    TEXT[!MAY]: - **CF-074**
-    TEXT[!MAY,implementation,test]: The `http_cache` entry MAY contain a list of upstreams, each
-    TEXT[!MAY,implementation,test]:   with a name, an upstream URL, a size limit, a time-to-live and the
-    TEXT[!MAY,implementation,test]:   environment variable name the Executor injects for it.
-    TEXT[!MUST]: - **CF-075**
-    TEXT[!MUST,implementation,test]: The Host services section SHALL contain the cache volume device
-    TEXT[!MUST,implementation,test]:   or directory and its total size cap.
+    TEXT[!MUST]: - **CF-070** The Host services section SHALL contain, for each of
+    TEXT[!MUST]:   `buildkit`, `go_proxy`, `registry_mirror` and `http_cache`, an enabled flag
+    TEXT[!MUST]:   that defaults to true and a port.
+    TEXT[!MAY]: - **CF-071** The `buildkit` entry MAY contain a storage limit and a garbage
+    TEXT[!MAY]:   collection policy.
+    TEXT[!MAY]: - **CF-072** The `go_proxy` entry MAY contain the upstream proxy, a list of
+    TEXT[!MAY]:   private module patterns, the version control host those patterns resolve
+    TEXT[!MAY]:   to, the Systems Manager parameter holding the read-only credential for
+    TEXT[!MAY]:   them, a private module revalidation interval, a storage limit and a list of
+    TEXT[!MAY]:   modules to pre-warm.
+    TEXT[!MUST]: - **CF-076** If the `go_proxy` entry lists private module patterns without a
+    TEXT[!MUST]:   credential parameter, then the Runner SHALL reject the configuration.
+    TEXT[!MAY]: - **CF-073** The `registry_mirror` entry MAY contain a list of upstream
+    TEXT[!MAY]:   registries with optional credential parameter names, a storage limit and a
+    TEXT[!MAY]:   list of images to pre-warm.
+    TEXT[!MAY]: - **CF-074** The `http_cache` entry MAY contain a list of upstreams, each
+    TEXT[!MAY]:   with a name, an upstream URL, a size limit, a time-to-live and the
+    TEXT[!MAY]:   environment variable name the Executor injects for it.
+    TEXT[!MUST]: - **CF-075** The Host services section SHALL contain the cache volume device
+    TEXT[!MUST]:   or directory and its total size cap.
 
   SECTION: [Distributed cache section](#distributed-cache-section)
-    TEXT[!MUST]: - **CF-080**
-    TEXT[!MUST,implementation,test]: The Distributed cache section SHALL contain an S3 bucket name,
-    TEXT[!MUST,implementation,test]:   region and optional prefix, and MAY contain an endpoint for S3-compatible
-    TEXT[!MUST,implementation,test]:   stores.
-    TEXT[!MUST]: - **CF-081**
-    TEXT[!MUST,implementation,test]: The Runner SHALL map the Distributed cache section onto the
-    TEXT[!MUST,implementation,test]:   gitlab-runner cache configuration so that the `cache:` keyword in a
-    TEXT[!MUST,implementation,test]:   pipeline stores and restores through that bucket.
-    TEXT[!MUST]: - **CF-082**
-    TEXT[!MUST,implementation,test]: The Runner SHALL configure the distributed cache so that
-    TEXT[!MUST,implementation,test]:   pre-signed URLs are generated on the Control Node and no AWS credentials
-    TEXT[!MUST,implementation,test]:   are passed into the guest.
-    TEXT[!MUST]: - **CF-083**
-    TEXT[!MUST,implementation,test]: If the Distributed cache section is absent, then the Runner
-    TEXT[!MUST,implementation,test]:   SHALL log at startup that the `cache:` keyword is unavailable
-    TEXT[!MUST]:  and
-    TEXT[!MUST,todo]: SHALL
-    TEXT[!MUST,todo]:   fail Jobs that use it with the failure reason `runner_unsupported`.
+    TEXT[!MUST]: - **CF-080** The Distributed cache section SHALL contain an S3 bucket name,
+    TEXT[!MUST]:   region and optional prefix, and MAY contain an endpoint for S3-compatible
+    TEXT[!MUST]:   stores.
+    TEXT[!MUST]: - **CF-081** The Runner SHALL map the Distributed cache section onto the
+    TEXT[!MUST]:   gitlab-runner cache configuration so that the `cache:` keyword in a
+    TEXT[!MUST]:   pipeline stores and restores through that bucket.
+    TEXT[!MUST]: - **CF-082** The Runner SHALL configure the distributed cache so that
+    TEXT[!MUST]:   pre-signed URLs are generated on the Control Node and no AWS credentials
+    TEXT[!MUST]:   are passed into the guest.
+    TEXT[!MUST]: - **CF-083** If the Distributed cache section is absent, then the Runner
+    TEXT[!MUST]:   SHALL log at startup that the `cache:` keyword is unavailable and SHALL
+    TEXT[!MUST]:   fail Jobs that use it with the failure reason `runner_unsupported`.
 
 SPECIFICATION: [Observability](docs/requirements/08-observability.md)
   SECTION: [Logging](#logging)
@@ -1119,97 +1046,92 @@ SPECIFICATION: [Security](docs/requirements/09-security.md)
 SPECIFICATION: [Test doubles](docs/requirements/10-test-doubles.md)
   SECTION: [Fake Pool Manager](#fake-pool-manager)
     TEXT[!MUST]: - **TD-001**
-    TEXT[!MUST,implementation,test]: The project SHALL provide a fake Pool Manager that serves the
-    TEXT[!MUST,implementation,test]:   `poolmgr.v1alpha1` `PoolAdmin`, `Lease` and `Events` services over gRPC
-    TEXT[!MUST,implementation,test]:   using the generated server stubs from the battery module.
-    TEXT[!MUST]: - **TD-002**
-    TEXT[!MUST,implementation,test]: The fake Pool Manager SHALL create, place and delete MicroVMs
-    TEXT[!MUST,implementation,test]:   through the same Host client interface the Runner uses, so that it can be
-    TEXT[!MUST,implementation,test]:   pointed at fake Hosts or at real `flintlockd` instances.
-    TEXT[!MUST]: - **TD-003**
-    TEXT[!MUST,implementation,test]: The fake Pool Manager SHALL implement the immediate-on-lease,
-    TEXT[!MUST,implementation,test]:   minimum-size-threshold and replace-on-delete replenishment strategies as
-    TEXT[!MUST,implementation,test]:   declared in the `PoolSpec`.
+    TEXT[!MUST,todo]: The project SHALL provide a fake Pool Manager that serves the
+    TEXT[!MUST,todo]:   `poolmgr.v1alpha1` `PoolAdmin`, `Lease` and `Events` services over gRPC
+    TEXT[!MUST,todo]:   using the generated server stubs from the battery module.
+    TEXT[!MUST]: - **TD-002** The fake Pool Manager SHALL create, place and delete MicroVMs
+    TEXT[!MUST]:   through the same Host client interface the Runner uses, so that it can be
+    TEXT[!MUST]:   pointed at fake Hosts or at real `flintlockd` instances.
+    TEXT[!MUST]: - **TD-003** The fake Pool Manager SHALL implement the immediate-on-lease,
+    TEXT[!MUST]:   minimum-size-threshold and replace-on-delete replenishment strategies as
+    TEXT[!MUST]:   declared in the `PoolSpec`.
     TEXT[!MUST]: - **TD-004**
-    TEXT[!MUST,implementation,test]: The fake Pool Manager SHALL expire a Lease whose last heartbeat
-    TEXT[!MUST,implementation,test]:   is older than the Pool's heartbeat expiry threshold and SHALL delete the
-    TEXT[!MUST,implementation,test]:   expired Lease's MicroVM.
+    TEXT[!MUST,todo]: The fake Pool Manager SHALL expire a Lease whose last heartbeat
+    TEXT[!MUST,todo]:   is older than the Pool's heartbeat expiry threshold and SHALL delete the
+    TEXT[!MUST,todo]:   expired Lease's MicroVM.
     TEXT[!MUST]: - **TD-005**
-    TEXT[!MUST,implementation,test]: The fake Pool Manager SHALL return `RESOURCE_EXHAUSTED` from
-    TEXT[!MUST,implementation,test]:   `ClaimVM` when the Pool has no MicroVM in the `AVAILABLE` phase.
+    TEXT[!MUST,todo]: The fake Pool Manager SHALL return `RESOURCE_EXHAUSTED` from
+    TEXT[!MUST,todo]:   `ClaimVM` when the Pool has no MicroVM in the `AVAILABLE` phase.
     TEXT[!MUST]: - **TD-006**
-    TEXT[!MUST,implementation,test]: The fake Pool Manager SHALL emit every `Event` type defined in
-    TEXT[!MUST,implementation,test]:   the proto at the corresponding phase transition.
+    TEXT[!MUST,todo]: The fake Pool Manager SHALL emit every `Event` type defined in
+    TEXT[!MUST,todo]:   the proto at the corresponding phase transition.
     TEXT[!MUST]: - **TD-007**
-    TEXT[!MUST,implementation,test]: The fake Pool Manager SHALL place MicroVMs across a Pool's
-    TEXT[!MUST,implementation,test]:   `flintlock_hosts` by least MicroVM count, matching battery's design.
-    TEXT[!MUST]: - **TD-008**
-    TEXT[!MUST,implementation,test]: The fake Pool Manager SHALL populate the Host name on
-    TEXT[!MUST,implementation,test]:   `ClaimVMResponse` when the proto carries a field for it and SHALL provide
-    TEXT[!MUST,implementation,test]:   a switch that omits it, so that both Placement paths of the Scheduler are
-    TEXT[!MUST,implementation,test]:   tested.
+    TEXT[!MUST,todo]: The fake Pool Manager SHALL place MicroVMs across a Pool's
+    TEXT[!MUST,todo]:   `flintlock_hosts` by least MicroVM count, matching battery's design.
+    TEXT[!MUST]: - **TD-008** The fake Pool Manager SHALL populate the Host name on
+    TEXT[!MUST]:   `ClaimVMResponse` when the proto carries a field for it and SHALL provide
+    TEXT[!MUST]:   a switch that omits it, so that both Placement paths of the Scheduler are
+    TEXT[!MUST]:   tested.
     TEXT[!MUST]: - **TD-009**
-    TEXT[!MUST,implementation,test]: The fake Pool Manager SHALL be runnable as a standalone binary
-    TEXT[!MUST,implementation,test]:   as well as in process, so that a fleet without battery can run on it.
+    TEXT[!MUST,todo]: The fake Pool Manager SHALL be runnable as a standalone binary
+    TEXT[!MUST,todo]:   as well as in process, so that a fleet without battery can run on it.
     TEXT[!MUST]: - **TD-010**
-    TEXT[!MUST,implementation,test]: The fake Pool Manager SHALL support fault injection for claim
-    TEXT[!MUST,implementation,test]:   latency, a period of `UNAVAILABLE`, hook failure and a dropped `Events`
-    TEXT[!MUST,implementation,test]:   stream.
+    TEXT[!MUST,todo]: The fake Pool Manager SHALL support fault injection for claim
+    TEXT[!MUST,todo]:   latency, a period of `UNAVAILABLE`, hook failure and a dropped `Events`
+    TEXT[!MUST,todo]:   stream.
 
   SECTION: [Fake Host](#fake-host)
     TEXT[!MUST]: - **TD-020**
-    TEXT[!MUST,implementation,test]: The project SHALL provide a fake Host that serves the flintlock
-    TEXT[!MUST,implementation,test]:   `MicroVM` service, including `ServerInfo`, and the `MicroVMExec` service
-    TEXT[!MUST,implementation,test]:   over gRPC using the generated server stubs from the flintlock `api`
-    TEXT[!MUST,implementation,test]:   module.
+    TEXT[!MUST,todo]: The project SHALL provide a fake Host that serves the flintlock
+    TEXT[!MUST,todo]:   `MicroVM` service, including `ServerInfo`, and the `MicroVMExec` service
+    TEXT[!MUST,todo]:   over gRPC using the generated server stubs from the flintlock `api`
+    TEXT[!MUST,todo]:   module.
     TEXT[!MUST]: - **TD-021**
-    TEXT[!MUST,implementation,test]: The fake Host SHALL represent each MicroVM as a sandbox
-    TEXT[!MUST,implementation,test]:   directory on the local filesystem and SHALL run each `ExecCommand` as a
-    TEXT[!MUST,implementation,test]:   local process rooted in that directory, streaming standard input,
-    TEXT[!MUST,implementation,test]:   standard output, standard error and the exit code as `flintlockd` does.
+    TEXT[!MUST,todo]: The fake Host SHALL represent each MicroVM as a sandbox
+    TEXT[!MUST,todo]:   directory on the local filesystem and SHALL run each `ExecCommand` as a
+    TEXT[!MUST,todo]:   local process rooted in that directory, streaming standard input,
+    TEXT[!MUST,todo]:   standard output, standard error and the exit code as `flintlockd` does.
     TEXT[!MUST]: - **TD-022**
-    TEXT[!MUST,implementation,test]: The fake Host SHALL move a MicroVM from `PENDING` to `CREATED`
-    TEXT[!MUST,implementation,test]:   after a configurable boot delay and SHALL populate `vsock_path` in its
-    TEXT[!MUST,implementation,test]:   status.
+    TEXT[!MUST,todo]: The fake Host SHALL move a MicroVM from `PENDING` to `CREATED`
+    TEXT[!MUST,todo]:   after a configurable boot delay and SHALL populate `vsock_path` in its
+    TEXT[!MUST,todo]:   status.
     TEXT[!MUST]: - **TD-023**
-    TEXT[!MUST,implementation,test]: The fake Host SHALL honour the `cwd`, `env`, `timeout_seconds`,
-    TEXT[!MUST,implementation,test]:   `has_stdin` and `stdin_eof` fields of an exec request and SHALL accept
-    TEXT[!MUST,implementation,test]:   and ignore `user`.
-    TEXT[!MUST]: - **TD-024**
-    TEXT[!MUST,implementation,test]: The fake Host SHALL enforce basic auth and TLS when configured
-    TEXT[!MUST,implementation,test]:   so that the Runner's authentication code is exercised.
+    TEXT[!MUST,todo]: The fake Host SHALL honour the `cwd`, `env`, `timeout_seconds`,
+    TEXT[!MUST,todo]:   `has_stdin` and `stdin_eof` fields of an exec request and SHALL accept
+    TEXT[!MUST,todo]:   and ignore `user`.
+    TEXT[!MUST]: - **TD-024** The fake Host SHALL enforce basic auth and TLS when configured
+    TEXT[!MUST]:   so that the Runner's authentication code is exercised.
     TEXT[!MUST]: - **TD-025**
-    TEXT[!MUST,implementation,test]: The fake Host SHALL support fault injection for a create that
-    TEXT[!MUST,implementation,test]:   ends in `FAILED`, an exec stream dropped before the exit code, and a Host
-    TEXT[!MUST,implementation,test]:   that stops answering.
+    TEXT[!MUST,todo]: The fake Host SHALL support fault injection for a create that
+    TEXT[!MUST,todo]:   ends in `FAILED`, an exec stream dropped before the exit code, and a Host
+    TEXT[!MUST,todo]:   that stops answering.
     TEXT[!MUST]: - **TD-026**
-    TEXT[!MUST,implementation,test]: The fake Host SHALL report a configurable flintlock version and
-    TEXT[!MUST,implementation,test]:   service flags from `ServerInfo` and SHALL provide a mode in which
-    TEXT[!MUST,implementation,test]:   `ServerInfo` returns `UNIMPLEMENTED`.
+    TEXT[!MUST,todo]: The fake Host SHALL report a configurable flintlock version and
+    TEXT[!MUST,todo]:   service flags from `ServerInfo` and SHALL provide a mode in which
+    TEXT[!MUST,todo]:   `ServerInfo` returns `UNIMPLEMENTED`.
 
   SECTION: [Fake GitLab](#fake-gitlab)
     TEXT[!MUST]: - **TD-030**
-    TEXT[!MUST,implementation,test]: The project SHALL provide a fake GitLab HTTP server that
-    TEXT[!MUST,implementation,test]:   implements runner verification, job request with long polling and the
-    TEXT[!MUST,implementation,test]:   `X-GitLab-Last-Update` header, job update, trace patching with
-    TEXT[!MUST,implementation,test]:   `Content-Range` and range-not-satisfiable handling, artifact upload and
-    TEXT[!MUST,implementation,test]:   dependency artifact download.
+    TEXT[!MUST,todo]: The project SHALL provide a fake GitLab HTTP server that
+    TEXT[!MUST,todo]:   implements runner verification, job request with long polling and the
+    TEXT[!MUST,todo]:   `X-GitLab-Last-Update` header, job update, trace patching with
+    TEXT[!MUST,todo]:   `Content-Range` and range-not-satisfiable handling, artifact upload and
+    TEXT[!MUST,todo]:   dependency artifact download.
     TEXT[!MUST]: - **TD-031**
-    TEXT[!MUST,implementation,test]: The fake GitLab SHALL hand out Jobs from a queue of `spec.Job`
-    TEXT[!MUST,implementation,test]:   payloads supplied by the test and SHALL record every state update and the
-    TEXT[!MUST,implementation,test]:   assembled trace for each Job.
+    TEXT[!MUST,todo]: The fake GitLab SHALL hand out Jobs from a queue of `spec.Job`
+    TEXT[!MUST,todo]:   payloads supplied by the test and SHALL record every state update and the
+    TEXT[!MUST,todo]:   assembled trace for each Job.
     TEXT[!MUST]: - **TD-032**
-    TEXT[!MUST,implementation,test]: The fake GitLab SHALL be able to cancel a running Job through
-    TEXT[!MUST,implementation,test]:   the `Job-Status` header and to answer a final update with an
-    TEXT[!MUST,implementation,test]:   accepted-but-pending response a configurable number of times.
-    TEXT[!MUST]: - **TD-033**
-    TEXT[!MUST,implementation,test]: The fake GitLab SHALL require the runner token and a system
-    TEXT[!MUST,implementation,test]:   identifier on runner-scoped requests and the Job token on job-scoped
-    TEXT[!MUST,implementation,test]:   requests, as the real API does.
+    TEXT[!MUST,todo]: The fake GitLab SHALL be able to cancel a running Job through
+    TEXT[!MUST,todo]:   the `Job-Status` header and to answer a final update with an
+    TEXT[!MUST,todo]:   accepted-but-pending response a configurable number of times.
+    TEXT[!MUST]: - **TD-033** The fake GitLab SHALL require the runner token and a system
+    TEXT[!MUST]:   identifier on runner-scoped requests and the Job token on job-scoped
+    TEXT[!MUST]:   requests, as the real API does.
     TEXT[!MUST]: - **TD-034**
-    TEXT[!MUST,implementation,test]: The project SHALL provide a fake object store that accepts the
-    TEXT[!MUST,implementation,test]:   pre-signed style requests the gitlab-runner cache client issues, so that
-    TEXT[!MUST,implementation,test]:   the `cache:` keyword works end to end against a local endpoint.
+    TEXT[!MUST,todo]: The project SHALL provide a fake object store that accepts the
+    TEXT[!MUST,todo]:   pre-signed style requests the gitlab-runner cache client issues, so that
+    TEXT[!MUST,todo]:   the `cache:` keyword works end to end against a local endpoint.
 
   SECTION: [Fake AWS](#fake-aws)
     TEXT[!MUST]: - **TD-040** The Fleet Controller SHALL access EC2 and Systems Manager
