@@ -93,7 +93,6 @@ func TestNotImplementedExitCode(t *testing.T) {
 	if !errors.As(err, &exitErr) || exitErr.ExitCode() != exitNotImplemented {
 		t.Errorf("exit code = %v, want %d", err, exitNotImplemented)
 	}
-	_ = os.Stderr
 }
 
 // writeConfig writes a configuration file into a new temporary directory and
