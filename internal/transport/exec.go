@@ -195,11 +195,6 @@ func (t *execTransport) receive(ctx context.Context, cancel context.CancelFunc, 
 				return -1, t.streamFailure("host stopped answering", unreachable)
 			}
 			if errors.Is(err, io.EOF) {
-				//= docs/requirements/02-executor.md#guest-transport
-				//# The `exec` Guest Transport SHALL treat an `error` payload
-				//# in the response stream as a transport failure and SHALL
-				//# treat an `exit_code` payload as the command's exit status.
-
 				// The stream ended without an exit_code payload, so the
 				// command's status is unknown and the Stage must not be run
 				// again (EX-023).
@@ -209,6 +204,14 @@ func (t *execTransport) receive(ctx context.Context, cancel context.CancelFunc, 
 		}
 		watch.sawResponse()
 
+		//= docs/requirements/02-executor.md#guest-transport
+		//# The `exec` Guest Transport SHALL treat an `error` payload in the
+		//# response stream as a transport failure and SHALL treat an
+		//# `exit_code` payload as the command's exit status.
+
+		// Output is written on its way past; the other two payloads end the
+		// exchange, one as a failure whose status is unknown and one as the
+		// command's own answer.
 		switch payload := resp.GetPayload().(type) {
 		case *execv1.ExecCommandResponse_Stdout:
 			if err := write(stdout, payload.Stdout); err != nil {
