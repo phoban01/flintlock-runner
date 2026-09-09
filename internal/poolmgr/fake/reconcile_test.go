@@ -4,6 +4,7 @@ import (
 	"errors"
 	"sync"
 	"testing"
+	"time"
 
 	poolmgrv1 "github.com/liquidmetal-dev/battery/api/proto/poolmgr/v1alpha1"
 
@@ -111,4 +112,34 @@ func TestDeletionRetriesDoNotRaceOnVMState(t *testing.T) {
 	h.advance(testInterval)
 	h.waitEvent(poolmgrv1.EventType_VM_DELETED_ON_RELEASE)
 	assertDeleted(t, host, claim.VMUID)
+}
+
+// TestExpiryWarningIsForgottenWithItsLease releases a Lease the control loop
+// has already warned about and checks that the warning goes with it. The
+// record is per lease id, and lease ids are never reused, so one left behind
+// for a Lease that ended by release rather than by expiry grows the map for
+// as long as the Pool exists, which in the standalone binary is the life of
+// the process.
+func TestExpiryWarningIsForgottenWithItsLease(t *testing.T) {
+	h := newHarness(t, poolmgr.FakeConfig{}, "host-a")
+	h.createPool(h.spec("pool", 1, "host-a"))
+	claim := h.claim("pool")
+
+	// Within one heartbeat interval of the expiry, the loop warns.
+	h.advance(21 * time.Second)
+	warning := h.waitEvent(poolmgrv1.EventType_VM_EXPIRING_SOON)
+	if warning.VMUID != claim.VMUID {
+		t.Fatalf("VM_EXPIRING_SOON names %q, want the leased microvm %q", warning.VMUID, claim.VMUID)
+	}
+	if n := h.warned("pool"); n != 1 {
+		t.Fatalf("%d warned leases after the warning, want 1", n)
+	}
+
+	h.release(claim.LeaseID)
+	if leases := h.pm.Leases(); len(leases) != 0 {
+		t.Fatalf("leases after the release = %+v, want none", leases)
+	}
+	if n := h.warned("pool"); n != 0 {
+		t.Fatalf("%d warned leases after the release, want none: the record must not outlive the lease", n)
+	}
 }

@@ -299,7 +299,7 @@ func (p *PoolManager) cleanupAll() {
 	defer p.mu.Unlock()
 	for id, ls := range p.leases {
 		p.log.Warn("shutdown: lease dropped", "lease_id", id, "vm_uid", ls.rec.VMUID)
-		delete(p.leases, id)
+		p.dropLeaseLocked(id)
 	}
 }
 

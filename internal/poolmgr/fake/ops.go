@@ -317,7 +317,7 @@ func (p *PoolManager) releaseVM(ctx context.Context, leaseID string) error {
 	}
 	vm := p.vmByUID[ls.rec.VMUID]
 	if vm == nil {
-		delete(p.leases, leaseID)
+		p.dropLeaseLocked(leaseID)
 		p.mu.Unlock()
 		return nil
 	}

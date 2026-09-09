@@ -98,8 +98,7 @@ func (p *PoolManager) tick(ctx context.Context) {
 			continue
 		}
 		if !ls.rec.ExpiresAt.After(now) {
-			delete(p.leases, id)
-			delete(ps.warned, id)
+			p.dropLeaseLocked(id)
 			if vm := p.vmByUID[ls.rec.VMUID]; vm != nil && vm.phase == poolmgrv1.VMPhase_LEASED {
 				expired = append(expired, vm)
 			}
@@ -440,7 +439,7 @@ func (p *PoolManager) finishDeletionLocked(vm *vmState) {
 	}
 	payload := map[string]any{"host": vm.host}
 	if vm.leaseID != "" {
-		delete(p.leases, vm.leaseID)
+		p.dropLeaseLocked(vm.leaseID)
 		payload["lease_id"] = vm.leaseID
 	}
 	ps, ok := p.pools[vm.pool]

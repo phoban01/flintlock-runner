@@ -67,6 +67,21 @@ type leaseState struct {
 	rec poolmgr.LeaseRecord
 }
 
+// dropLeaseLocked forgets a Lease and everything the control loop recorded
+// against it, so that nothing outlives the Lease that owned it. Every path
+// that ends a Lease goes through it: expiry, release, the deletion of the
+// MicroVM and shutdown.
+func (p *PoolManager) dropLeaseLocked(leaseID string) {
+	ls, ok := p.leases[leaseID]
+	if !ok {
+		return
+	}
+	delete(p.leases, leaseID)
+	if ps, ok := p.pools[keyOf(ls.rec.Pool)]; ok {
+		delete(ps.warned, leaseID)
+	}
+}
+
 // counts is a Pool's population by phase, as PoolStatus reports it.
 type counts struct {
 	available, leased, provisioning, quarantined int32

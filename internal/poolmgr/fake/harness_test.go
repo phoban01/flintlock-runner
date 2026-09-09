@@ -533,6 +533,20 @@ func (h *harness) rawLease() poolmgrv1.LeaseClient {
 	return poolmgrv1.NewLeaseClient(h.rawConn())
 }
 
+// warned is how many Leases of a Pool the control loop still has an
+// expiry warning recorded against. It is bookkeeping no RPC exposes, and a
+// long-running fake must not accumulate it.
+func (h *harness) warned(name string) int {
+	h.t.Helper()
+	h.pm.mu.Lock()
+	defer h.pm.mu.Unlock()
+	ps, ok := h.pm.pools[keyOf(h.ref(name))]
+	if !ok {
+		h.t.Fatalf("pool %s is not declared", name)
+	}
+	return len(ps.warned)
+}
+
 // vmHosts counts the fake's MicroVMs per Host.
 func (h *harness) vmHosts() map[string]int {
 	h.t.Helper()
