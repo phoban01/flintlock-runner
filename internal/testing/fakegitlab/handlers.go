@@ -76,8 +76,16 @@ func (e *apiError) write(w http.ResponseWriter) {
 	writeError(w, e.code, e.message)
 }
 
+//= docs/requirements/10-test-doubles.md#fake-gitlab
+//# The project SHALL provide a fake GitLab HTTP server that implements
+//# runner verification, job request with long polling and the
+//# `X-GitLab-Last-Update` header, job update, trace patching with
+//# `Content-Range` and range-not-satisfiable handling, artifact upload and
+//# dependency artifact download.
+
 // Handler returns the HTTP handler behind Start, for tests that prefer
-// httptest or want to mount the fake elsewhere.
+// httptest or want to mount the fake elsewhere. Its routes are the subset
+// of the GitLab Runner API the network client uses (TD-030).
 func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("POST /api/v4/runners", s.handleRegister)
@@ -162,6 +170,11 @@ func jobToken(r *http.Request, bodyToken string) string {
 	}
 	return r.URL.Query().Get("token")
 }
+
+//= docs/requirements/10-test-doubles.md#fake-gitlab
+//# The fake GitLab SHALL require the runner token and a system
+//# identifier on runner-scoped requests and the Job token on job-scoped
+//# requests, as the real API does.
 
 // authJobLocked resolves a job-scoped request the way authenticate_job!
 // does: unknown job is 404, wrong token is 403, and a job that is no longer
@@ -331,7 +344,21 @@ func (s *Server) handleUpdateJob(w http.ResponseWriter, r *http.Request) {
 	_, _ = io.WriteString(w, strconv.Itoa(code))
 }
 
-// applyUpdate records an update request and decides its status code.
+//= docs/requirements/10-test-doubles.md#fake-gitlab
+//# The fake GitLab SHALL hand out Jobs from a queue of `spec.Job` payloads
+//# supplied by the test and SHALL record every state update and the
+//# assembled trace for each Job.
+
+//= docs/requirements/10-test-doubles.md#fake-gitlab
+//# The fake GitLab SHALL be able to cancel a running Job through the
+//# `Job-Status` header and to answer a final update with an
+//# accepted-but-pending response a configurable number of times.
+
+// applyUpdate records an update request (TD-031) and decides its status
+// code: a running state is a heartbeat, and a final state is answered
+// accepted-but-pending while the configured count lasts (TD-032) and then
+// confirmed, which moves the Job to its terminal status - canceled when
+// GitLab was cancelling it, otherwise the state the Runner reported.
 func (j *jobState) applyUpdate(req updateRequest) (int, *apiError) {
 	u := Update{
 		State:         req.State,
