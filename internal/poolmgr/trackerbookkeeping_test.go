@@ -68,12 +68,6 @@ func TestOneMicroVMLeavesThePolledCountOnce(t *testing.T) {
 	}
 }
 
-//= docs/requirements/04-pool-manager.md#capacity-tracking
-//= type=test
-//# When the `Events` stream is unavailable, the Scheduler SHALL fall back
-//# to polling `GetPool` at the configured interval until the stream can be
-//# re-established.
-
 // TestAPoolCountedDownToNothingIsPolled replays the backlog a Runner that
 // has just restarted is handed: claims for MicroVMs whose availability
 // events have fallen out of the Pool Manager's outbox window, so the
@@ -111,10 +105,6 @@ func TestAPoolCountedDownToNothingIsPolled(t *testing.T) {
 		return admin.calls() > polls && tracker.Available(pool) == 3
 	})
 }
-
-//= docs/requirements/04-pool-manager.md#capacity-tracking
-//= type=test
-//# The Scheduler SHALL expose each Pool's available count as a metric.
 
 // TestOtherRunnersPoolsAreNotTracked sends an event for a Pool in another
 // Runner's namespace, which a subscription to every Pool carries on a
@@ -154,11 +144,6 @@ func TestOtherRunnersPoolsAreNotTracked(t *testing.T) {
 		t.Errorf("polled pools = %v, want another runner's pool never polled", polled)
 	}
 }
-
-//= docs/requirements/04-pool-manager.md#capacity-tracking
-//= type=test
-//# The Scheduler SHALL track the number of available warm MicroVMs in every
-//# Pool by subscribing to the `Events` service.
 
 // TestResubscriptionResynchronisesThePoolManagersCounts checks that a
 // subscription granted after one was lost is followed by a poll. Leased,
