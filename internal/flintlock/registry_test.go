@@ -52,10 +52,11 @@ func TestApplyAddsAndRetiresHosts(t *testing.T) {
 	defer cancel()
 
 	// A Job is running on h2 and holds its client.
-	running, err := reg.Get("h2")
+	running, release, err := reg.Lease("h2")
 	if err != nil {
-		t.Fatalf("Get(h2): %v", err)
+		t.Fatalf("Lease(h2): %v", err)
 	}
+	defer release()
 
 	if err := reg.Apply(ctx, []flintlock.Endpoint{
 		endpoint("h1", h1.Addr()),
@@ -94,6 +95,88 @@ func TestApplyAddsAndRetiresHosts(t *testing.T) {
 	}
 }
 
+//= docs/requirements/05-hosts.md#inventory
+//= type=test
+//# When the configuration is reloaded, the Runner SHALL add new
+//# Hosts, stop probing removed Hosts and keep serving Jobs on removed Hosts
+//# until they finish.
+
+// TestReloadReleasesTheClientsItRetires is the far side of "until they
+// finish". A removed Host's connection has to outlive the reload for the
+// Job that is still running there, and no longer than that: each
+// connection is dialled with keepalive permitted without streams, so one
+// that is never released goes on pinging a machine that has left the
+// Inventory for the life of the process, and a Runner whose Inventory is
+// regenerated would collect one per reload.
+//
+// So the three cases are checked apart: a Host removed while a Job holds a
+// lease keeps its connection until the Job releases it, a Host removed with
+// nothing holding it loses its connection there and then, and releasing a
+// lease on a Host that is still in the Inventory releases nothing.
+func TestReloadReleasesTheClientsItRetires(t *testing.T) {
+	t.Parallel()
+	h1 := startHost(t, flintlock.FakeHostConfig{Name: "h1", ExecEnabled: true})
+	h2 := startHost(t, flintlock.FakeHostConfig{Name: "h2", ExecEnabled: true})
+	h3 := startHost(t, flintlock.FakeHostConfig{Name: "h3", ExecEnabled: true})
+
+	endpoint := func(name, addr string) flintlock.Endpoint {
+		return flintlock.Endpoint{Name: name, Address: addr, TLS: flintlock.TLSOptions{Insecure: true}}
+	}
+	reg := newRegistry(t, []flintlock.Endpoint{endpoint("h1", h1.Addr()), endpoint("h2", h2.Addr())})
+
+	ctx, cancel := context.WithTimeout(context.Background(), testTimeout)
+	defer cancel()
+
+	// A Job is running on h2 when the reload drops it.
+	running, release, err := reg.Lease("h2")
+	if err != nil {
+		t.Fatalf("Lease(h2): %v", err)
+	}
+	if err := reg.Apply(ctx, []flintlock.Endpoint{endpoint("h1", h1.Addr())}); err != nil {
+		t.Fatalf("Apply: %v", err)
+	}
+	if _, err := running.ServerInfo(ctx); err != nil {
+		t.Fatalf("the leased client of a removed host stopped working: %v", err)
+	}
+
+	// The Job finishes: nothing holds the removed Host any more, so its
+	// connection goes rather than being kept until the process exits.
+	release()
+	if _, err := running.ServerInfo(ctx); err == nil {
+		t.Error("the connection to a removed host outlived the last lease on it")
+	}
+
+	// A Host removed with nothing holding it is released by the reload
+	// itself.
+	if err := reg.Apply(ctx, []flintlock.Endpoint{endpoint("h1", h1.Addr()), endpoint("h3", h3.Addr())}); err != nil {
+		t.Fatalf("Apply adding h3: %v", err)
+	}
+	unheld, err := reg.Get("h3")
+	if err != nil {
+		t.Fatalf("Get(h3): %v", err)
+	}
+	if _, err := unheld.ServerInfo(ctx); err != nil {
+		t.Fatalf("ServerInfo on the newly added host: %v", err)
+	}
+	if err := reg.Apply(ctx, []flintlock.Endpoint{endpoint("h1", h1.Addr())}); err != nil {
+		t.Fatalf("Apply removing h3: %v", err)
+	}
+	if _, err := unheld.ServerInfo(ctx); err == nil {
+		t.Error("the connection to a host removed with no lease on it was kept open")
+	}
+
+	// Releasing a lease on a Host that is still in the Inventory releases
+	// nothing: h1 was never removed.
+	kept, releaseKept, err := reg.Lease("h1")
+	if err != nil {
+		t.Fatalf("Lease(h1): %v", err)
+	}
+	releaseKept()
+	if _, err := kept.ServerInfo(ctx); err != nil {
+		t.Errorf("releasing a lease closed the client of a host that is still in the inventory: %v", err)
+	}
+}
+
 // TestApplyRedialsAChangedEndpoint checks the other half of a reload: an
 // entry that keeps its name but changes its address is dialled again, so
 // that the Registry does not go on using a connection to the machine the
@@ -109,10 +192,13 @@ func TestApplyRedialsAChangedEndpoint(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), testTimeout)
 	defer cancel()
 
-	client, err := reg.Get("h1")
+	// The Job that is running holds a lease, which is what keeps the
+	// connection to the old process open across the reload (HO-014).
+	client, release, err := reg.Lease("h1")
 	if err != nil {
-		t.Fatalf("Get: %v", err)
+		t.Fatalf("Lease: %v", err)
 	}
+	defer release()
 	info, err := client.ServerInfo(ctx)
 	if err != nil || info.Version != "before" {
 		t.Fatalf("ServerInfo returned (%v, %v), want version before", info, err)
@@ -191,6 +277,13 @@ func TestRegistryIsSafeForConcurrentUse(t *testing.T) {
 				_ = reg.Names()
 				if client, err := reg.Get("h1"); err == nil {
 					_ = client.Name()
+				}
+				// h2 comes and goes with every other reload, so leasing it
+				// races the reload that retires it and the release races
+				// the close that retirement leads to.
+				if client, release, err := reg.Lease("h2"); err == nil {
+					_ = client.Name()
+					release()
 				}
 				_, _ = reg.Endpoint("h2")
 			}

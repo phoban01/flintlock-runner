@@ -22,12 +22,15 @@ func ProbeAll(ctx context.Context, reg Registry, namespace string, log *slog.Log
 	infos := make(map[string]*HostInfo)
 	var errs []error
 	for _, name := range reg.Names() {
-		client, err := reg.Get(name)
+		client, release, err := reg.Lease(name)
 		if err != nil {
-			// The Host left the Inventory between Names and Get.
+			// The Host left the Inventory between Names and Lease.
 			continue
 		}
+		// The lease is what keeps the connection open for the length of the
+		// probe when a reload removes the Host underneath it (HO-014).
 		info, err := Probe(ctx, client, namespace, log)
+		release()
 		if err != nil {
 			errs = append(errs, err)
 			continue
