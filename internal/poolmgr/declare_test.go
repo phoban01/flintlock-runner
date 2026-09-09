@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"slices"
+	"sync"
 	"testing"
 	"time"
 
@@ -358,4 +359,70 @@ func TestDeclarationRejectsTwoProfilesSharingAPool(t *testing.T) {
 	if len(pools) != 1 {
 		t.Errorf("the pool manager holds %d pools, want the one that was not in conflict", len(pools))
 	}
+}
+
+// TestReloadAndRedeclareAreConcurrencySafe drives a configuration reload
+// against the re-declaration a NOT_FOUND claim makes, which reaches
+// Declaration from a Job goroutine, on the same Pool. Declaration documents
+// itself as safe for concurrent use, and the two paths overlap in
+// production: Sync rewrites a Pool's Profile name and spec under the mutex
+// while declare copies them out to declare the Pool and to log what it
+// did. Under -race the test fails if declare reads either of them without
+// the lock.
+func TestReloadAndRedeclareAreConcurrencySafe(t *testing.T) {
+	t.Parallel()
+	ctx, cancel := context.WithTimeout(context.Background(), testTimeout)
+	defer cancel()
+
+	d, err := poolmgr.NewDeclaration(poolmgr.DeclarationConfig{
+		Builder:       poolmgr.NewSpecBuilder(),
+		Selector:      poolmgr.NewHostSelector(),
+		Declarer:      stubDeclarer{},
+		RunnerName:    testRunner,
+		Namespace:     testNamespace,
+		Clock:         clock.NewFake(testEpoch),
+		RetryInterval: declareRetryInterval,
+		Log:           testLogger(t),
+	})
+	if err != nil {
+		t.Fatalf("NewDeclaration: %v", err)
+	}
+
+	profile := testProfile("small", 1)
+	inventory := testInventory()
+	if err := d.Sync(ctx, []config.Profile{profile}, inventory); err != nil {
+		t.Fatalf("Sync: %v", err)
+	}
+
+	const rounds = 200
+	var wg sync.WaitGroup
+	wg.Add(2)
+	go func() {
+		defer wg.Done()
+		for i := 0; i < rounds; i++ {
+			if err := d.Sync(ctx, []config.Profile{profile}, inventory); err != nil {
+				t.Errorf("Sync on reload %d: %v", i, err)
+				return
+			}
+		}
+	}()
+	go func() {
+		defer wg.Done()
+		for i := 0; i < rounds; i++ {
+			if err := d.Redeclare(ctx, ref("small")); err != nil {
+				t.Errorf("Redeclare %d: %v", i, err)
+				return
+			}
+		}
+	}()
+	wg.Wait()
+}
+
+// stubDeclarer answers every declaration in process, so that a concurrency
+// test can run hundreds of them without a Pool Manager.
+type stubDeclarer struct{}
+
+// Declare implements poolmgr.Declarer.
+func (stubDeclarer) Declare(_ context.Context, spec poolmgr.PoolSpec) (*poolmgr.Pool, error) {
+	return &poolmgr.Pool{Spec: spec}, nil
 }

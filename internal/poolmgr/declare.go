@@ -260,12 +260,20 @@ func (d *Declaration) Redeclare(ctx context.Context, ref PoolRef) error {
 
 // declare declares one Pool and records the outcome. The Tracker learns
 // whether the Pool is declared, so that an undeclared Pool counts as empty.
+//
+// Everything this reads out of the Pool's state is copied while d.mu is
+// held, the Profile name of the log lines included: Sync overwrites both
+// the spec and the Profile name on a configuration reload, and a reload
+// runs beside the redeclare a NOT_FOUND claim makes from a Job goroutine.
 func (d *Declaration) declare(ctx context.Context, ref PoolRef) error {
 	d.mu.Lock()
 	state, ok := d.pools[ref]
-	var spec PoolSpec
+	var (
+		spec    PoolSpec
+		profile string
+	)
 	if ok {
-		spec = state.spec
+		spec, profile = state.spec, state.profile
 	}
 	d.mu.Unlock()
 	if !ok {
@@ -282,14 +290,14 @@ func (d *Declaration) declare(ctx context.Context, ref PoolRef) error {
 
 	if err != nil {
 		d.log.Error("pool not declared; treating it as empty and retrying",
-			"pool", ref.String(), "profile", state.profile,
+			"pool", ref.String(), "profile", profile,
 			"retry_in", d.cfg.RetryInterval, "error", err)
 		if d.cfg.Tracker != nil {
 			d.cfg.Tracker.Track(ref, false)
 		}
 		return err
 	}
-	d.log.Info("pool declared", "pool", ref.String(), "profile", state.profile,
+	d.log.Info("pool declared", "pool", ref.String(), "profile", profile,
 		"size", pool.Spec.Size, "hosts", pool.Spec.FlintlockHosts)
 	if d.cfg.Tracker != nil {
 		d.cfg.Tracker.Track(ref, true)
