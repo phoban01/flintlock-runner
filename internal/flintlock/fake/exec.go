@@ -63,6 +63,12 @@ const (
 func (h *Host) execCommand(stream execStream) error {
 	first, err := stream.Recv()
 	if err != nil {
+		// io.EOF is never propagated: to a client it is the marker of a
+		// clean end of stream, and a client that half-closed without ever
+		// starting a command has to see a failure instead.
+		if errors.Is(err, io.EOF) {
+			return errors.New("exec stream closed before the start message")
+		}
 		return fmt.Errorf("receiving exec start message: %w", err)
 	}
 	start := first.GetStart()
@@ -185,6 +191,16 @@ func (r *execRun) buildCommand() (*exec.Cmd, error) {
 	if err != nil {
 		return nil, err
 	}
+	// os/exec reports a working directory that does not exist as a failure
+	// of the binary it could not run ("fork/exec /bin/sh: no such file or
+	// directory"), which names the wrong thing. Check it here so that the
+	// error payload names the cwd the request asked for, as the guest agent's
+	// chdir failure would.
+	if info, err := os.Stat(dir); err != nil {
+		return nil, fmt.Errorf("cwd %q: %w", r.start.GetCwd(), err)
+	} else if !info.IsDir() {
+		return nil, fmt.Errorf("cwd %q is not a directory", r.start.GetCwd())
+	}
 
 	var cmd *exec.Cmd
 	if r.start.GetShell() {
@@ -205,11 +221,21 @@ func (r *execRun) buildCommand() (*exec.Cmd, error) {
 
 // sandboxDir resolves a guest working directory inside the sandbox. The
 // sandbox stands in for the guest's root, so an absolute cwd is taken
-// relative to it and a relative one relative to it as well; a path that
-// climbs out of the sandbox is refused.
+// relative to it and a relative one relative to it as well.
+//
+// The two are clamped differently, which is how the guest's kernel would
+// see them. An absolute cwd is a path from the guest's root and cannot name
+// anything above it: "/.." is the root itself, exactly as it is inside a
+// chroot, so it is cleaned as an absolute path before it is joined. A
+// relative cwd is interpreted from wherever the caller thinks it is, and one
+// that climbs above the sandbox is a request the fake cannot honour without
+// letting a Job read the test machine, so it is refused.
 func sandboxDir(sandbox, cwd string) (string, error) {
 	if cwd == "" {
 		return sandbox, nil
+	}
+	if filepath.IsAbs(cwd) {
+		cwd = filepath.Clean(cwd)
 	}
 	dir := filepath.Join(sandbox, cwd)
 	if dir != sandbox && !strings.HasPrefix(dir, sandbox+string(filepath.Separator)) {

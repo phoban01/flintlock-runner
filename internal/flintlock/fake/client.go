@@ -241,32 +241,54 @@ func (s *memExecStream) Send(req *execv1.ExecCommandRequest) error {
 }
 
 // Recv implements flintlock.ExecStream.
+//
+// The three end conditions are ranked, because finish closes done and then
+// cancels the stream context, so at the end of a healthy exchange both are
+// ready at once and a single select over them would pick at random. A
+// buffered response always wins, the handler's own result comes next, and
+// the context error is only reached while the handler is still running,
+// which is when the caller or the Host, rather than the command, ended the
+// stream.
 func (s *memExecStream) Recv() (*execv1.ExecCommandResponse, error) {
-	select {
-	case resp := <-s.resps:
-		return resp, nil
-	default:
-	}
-	select {
-	case resp := <-s.resps:
-		return resp, nil
-	case <-s.done:
-		// Drain what the handler sent before finishing.
+	for {
 		select {
 		case resp := <-s.resps:
 			return resp, nil
 		default:
 		}
-		s.mu.Lock()
-		err := s.err
-		s.mu.Unlock()
-		if err == nil {
-			return nil, io.EOF
+		select {
+		case <-s.done:
+			return s.result()
+		default:
 		}
-		return nil, err
-	case <-s.ctx.Done():
-		return nil, statusToSentinel("", status.FromContextError(s.ctx.Err()).Err())
+		select {
+		case resp := <-s.resps:
+			return resp, nil
+		case <-s.done:
+			// Loop so that anything the handler sent before finishing is
+			// delivered ahead of the result.
+		case <-s.ctx.Done():
+			return nil, statusToSentinel("", status.FromContextError(s.ctx.Err()).Err())
+		}
 	}
+}
+
+// result reports what the finished handler left behind: the next buffered
+// response if there is one, then its error, then io.EOF for a stream that
+// ended normally.
+func (s *memExecStream) result() (*execv1.ExecCommandResponse, error) {
+	select {
+	case resp := <-s.resps:
+		return resp, nil
+	default:
+	}
+	s.mu.Lock()
+	err := s.err
+	s.mu.Unlock()
+	if err == nil {
+		return nil, io.EOF
+	}
+	return nil, err
 }
 
 // CloseSend implements flintlock.ExecStream.
