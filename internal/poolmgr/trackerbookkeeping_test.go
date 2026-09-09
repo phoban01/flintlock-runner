@@ -145,57 +145,46 @@ func TestOtherRunnersPoolsAreNotTracked(t *testing.T) {
 	}
 }
 
-// TestResubscriptionResynchronisesThePoolManagersCounts checks that a
-// subscription granted after one was lost is followed by a poll. Leased,
-// provisioning and quarantined are running totals rather than uid-keyed
-// sets, so the recent events a new subscription is replayed double count
-// them, and the periodic poll that would repair that only runs while the
-// stream is down. The test holds the new subscription closed until the poll
-// the stream being down produced is over, then grants it without moving the
-// clock, so the only poll that can carry the new figure is the one the
-// subscription itself asked for.
-func TestResubscriptionResynchronisesThePoolManagersCounts(t *testing.T) {
+// TestReplayedEventsDoNotInflateTheOtherCounts replays the events a new
+// subscription is handed for MicroVMs the poll had already counted: the
+// claim of a leased MicroVM and the creation of a provisioning one. Leased,
+// provisioning and quarantined are what PoolAvailability.Status reports for
+// OB-016 and OB-019, and folding them as running totals counts every
+// replayed event again, on every re-subscription, with nothing to repair it
+// while the stream stays up.
+func TestReplayedEventsDoNotInflateTheOtherCounts(t *testing.T) {
 	t.Parallel()
 	ctx, cancel := context.WithTimeout(context.Background(), testTimeout)
 	defer cancel()
 
 	pool := ref("small")
 	events := newScriptedEvents()
-	admin := newStubAdmin(2, poolmgr.PoolStatus{Leased: 1})
+	admin := newStubAdmin(3, poolmgr.PoolStatus{Leased: 1, Provisioning: 1})
 	tracker := newTrackerWith(t, events, admin, nil, trackerPollInterval, nil)
 	tracker.run(t)
 	events.awaitSubscribed(t, ctx)
 	tracker.Track(pool, true)
-	tracker.await(t, ctx, "the first poll", func() bool {
-		return poolStatus(t, tracker, pool).Leased == 1
+	tracker.await(t, ctx, "the poll to count one leased and one provisioning microvm", func() bool {
+		status := poolStatus(t, tracker, pool)
+		return status.Leased == 1 && status.Provisioning == 1
 	})
 
-	// A claim the poll had already counted, replayed: the running total
-	// now says two where the Pool Manager says one.
-	events.send(vmEvent(pool, poolmgrv1.EventType_VM_CLAIMED, "vm-1", 1))
-	tracker.awaitEvent(t, ctx, "the replayed claim", func(e *poolmgr.Event) bool {
-		return e.Type == poolmgrv1.EventType_VM_CLAIMED
-	})
-	if got := poolStatus(t, tracker, pool).Leased; got != 2 {
-		t.Fatalf("leased = %d after a replayed claim, want the inflated 2 this test repairs", got)
+	// The events behind the counts the poll reported, delivered twice, as
+	// two subscriptions replaying the same window would.
+	for round := int64(1); round <= 2; round++ {
+		events.send(vmEvent(pool, poolmgrv1.EventType_VM_CLAIMED, "vm-leased", round*10))
+		events.send(vmEvent(pool, poolmgrv1.EventType_VM_PROVISIONED, "vm-booting", round*10+1))
+		tracker.awaitEvent(t, ctx, "the replayed provisioning event", func(e *poolmgr.Event) bool {
+			return e.ID == round*10+1
+		})
+		status := poolStatus(t, tracker, pool)
+		if status.Leased != 1 {
+			t.Errorf("leased = %d after replay %d, want the pool manager's 1", status.Leased, round)
+		}
+		if status.Provisioning != 1 {
+			t.Errorf("provisioning = %d after replay %d, want the pool manager's 1", status.Provisioning, round)
+		}
 	}
-
-	events.hold()
-	events.drop()
-	awaitTimers(t, ctx, tracker.clk, 2)
-	tracker.clk.Advance(trackerPollInterval)
-	tracker.await(t, ctx, "the poll the stream being down produced", func() bool {
-		return poolStatus(t, tracker, pool).Leased == 1
-	})
-	awaitTimers(t, ctx, tracker.clk, 1)
-
-	// From here the clock stands still, so only a poll the new
-	// subscription asks for can carry this figure into the Tracker.
-	admin.setStatus(poolmgr.PoolStatus{Leased: 5})
-	events.release()
-	tracker.await(t, ctx, "the poll the new subscription asked for", func() bool {
-		return poolStatus(t, tracker, pool).Leased == 5
-	})
 }
 
 //= docs/requirements/04-pool-manager.md#capacity-tracking
@@ -271,14 +260,11 @@ func vmEvent(pool poolmgr.PoolRef, typ poolmgr.EventType, uid string, id int64) 
 	return &poolmgr.Event{ID: id, Pool: pool, VMUID: uid, Type: typ, At: testEpoch}
 }
 
-// scriptedEvents is an Events service a test drives by hand. Subscribe
-// hands out one stream at a time and can be held closed, so that a test
-// decides when a subscription is granted; send pushes onto the current
-// stream the events the Pool Manager would have sent, and drop ends it the
-// way the Pool Manager dropping the subscription would.
+// scriptedEvents is an Events service a test drives by hand: Subscribe
+// hands out one stream at a time and send pushes onto it the events the
+// Pool Manager would have sent.
 type scriptedEvents struct {
 	mu      sync.Mutex
-	gate    chan struct{}
 	current *scriptedStream
 	// granted carries one token per subscription handed out, so a test can
 	// wait for the Tracker to be listening before it sends anything.
@@ -301,38 +287,8 @@ func (e *scriptedEvents) awaitSubscribed(t *testing.T, ctx context.Context) {
 	}
 }
 
-// hold makes the next Subscribe block until release is called.
-func (e *scriptedEvents) hold() {
-	e.mu.Lock()
-	defer e.mu.Unlock()
-	if e.gate == nil {
-		e.gate = make(chan struct{})
-	}
-}
-
-// release grants a subscription that hold is keeping closed.
-func (e *scriptedEvents) release() {
-	e.mu.Lock()
-	gate := e.gate
-	e.gate = nil
-	e.mu.Unlock()
-	if gate != nil {
-		close(gate)
-	}
-}
-
 // Subscribe implements poolmgr.Events.
-func (e *scriptedEvents) Subscribe(ctx context.Context, _ poolmgr.EventFilter) (poolmgr.EventStream, error) {
-	e.mu.Lock()
-	gate := e.gate
-	e.mu.Unlock()
-	if gate != nil {
-		select {
-		case <-gate:
-		case <-ctx.Done():
-			return nil, ctx.Err()
-		}
-	}
+func (e *scriptedEvents) Subscribe(_ context.Context, _ poolmgr.EventFilter) (poolmgr.EventStream, error) {
 	s := newScriptedStream()
 	e.mu.Lock()
 	e.current = s
@@ -351,16 +307,6 @@ func (e *scriptedEvents) send(event *poolmgr.Event) {
 	e.mu.Unlock()
 	if s != nil {
 		s.events <- event
-	}
-}
-
-// drop ends the current stream.
-func (e *scriptedEvents) drop() {
-	e.mu.Lock()
-	s := e.current
-	e.mu.Unlock()
-	if s != nil {
-		_ = s.Close()
 	}
 }
 
@@ -409,13 +355,6 @@ type stubAdmin struct {
 
 func newStubAdmin(size int32, status poolmgr.PoolStatus) *stubAdmin {
 	return &stubAdmin{size: size, status: status}
-}
-
-// setStatus changes what the next GetPool answers with.
-func (a *stubAdmin) setStatus(status poolmgr.PoolStatus) {
-	a.mu.Lock()
-	defer a.mu.Unlock()
-	a.status = status
 }
 
 // failWith makes every later GetPool fail, so that a test can be sure no
