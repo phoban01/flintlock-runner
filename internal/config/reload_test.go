@@ -427,6 +427,54 @@ func TestReloadReportsSubscriberErrors(t *testing.T) {
 	}
 }
 
+//= docs/requirements/07-configuration.md#file-and-precedence
+//= type=test
+//# When the Runner receives `SIGHUP`, the Runner SHALL reload the
+//# Profiles and the Inventory from disk without interrupting running Jobs.
+
+// TestReloadRunsSubscribersOutsideTheLock checks that the notification loop
+// is not inside the Reloader's critical section. Subscribers are the
+// callbacks main registers; one that calls back into Subscribe or Reload
+// would deadlock the whole reload path, and every later SIGHUP with it, if
+// the lock were still held while they run.
+func TestReloadRunsSubscribersOutsideTheLock(t *testing.T) {
+	t.Parallel()
+	f := newReloadFixture(t)
+
+	reentered := false
+	f.r.Subscribe(func(ctx context.Context, _ *Config) error {
+		// Reading the current configuration and registering another
+		// subscriber both take the Reloader's lock.
+		_ = f.r.Current()
+		f.r.Subscribe(func(context.Context, *Config) error { return nil })
+		if !reentered {
+			reentered = true
+			if err := f.r.Reload(ctx); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+
+	f.rewrite(t, strings.Replace(twoProfileConfig, "      size: 2\n", "      size: 5\n", 1))
+	done := make(chan error, 1)
+	go func() { done <- f.r.Reload(t.Context()) }()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("Reload = %v, want nil", err)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("Reload deadlocked: a subscriber that calls back into the Reloader blocked on the lock Reload still held")
+	}
+	if !reentered {
+		t.Error("the re-entrant subscriber did not run")
+	}
+	if got := f.r.Current().Profiles[0].Pool.Size; got != 5 {
+		t.Errorf("pool size = %d, want 5", got)
+	}
+}
+
 // TestReloadStopsOnContextCancellation checks that a cancelled context stops
 // a reload before it touches the file.
 func TestReloadStopsOnContextCancellation(t *testing.T) {

@@ -73,17 +73,40 @@ func (r *Reloader) Subscribe(fn ReloadFunc) {
 // subscribers such as the Scheduler re-declare Pools without touching held
 // Leases. When the file fails to load or validate, the current configuration
 // stays in place and the error is logged and returned (CF-008).
+// Subscribers run after the lock is released, so a subscriber may call back
+// into Subscribe, Current or Reload without deadlocking, and a slow one does
+// not hold up the next SIGHUP.
 func (r *Reloader) Reload(ctx context.Context) error {
+	next, subs, err := r.swap(ctx)
+	if err != nil {
+		return err
+	}
+	var errs []error
+	for _, fn := range subs {
+		if err := fn(ctx, next); err != nil {
+			r.logger.Error("reload subscriber failed", "error", err)
+			errs = append(errs, err)
+		}
+	}
+	return errors.Join(errs...)
+}
+
+// swap is the serialised half of Reload: it re-reads and validates the file
+// and publishes the new configuration, or leaves the current one in place
+// (CF-008). It returns the published configuration together with the
+// subscribers to notify, snapshotted under the same lock so that the
+// notification loop runs outside the critical section.
+func (r *Reloader) swap(ctx context.Context) (*Config, []ReloadFunc, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if err := ctx.Err(); err != nil {
-		return err
+		return nil, nil, err
 	}
 	loaded, err := Load(r.path, r.opts...)
 	if err != nil {
 		r.logger.Error("configuration reload rejected; keeping the previous configuration",
 			"path", r.path, "error", err)
-		return fmt.Errorf("config: reload %s: %w", r.path, err)
+		return nil, nil, fmt.Errorf("config: reload %s: %w", r.path, err)
 	}
 	old := r.current.Load()
 	next := *old
@@ -97,14 +120,9 @@ func (r *Reloader) Reload(ctx context.Context) error {
 	r.logger.Info("configuration reloaded",
 		"path", r.path, "profiles", len(next.Profiles), "hosts", len(next.Inventory.Hosts))
 
-	var errs []error
-	for _, fn := range r.subs {
-		if err := fn(ctx, &next); err != nil {
-			r.logger.Error("reload subscriber failed", "error", err)
-			errs = append(errs, err)
-		}
-	}
-	return errors.Join(errs...)
+	subs := make([]ReloadFunc, len(r.subs))
+	copy(subs, r.subs)
+	return &next, subs, nil
 }
 
 // onlyReloadableSectionsDiffer reports whether old and loaded agree on every
