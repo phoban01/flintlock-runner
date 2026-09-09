@@ -142,6 +142,14 @@ type Profile struct {
 	// names (SC-010).
 	ImageGlobs []string `yaml:"image_globs,omitempty"`
 	// Default marks the Default Profile; at most one Profile sets it (CF-022).
+	//
+	// It is an applied default: when the configuration declares exactly one
+	// Profile, ApplyDefaults marks that Profile as the Default whether or not
+	// the file said so. The effect is observable -- `config show` prints it,
+	// runnercfg.Build takes the runner-wide builds and cache directories from
+	// the Default Profile, and image resolution falls back to it. CF-022 says
+	// only that at most one Profile may be marked, so this is a documented
+	// default rather than a rule of the specification.
 	Default bool `yaml:"default,omitempty"`
 	// Transport selects and configures the Guest Transport (EX-042).
 	Transport Transport `yaml:"transport"`
