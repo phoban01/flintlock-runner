@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	poolmgrv1 "github.com/liquidmetal-dev/battery/api/proto/poolmgr/v1alpha1"
 	"github.com/liquidmetal-dev/flintlock/api/types"
 
 	"github.com/phoban01/flintlock-runner/internal/clock"
@@ -229,8 +230,12 @@ func (b stubSpecs) Build(p config.Profile, in poolmgr.SpecInput) (poolmgr.PoolSp
 			Vcpu:       int32(p.VCPU),
 			MemoryInMb: int32(p.MemoryMB),
 		},
-		Size:                     int32(p.Pool.Size),
-		FlintlockHosts:           in.Hosts,
+		Size:           int32(p.Pool.Size),
+		FlintlockHosts: in.Hosts,
+		Replenishment: poolmgr.ReplenishmentStrategy{
+			Type: poolmgrv1.ReplenishmentStrategyType_IMMEDIATE_ON_LEASE,
+		},
+		HookFailurePolicy:        poolmgrv1.HookFailurePolicy_DELETE_AND_REPLACE,
 		HeartbeatInterval:        p.Pool.HeartbeatInterval,
 		HeartbeatExpiryThreshold: p.Pool.HeartbeatExpiry,
 	}, nil
@@ -461,6 +466,14 @@ type stubClient struct {
 	releases   []string
 	getPools   int
 	subscribed int
+	// releasedCh announces every release, so a test waits for one instead of
+	// polling.
+	releasedCh chan string
+}
+
+// newStubClient is a scripted Pool Manager client.
+func newStubClient() *stubClient {
+	return &stubClient{releasedCh: make(chan string, 64)}
 }
 
 func (c *stubClient) CreatePool(context.Context, poolmgr.PoolSpec) (*poolmgr.Pool, error) {
@@ -512,7 +525,14 @@ func (c *stubClient) ReleaseVM(ctx context.Context, leaseID string) error {
 	c.mu.Lock()
 	c.releases = append(c.releases, leaseID)
 	fn := c.releaseFn
+	ch := c.releasedCh
 	c.mu.Unlock()
+	if ch != nil {
+		select {
+		case ch <- leaseID:
+		default:
+		}
+	}
 	if fn == nil {
 		return nil
 	}
@@ -792,7 +812,7 @@ func newEnv(t *testing.T, cfg envConfig) *env {
 		cfg.inventory = []config.HostEntry{testHostEntry("host-1")}
 	}
 	if cfg.client == nil {
-		cfg.client = &stubClient{}
+		cfg.client = newStubClient()
 	}
 	if cfg.backoff == nil {
 		cfg.backoff = clock.Exponential{Base: time.Minute}
@@ -1010,15 +1030,31 @@ func newFakeHost(t *testing.T, name string) *flfake.Host {
 // does not move the Pool Manager's expiry sweeper.
 func newFakePoolManager(t *testing.T, ctx context.Context, hosts map[string]flintlock.PoolHostClient) (*pmfake.PoolManager, poolmgr.Client) {
 	t.Helper()
+	return newFakePoolManagerWith(t, ctx, hosts, nil)
+}
+
+// newFakePoolManagerWith is newFakePoolManager with the fake's configuration
+// adjusted, for the SC-031 path where the claim response names no Host.
+func newFakePoolManagerWith(
+	t *testing.T,
+	ctx context.Context,
+	hosts map[string]flintlock.PoolHostClient,
+	tweak func(*poolmgr.FakeConfig),
+) (*pmfake.PoolManager, poolmgr.Client) {
+	t.Helper()
 	source := pmfake.NewHosts()
 	for name, client := range hosts {
 		source.Add(name, client, name+":9090")
 	}
-	pm := pmfake.New(poolmgr.FakeConfig{
+	cfg := poolmgr.FakeConfig{
 		Hosts:             source,
 		Clock:             clock.NewFake(testEpoch),
 		ReconcileInterval: time.Second,
-	})
+	}
+	if tweak != nil {
+		tweak(&cfg)
+	}
+	pm := pmfake.New(cfg)
 	done := make(chan error, 1)
 	runCtx, cancel := context.WithCancel(ctx)
 	go func() { done <- pm.Run(runCtx) }()

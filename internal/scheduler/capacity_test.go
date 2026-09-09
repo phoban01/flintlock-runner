@@ -20,7 +20,7 @@ import (
 func TestSlotsInUseIsReservationsPlusAllocations(t *testing.T) {
 	t.Parallel()
 	ctx := testContext(t)
-	client := &stubClient{}
+	client := newStubClient()
 	client.script(func(c *stubClient) {
 		c.claimFn = claimsFrom("host-1")
 		c.beatFn = func(context.Context, string) (time.Time, error) { return testEpoch.Add(time.Hour), nil }
@@ -254,7 +254,7 @@ func TestProfileMaximumConcurrencyIsNotExceeded(t *testing.T) {
 	ctx := testContext(t)
 	profile := testProfile("default", 4)
 	profile.MaxConcurrency = 1
-	client := &stubClient{}
+	client := newStubClient()
 	client.script(func(c *stubClient) {
 		c.claimFn = claimsFrom("host-1")
 		c.beatFn = beatsFor(clock.NewFake(testEpoch), time.Hour)
@@ -310,7 +310,7 @@ func TestProfileLimitTimesOut(t *testing.T) {
 	ctx := testContext(t)
 	profile := testProfile("default", 4)
 	profile.MaxConcurrency = 1
-	client := &stubClient{}
+	client := newStubClient()
 	client.script(func(c *stubClient) {
 		c.claimFn = claimsFrom("host-1")
 		c.beatFn = beatsFor(clock.NewFake(testEpoch), time.Hour)
@@ -344,7 +344,7 @@ func TestProfileLimitTimesOut(t *testing.T) {
 func TestConcurrentReserveAllocateRelease(t *testing.T) {
 	t.Parallel()
 	ctx := testContext(t)
-	client := &stubClient{}
+	client := newStubClient()
 	client.script(func(c *stubClient) {
 		c.claimFn = claimsFrom("host-1")
 		c.beatFn = func(context.Context, string) (time.Time, error) { return testEpoch.Add(time.Hour), nil }
