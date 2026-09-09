@@ -42,13 +42,14 @@ type reloadFixture struct {
 	logs *syncBuffer
 }
 
-// newReloadFixture writes content to a temporary config.yaml, loads it and
-// returns a Reloader over it.
-func newReloadFixture(t *testing.T, content string) *reloadFixture {
+// newReloadFixture writes twoProfileConfig to a temporary config.yaml, loads
+// it and returns a Reloader over it. A test then rewrites the file and
+// reloads.
+func newReloadFixture(t *testing.T) *reloadFixture {
 	t.Helper()
 	dir := t.TempDir()
 	path := filepath.Join(dir, "config.yaml")
-	writeFile(t, path, content)
+	writeFile(t, path, twoProfileConfig)
 	logs := &syncBuffer{}
 	opts := []Option{WithEnv(noEnv), WithLogger(slog.New(slog.NewTextHandler(logs, &slog.HandlerOptions{Level: slog.LevelDebug})))}
 	cfg, err := Load(path, opts...)
@@ -62,6 +63,16 @@ func newReloadFixture(t *testing.T, content string) *reloadFixture {
 func (f *reloadFixture) rewrite(t *testing.T, content string) {
 	t.Helper()
 	writeFile(t, f.path, content)
+}
+
+// dropBuildersProfile returns cfg without its second Profile.
+func dropBuildersProfile(t *testing.T, cfg string) string {
+	t.Helper()
+	before, _, found := strings.Cut(cfg, "  - name: builders")
+	if !found {
+		t.Fatalf("configuration has no builders Profile to drop:\n%s", cfg)
+	}
+	return before
 }
 
 // twoProfileConfig is a configuration with two Profiles and two Hosts; the
@@ -119,7 +130,7 @@ profiles:
 // the swap publishes a new pointer instead of mutating the old one.
 func TestReloadOnSIGHUP(t *testing.T) {
 	t.Parallel()
-	f := newReloadFixture(t, twoProfileConfig)
+	f := newReloadFixture(t)
 
 	// What a running Job holds when the signal arrives.
 	running := f.r.Current()
@@ -137,7 +148,7 @@ func TestReloadOnSIGHUP(t *testing.T) {
 	// A third Host and a bigger Pool for the first Profile, and the second
 	// Profile removed.
 	next := strings.Replace(twoProfileConfig, "      size: 2\n", "      size: 5\n", 1)
-	next = next[:strings.Index(next, "  - name: builders")]
+	next = dropBuildersProfile(t, next)
 	next = strings.Replace(next, "    - name: host-b\n", "    - name: host-c\n", 1)
 	f.rewrite(t, next)
 
@@ -191,8 +202,8 @@ func TestReloadOnSIGHUP(t *testing.T) {
 // readers and the reload.
 func TestReloadIsAtomicUnderConcurrentReaders(t *testing.T) {
 	t.Parallel()
-	f := newReloadFixture(t, twoProfileConfig)
-	oneProfile := twoProfileConfig[:strings.Index(twoProfileConfig, "  - name: builders")]
+	f := newReloadFixture(t)
+	oneProfile := dropBuildersProfile(t, twoProfileConfig)
 	oneProfile = strings.Replace(oneProfile, "    - name: host-b\n", "    - name: host-c\n", 1)
 
 	ctx := t.Context()
@@ -289,7 +300,7 @@ func TestReloadKeepsThePreviousConfigurationWhenInvalid(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			f := newReloadFixture(t, twoProfileConfig)
+			f := newReloadFixture(t)
 			before := f.r.Current()
 			var called int
 			f.r.Subscribe(func(context.Context, *Config) error { called++; return nil })
@@ -338,7 +349,7 @@ func TestReloadKeepsThePreviousConfigurationWhenInvalid(t *testing.T) {
 // when its context is cancelled, leaving no signal handler behind.
 func TestServeSIGHUPListensForTheSignal(t *testing.T) {
 	// Not parallel: it sends a signal to the whole process.
-	f := newReloadFixture(t, twoProfileConfig)
+	f := newReloadFixture(t)
 	f.rewrite(t, strings.Replace(twoProfileConfig, "      size: 2\n", "      size: 4\n", 1))
 
 	reloaded := make(chan struct{}, 1)
@@ -397,7 +408,7 @@ func TestServeSIGHUPListensForTheSignal(t *testing.T) {
 // leave the Runner half-reloaded.
 func TestReloadReportsSubscriberErrors(t *testing.T) {
 	t.Parallel()
-	f := newReloadFixture(t, twoProfileConfig)
+	f := newReloadFixture(t)
 	boom := errors.New("boom")
 	var order []string
 	f.r.Subscribe(func(context.Context, *Config) error { order = append(order, "first"); return boom })
@@ -420,7 +431,7 @@ func TestReloadReportsSubscriberErrors(t *testing.T) {
 // a reload before it touches the file.
 func TestReloadStopsOnContextCancellation(t *testing.T) {
 	t.Parallel()
-	f := newReloadFixture(t, twoProfileConfig)
+	f := newReloadFixture(t)
 	before := f.r.Current()
 	ctx, cancel := context.WithCancel(t.Context())
 	cancel()

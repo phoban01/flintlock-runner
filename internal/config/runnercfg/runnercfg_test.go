@@ -125,15 +125,15 @@ func TestBuildMapsTheGitLabSection(t *testing.T) {
 		"RunnerConfig.Limit":                runner.Limit,
 		"RunnerConfig.OutputLimit":          runner.OutputLimit,
 		"RunnerConfig.SystemID":             runner.SystemID,
-		"RunnerCredentials.URL":             runner.RunnerCredentials.URL,
-		"RunnerCredentials.Token":           runner.RunnerCredentials.Token,
-		"RunnerCredentials.TLSCAFile":       runner.RunnerCredentials.TLSCAFile,
-		"RunnerCredentials.TLSCertFile":     runner.RunnerCredentials.TLSCertFile,
-		"RunnerCredentials.TLSKeyFile":      runner.RunnerCredentials.TLSKeyFile,
-		"RunnerSettings.Executor":           runner.RunnerSettings.Executor,
-		"RunnerSettings.Shell":              runner.RunnerSettings.Shell,
-		"RunnerSettings.BuildsDir":          runner.RunnerSettings.BuildsDir,
-		"RunnerSettings.CacheDir":           runner.RunnerSettings.CacheDir,
+		"RunnerCredentials.URL":             runner.URL,
+		"RunnerCredentials.Token":           runner.Token,
+		"RunnerCredentials.TLSCAFile":       runner.TLSCAFile,
+		"RunnerCredentials.TLSCertFile":     runner.TLSCertFile,
+		"RunnerCredentials.TLSKeyFile":      runner.TLSKeyFile,
+		"RunnerSettings.Executor":           runner.Executor,
+		"RunnerSettings.Shell":              runner.Shell,
+		"RunnerSettings.BuildsDir":          runner.BuildsDir,
+		"RunnerSettings.CacheDir":           runner.CacheDir,
 		"RunnerConfig.RequestConcurrency":   runner.RequestConcurrency,
 		"Config.SessionServer.SessionTimeo": out.SessionServer.SessionTimeout != 0,
 	}
@@ -171,8 +171,8 @@ func TestBuildMapsTheGitLabSection(t *testing.T) {
 	if runner.ShortDescription() == "" {
 		t.Error("RunnerCredentials.ShortDescription() is empty; the token did not arrive")
 	}
-	if common.GetShell(runner.RunnerSettings.Shell) == nil {
-		t.Errorf("gitlab-runner has no shell named %q", runner.RunnerSettings.Shell)
+	if common.GetShell(runner.Shell) == nil {
+		t.Errorf("gitlab-runner has no shell named %q", runner.Shell)
 	}
 	if _, err := out.DeepCopy(); err != nil {
 		t.Errorf("gitlab-runner cannot copy the configuration: %v", err)
