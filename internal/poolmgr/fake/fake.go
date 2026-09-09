@@ -134,14 +134,11 @@ func New(cfg poolmgr.FakeConfig) *PoolManager {
 // applied.
 func (p *PoolManager) Config() poolmgr.FakeConfig { return p.cfg }
 
-//= docs/requirements/10-test-doubles.md#fake-pool-manager
-//# The fake Pool Manager SHALL be runnable as a standalone binary as well as
-//# in process, so that a fleet without battery can run on it.
-
 // Serve listens on cfg.Listen, runs the control loop and serves the three
-// gRPC services until ctx is cancelled (TD-001, TD-009). It returns nil after
-// a clean shutdown, during which every MicroVM the fake created is deleted
-// from its Host. A PoolManager serves once.
+// gRPC services until ctx is cancelled (TD-001). It returns nil after a
+// clean shutdown, during which every MicroVM the fake created is deleted
+// from its Host. A PoolManager serves once. cmd/fake-poolmgr is the
+// standalone binary over it (TD-009).
 func (p *PoolManager) Serve(ctx context.Context) error {
 	lis, err := net.Listen("tcp", p.cfg.Listen)
 	if err != nil {
