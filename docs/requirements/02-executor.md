@@ -116,9 +116,9 @@ Stage scripts are the only channel that exists after boot.
 - **EX-044** The `exec` Guest Transport SHALL send an `ExecStart` message
   with `has_stdin` set, followed by the Stage script as `stdin` chunks,
   followed by `stdin_eof`.
-- **EX-045** The `exec` Guest Transport SHALL treat an `error` payload in the
-  response stream as a transport failure and SHALL treat an `exit_code`
-  payload as the command's exit status.
+- **EX-045** The `exec` Guest Transport SHALL treat an `exit_code`
+  payload as the command's exit status and SHALL treat an `error` payload
+  as a transport failure only where the stream ends without an `exit_code`.
 - **EX-046** The `exec` Guest Transport SHALL set the `timeout_seconds` field
   of `ExecStart` from the remaining time on the operation's context.
 - **EX-047** The `ssh` Guest Transport SHALL connect to the guest's SSH
@@ -154,6 +154,14 @@ to completion. Where it does not, upstream falls back to a deadline derived
 from the `timeout_seconds` EX-046 sends, and a quiet Stage can be killed
 before its own timeout. A CI Job is quiet for long stretches by nature, so
 the guest agent is not optional in a Profile's image.
+
+EX-045 is narrow for a reason. The exec service's own framing says that
+`exit_code` terminates the stream while an `error` may be sent, typically
+followed by `exit_code`, without ending the exchange. Treating every `error`
+payload as terminal would turn an ordinary failing build command into a
+transport failure, and EX-023 forbids re-running a Stage that failed that
+way, so a Job would fail as a Runner fault rather than as the script error
+it was.
 
 ## Host service environment {#host-service-environment}
 
