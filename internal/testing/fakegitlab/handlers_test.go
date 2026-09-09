@@ -169,6 +169,47 @@ func TestLongPollWakesOnEnqueue(t *testing.T) {
 //# `Content-Range` and range-not-satisfiable handling, artifact upload and
 //# dependency artifact download.
 
+// TestNoLongPollAnswersAtOnce pins the NoLongPoll sentinel: a job request
+// carrying the current queue version is answered no content straight away
+// and the clock is never armed, so a caller polling an idle queue does not
+// sit in a long-poll-length HTTP call per poll (TD-030).
+func TestNoLongPollAnswersAtOnce(t *testing.T) {
+	t.Parallel()
+	clk := newFakeClock()
+	s, url := newHandlerServer(t, Options{Clock: clk, LongPollTimeout: NoLongPoll})
+
+	first := do(t, url, http.MethodPost, "/api/v4/jobs/request", nil, requestJobBody(t, ""))
+	version := first.header.Get("X-GitLab-Last-Update")
+	if first.code != http.StatusNoContent || version == "" {
+		t.Fatalf("first request = %d %v, want 204 with X-GitLab-Last-Update", first.code, first.header)
+	}
+
+	// The same version again would long-poll at any positive timeout.
+	second := do(t, url, http.MethodPost, "/api/v4/jobs/request", nil, requestJobBody(t, version))
+	if second.code != http.StatusNoContent || second.header.Get("X-GitLab-Last-Update") != version {
+		t.Fatalf("second request = %d version %q, want 204 with version %q", second.code, second.header.Get("X-GitLab-Last-Update"), version)
+	}
+	select {
+	case d := <-clk.afterCalled:
+		t.Errorf("the request armed the clock for %v, want no wait at all", d)
+	default:
+	}
+
+	// A queued Job is still handed out.
+	mustEnqueue(t, s, &spec.Job{ID: 4, Token: "glcbt-4"})
+	if r := do(t, url, http.MethodPost, "/api/v4/jobs/request", nil, requestJobBody(t, version)); r.code != http.StatusCreated {
+		t.Errorf("request with a queued job = %d (%s), want 201", r.code, r.body)
+	}
+}
+
+//= docs/requirements/10-test-doubles.md#fake-gitlab
+//= type=test
+//# The project SHALL provide a fake GitLab HTTP server that implements
+//# runner verification, job request with long polling and the
+//# `X-GitLab-Last-Update` header, job update, trace patching with
+//# `Content-Range` and range-not-satisfiable handling, artifact upload and
+//# dependency artifact download.
+
 func TestLongPollTimesOutAndClosesCleanly(t *testing.T) {
 	t.Parallel()
 	clk := newFakeClock()

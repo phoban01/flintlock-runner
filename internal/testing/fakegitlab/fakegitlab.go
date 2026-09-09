@@ -39,6 +39,12 @@ const (
 	// verification.
 	DefaultRunnerID int64 = 1
 
+	// NoLongPoll is the Options.LongPollTimeout that turns long polling off:
+	// a job request is answered at once, which is what the real endpoint
+	// does when it has nothing to hand out. Without it a test that polls an
+	// idle queue at the default sits in a 30s HTTP call per poll.
+	NoLongPoll time.Duration = -1
+
 	shutdownTimeout = 5 * time.Second
 )
 
@@ -72,7 +78,8 @@ type Options struct {
 	PendingFinalUpdates int
 	// LongPollTimeout bounds how long a job request whose last_update equals
 	// the current queue version waits for a Job before answering no content.
-	// Zero means DefaultLongPollTimeout.
+	// Zero means DefaultLongPollTimeout; NoLongPoll, or any other negative
+	// duration, answers at once without waiting.
 	LongPollTimeout time.Duration
 	// TraceUpdateInterval is sent, in whole seconds, as
 	// X-GitLab-Trace-Update-Interval on trace patch and job update responses.
@@ -182,7 +189,7 @@ type Server struct {
 
 // New builds a Server. Start serves it.
 func New(opts Options) *Server {
-	if opts.LongPollTimeout <= 0 {
+	if opts.LongPollTimeout == 0 {
 		opts.LongPollTimeout = DefaultLongPollTimeout
 	}
 	if opts.TraceUpdateInterval <= 0 {

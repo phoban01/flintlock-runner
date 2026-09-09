@@ -207,7 +207,8 @@ func (s *Server) authJobLocked(id int64, token string) (*jobState, *apiError) {
 // handleRequestJob is POST /api/v4/jobs/request. A request whose
 // last_update equals the current queue version long-polls until a Job is
 // enqueued, the long poll timeout elapses, the client goes away or the
-// server closes; any other request is answered at once. No content carries
+// server closes; any other request is answered at once, and so is every
+// request when Options.LongPollTimeout is NoLongPoll. No content carries
 // the queue version in X-GitLab-Last-Update so that the next request polls.
 func (s *Server) handleRequestJob(w http.ResponseWriter, r *http.Request) {
 	var req runnerRequest
@@ -220,8 +221,10 @@ func (s *Server) handleRequestJob(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var (
-		timeout  <-chan time.Time
-		timedOut bool
+		timeout <-chan time.Time
+		// A negative timeout means no long poll, so the first pass through
+		// the loop answers rather than waits.
+		timedOut = s.opts.LongPollTimeout < 0
 	)
 	for {
 		s.mu.Lock()
