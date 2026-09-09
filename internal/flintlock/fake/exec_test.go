@@ -364,10 +364,12 @@ func TestExecTimeout(t *testing.T) {
 			res := &execResult{}
 			waitForStdout(t, stream, res, "\n")
 
-			clk.Advance(6 * time.Second)
-			// Not yet: the timer is armed before the process starts, so the
-			// clock has seen it and this advance is short of the deadline.
-			clk.Advance(time.Second)
+			// The timer is armed before the process starts and the first
+			// stdout chunk can only come from a started process, so by now
+			// the clock holds the timer and one advance past the deadline
+			// fires it. Anything less relies on an ordering that the copier
+			// goroutine carrying stdout does not provide.
+			clk.Advance(7 * time.Second)
 			drain(stream, res)
 			if res.err != nil {
 				t.Fatalf("stream error: %v", res.err)
@@ -550,6 +552,78 @@ func realPath(p string) string {
 		return r
 	}
 	return p
+}
+
+//= docs/requirements/10-test-doubles.md#fake-host
+//= type=test
+//# The fake Host SHALL represent each MicroVM as a sandbox directory on the
+//# local filesystem and SHALL run each `ExecCommand` as a local process
+//# rooted in that directory, streaming standard input, standard output,
+//# standard error and the exit code as `flintlockd` does.
+
+// TestShutdownWithIdleExecStream: a stream that is opened and never spoken
+// on does not hold the Host open (TD-021). In memory the handler behind it
+// is counted by Close's WaitGroup, so a receive the Host cannot interrupt
+// hangs Close, and with it Serve; over gRPC the same handler costs
+// GracefulStop its whole timeout. Both have to end promptly.
+func TestShutdownWithIdleExecStream(t *testing.T) {
+	t.Parallel()
+	// Under gracefulStopTimeout, so that a Serve which waits the graceful
+	// stop out fails here rather than passing slowly.
+	const promptly = gracefulStopTimeout / 2
+
+	t.Run("memory", func(t *testing.T) {
+		t.Parallel()
+		// Built without newTestHost's cleanup, because a Close that hangs
+		// has to fail this test rather than the package's teardown.
+		h := New(flintlock.FakeHostConfig{Name: "h1", SandboxRoot: t.TempDir()})
+		c := h.Client()
+		t.Cleanup(func() { _ = c.Close() })
+		if _, err := c.Exec(testCtx(t)); err != nil {
+			t.Fatalf("Exec: %v", err)
+		}
+
+		closed := make(chan error, 1)
+		go func() { closed <- h.Close() }()
+		select {
+		case err := <-closed:
+			if err != nil {
+				t.Fatalf("Close: %v", err)
+			}
+		case <-time.After(promptly):
+			t.Fatalf("Close did not return within %s with an idle exec stream open", promptly)
+		}
+	})
+
+	t.Run("grpc", func(t *testing.T) {
+		t.Parallel()
+		h := newTestHost(t, flintlock.FakeHostConfig{})
+		stop := serveHost(t, h)
+		client := execv1.NewMicroVMExecClient(dialHost(t, h, nil))
+
+		if _, err := client.ExecCommand(testCtx(t)); err != nil {
+			t.Fatalf("opening the idle stream: %v", err)
+		}
+		// A second stream that does speak. Its headers were written after
+		// the idle stream's and the connection delivers frames in order, so
+		// its first output proves the idle handler is already parked in its
+		// first receive.
+		busy, err := client.ExecCommand(testCtx(t))
+		if err != nil {
+			t.Fatalf("opening the busy stream: %v", err)
+		}
+		uid := createVM(t, h, nil).GetSpec().GetUid()
+		sendStart(busy, shell(uid, "echo ready; sleep 300"))
+		waitForStdout(t, busy, &execResult{}, "ready")
+
+		started := time.Now()
+		if err := stop(); err != nil {
+			t.Fatalf("Serve: %v", err)
+		}
+		if elapsed := time.Since(started); elapsed > promptly {
+			t.Errorf("Serve took %s to stop with an idle exec stream open, want under %s", elapsed, promptly)
+		}
+	})
 }
 
 // truncate shortens long strings in failure messages.

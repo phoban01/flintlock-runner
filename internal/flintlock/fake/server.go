@@ -77,8 +77,12 @@ func (h *Host) Serve(ctx context.Context) error {
 		return fmt.Errorf("fake host %s: serve: %w", h.cfg.Name, err)
 	}
 
-	// Kill the processes first so that in-flight ExecCommand handlers return
-	// and GracefulStop has nothing to wait for.
+	// Close first: it kills the processes, so a handler in cmd.Wait returns,
+	// and it ends the Host's context, so a handler waiting for a message
+	// from a client that never speaks returns too (TD-021). Between them
+	// that is every ExecCommand handler, which leaves GracefulStop nothing
+	// to wait for and makes the timeout below a backstop rather than the
+	// price of an idle stream.
 	_ = h.Close()
 	stopped := make(chan struct{})
 	go func() {

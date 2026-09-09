@@ -61,20 +61,38 @@ const (
 // MicroVM that is not CREATED. Unlike flintlockd the fake does not require
 // allow_guest_agent on the spec.
 func (h *Host) execCommand(stream execStream) error {
-	first, err := stream.Recv()
-	if err != nil {
-		return fmt.Errorf("receiving exec start message: %w", err)
+	// ctx ends when the client goes away, the Host closes, the timeout
+	// fires or the MicroVM is deleted; any of those kills the process. It is
+	// wired to the Host's lifetime before the first message is waited for,
+	// because a client that opens a stream and then says nothing would
+	// otherwise park this handler where nothing the Host controls can wake
+	// it, and Close waits for the handlers it started (TD-021).
+	ctx, cancel := context.WithCancel(stream.Context())
+	defer cancel()
+	defer context.AfterFunc(h.ctx, cancel)()
+
+	// The client's messages are relayed onto a channel so that waiting for
+	// one is interruptible. Closing done ends the relay with this handler,
+	// so nothing keeps receiving on a stream the handler has let go of.
+	done := make(chan struct{})
+	defer close(done)
+	requests := recvLoop(stream, done)
+
+	var first *execv1.ExecCommandRequest
+	select {
+	case req := <-requests:
+		if req.err != nil {
+			return fmt.Errorf("receiving exec start message: %w", req.err)
+		}
+		first = req.msg
+	case <-ctx.Done():
+		return status.FromContextError(ctx.Err()).Err()
 	}
+
 	start := first.GetStart()
 	if start == nil || start.GetUid() == "" || (start.GetCmd() == "" && !start.GetShell()) {
 		return status.Error(codes.InvalidArgument, "first message must be a start message with uid and cmd set")
 	}
-
-	// ctx ends when the client goes away, the Host closes, the timeout
-	// fires or the MicroVM is deleted; any of those kills the process.
-	ctx, cancel := context.WithCancel(stream.Context())
-	defer cancel()
-	defer context.AfterFunc(h.ctx, cancel)()
 
 	sandbox, detach, err := h.attachExec(start.GetUid(), cancel)
 	if err != nil {
@@ -82,17 +100,49 @@ func (h *Host) execCommand(stream execStream) error {
 	}
 	defer detach()
 
-	run := &execRun{h: h, ctx: ctx, stream: stream, start: start, sandbox: sandbox}
+	run := &execRun{h: h, ctx: ctx, cancel: cancel, stream: stream, requests: requests, start: start, sandbox: sandbox}
 	return run.do()
+}
+
+// execRequest is one message from the client, or the error that ended the
+// stream.
+type execRequest struct {
+	msg *execv1.ExecCommandRequest
+	err error
+}
+
+// recvLoop relays the client's messages onto a channel until the stream
+// ends or done is closed, which is when the handler that owns the stream
+// returns. Receiving in its own goroutine is what lets the handler stop
+// waiting for a message the client may never send (TD-021).
+func recvLoop(stream execStream, done <-chan struct{}) <-chan execRequest {
+	ch := make(chan execRequest)
+	go func() {
+		defer close(ch)
+		for {
+			msg, err := stream.Recv()
+			select {
+			case ch <- execRequest{msg: msg, err: err}:
+			case <-done:
+				return
+			}
+			if err != nil {
+				return
+			}
+		}
+	}()
+	return ch
 }
 
 // execRun is the state of one running command.
 type execRun struct {
-	h       *Host
-	ctx     context.Context
-	stream  execStream
-	start   *execv1.ExecStart
-	sandbox string
+	h        *Host
+	ctx      context.Context
+	cancel   context.CancelFunc
+	stream   execStream
+	requests <-chan execRequest
+	start    *execv1.ExecStart
+	sandbox  string
 
 	// sendMu serialises Send, which the stream does not allow from more
 	// than one goroutine; stdout and stderr are copied concurrently.
@@ -116,6 +166,12 @@ func (r *execRun) do() error {
 	cmd.Stdout = &chunkWriter{run: r, kind: chunkStdout}
 	cmd.Stderr = &chunkWriter{run: r, kind: chunkStderr}
 
+	// Armed before the process starts, so that any output the client sees
+	// comes from a command whose timeout is already running.
+	var timedOut atomic.Bool
+	stopTimeout := r.startTimeout(&timedOut)
+	defer stopTimeout()
+
 	if err := cmd.Start(); err != nil {
 		code := exitStartError
 		if errors.Is(err, exec.ErrNotFound) {
@@ -127,33 +183,14 @@ func (r *execRun) do() error {
 	// Stdin is relayed from the client until stdin_eof or half-close; when
 	// the command asked for no stdin the messages are read and dropped so
 	// that a chatty client never blocks on flow control. The goroutine ends
-	// when the stream does, which is when this handler returns.
-	go pumpStdin(r.stream, stdin)
-
-	//= docs/requirements/10-test-doubles.md#fake-host
-	//# The fake Host SHALL honour the `cwd`, `env`, `timeout_seconds`,
-	//# `has_stdin` and `stdin_eof` fields of an exec request and SHALL accept
-	//# and ignore `user`.
-	// timeout_seconds is a deadline on the command, not on the stream: when
-	// it fires the process group is killed and the client is told why,
-	// rather than the stream being dropped (TD-023).
-	var timedOut atomic.Bool
-	if secs := r.start.GetTimeoutSeconds(); secs > 0 {
-		timer := r.h.clk.NewTimer(time.Duration(secs) * time.Second)
-		defer timer.Stop()
-		done := make(chan struct{})
-		defer close(done)
-		go func() {
-			select {
-			case <-timer.C():
-				timedOut.Store(true)
-				_ = cmd.Cancel()
-			case <-done:
-			}
-		}()
-	}
+	// with the request channel, which execCommand closes on its way out.
+	go pumpStdin(r.requests, stdin)
 
 	waitErr := cmd.Wait()
+	// The child has been reaped, so disarm the timeout at once rather than
+	// on the deferred path: a timer left running could otherwise signal a
+	// process group the kernel has already handed to somebody else.
+	stopTimeout()
 
 	// The client is gone or the Host is shutting down: nobody is listening,
 	// so end the stream with the cause rather than a synthetic exit code.
@@ -175,6 +212,45 @@ func (r *execRun) do() error {
 		return r.finish(waitErr.Error(), code)
 	}
 	return r.exit(code)
+}
+
+//= docs/requirements/10-test-doubles.md#fake-host
+//# The fake Host SHALL honour the `cwd`, `env`, `timeout_seconds`,
+//# `has_stdin` and `stdin_eof` fields of an exec request and SHALL accept
+//# and ignore `user`.
+
+// startTimeout arms timeout_seconds on the Host's clock and returns the
+// function that disarms it; a request without a timeout gets a no-op
+// (TD-023). The timeout is a deadline on the command, not on the stream:
+// when it fires the run's context is cancelled, which kills the process
+// group through exec.Cmd's own watchdog, and the client is told why rather
+// than having the stream dropped. Going through the context also means the
+// kill can only happen while exec.Cmd still owns the process, because the
+// watchdog stops once Wait has reaped it.
+//
+// Callers arm this before starting the process, so that a client which has
+// seen output from the command has necessarily seen the timer armed too;
+// there is no other ordering between the two, because output travels on
+// os/exec's copier goroutine.
+func (r *execRun) startTimeout(timedOut *atomic.Bool) func() {
+	secs := r.start.GetTimeoutSeconds()
+	if secs <= 0 {
+		return func() {}
+	}
+	timer := r.h.clk.NewTimer(time.Duration(secs) * time.Second)
+	done := make(chan struct{})
+	go func() {
+		select {
+		case <-timer.C():
+			timedOut.Store(true)
+			r.cancel()
+		case <-done:
+		}
+	}()
+	return sync.OnceFunc(func() {
+		timer.Stop()
+		close(done)
+	})
 }
 
 // buildCommand turns the ExecStart into an exec.Cmd rooted in the sandbox
@@ -279,18 +355,21 @@ func mergeEnv(base []string, extra map[string]string) []string {
 // is what lets a reader such as cat see end of input while the stream stays
 // open for its output. A nil w means the request did not set has_stdin;
 // messages are then drained and dropped.
-func pumpStdin(stream execStream, w io.WriteCloser) {
+//
+// It reads the handler's request channel rather than the stream itself, so
+// that it ends with the handler instead of receiving on a stream that has
+// already been let go of.
+func pumpStdin(requests <-chan execRequest, w io.WriteCloser) {
 	defer func() {
 		if w != nil {
 			_ = w.Close()
 		}
 	}()
-	for {
-		msg, err := stream.Recv()
-		if err != nil {
+	for req := range requests {
+		if req.err != nil {
 			return
 		}
-		switch p := msg.GetPayload().(type) {
+		switch p := req.msg.GetPayload().(type) {
 		case *execv1.ExecCommandRequest_Stdin:
 			if w == nil {
 				continue

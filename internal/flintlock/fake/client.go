@@ -130,7 +130,7 @@ func (c *Client) Exec(ctx context.Context) (flintlock.ExecStream, error) {
 		return nil, fmt.Errorf("fake host %s: %w", c.Name(), flintlock.ErrUnavailable)
 	}
 
-	s := newMemExecStream(ctx, c.ctx)
+	s := newMemExecStream(ctx, c.ctx, c.host.ctx, c.Name())
 	go func() {
 		defer c.host.wg.Done()
 		err := c.host.execCommand(s.server())
@@ -176,9 +176,10 @@ func (c *Client) DeleteMicroVM(ctx context.Context, uid string) error {
 
 // memExecStream is an in-memory bidirectional stream: the client half is a
 // flintlock.ExecStream, the server half an execStream. Each direction is a
-// buffered channel; the stream context ends when the client's context, the
-// client value or the handler ends.
+// buffered channel; the stream context ends when the caller's context, the
+// client value, the Host or the handler ends.
 type memExecStream struct {
+	host   string
 	ctx    context.Context
 	cancel context.CancelFunc
 
@@ -192,9 +193,15 @@ type memExecStream struct {
 	err        error
 }
 
-func newMemExecStream(ctx, clientCtx context.Context) *memExecStream {
+// newMemExecStream builds a stream on ctx that also ends with the Client
+// (the HostClient.Close contract) and with the Host. The Host has to be in
+// there: Close waits for the handler behind the stream, so a stream nobody
+// speaks on must not be able to outlive it (TD-021). host names the Host in
+// the errors Recv reports.
+func newMemExecStream(ctx, clientCtx, hostCtx context.Context, host string) *memExecStream {
 	ctx, cancel := context.WithCancel(ctx)
 	s := &memExecStream{
+		host:      host,
 		ctx:       ctx,
 		cancel:    cancel,
 		reqs:      make(chan *execv1.ExecCommandRequest, memStreamBuffer),
@@ -202,11 +209,12 @@ func newMemExecStream(ctx, clientCtx context.Context) *memExecStream {
 		closeSend: make(chan struct{}),
 		done:      make(chan struct{}),
 	}
-	// Closing the Client fails the stream (HostClient.Close contract).
-	stop := context.AfterFunc(clientCtx, cancel)
+	stopClient := context.AfterFunc(clientCtx, cancel)
+	stopHost := context.AfterFunc(hostCtx, cancel)
 	go func() {
 		<-s.done
-		stop()
+		stopClient()
+		stopHost()
 	}()
 	return s
 }
@@ -278,7 +286,7 @@ func (s *memExecStream) Recv() (*execv1.ExecCommandResponse, error) {
 			// Loop so that anything the handler sent before finishing is
 			// delivered ahead of the result.
 		case <-s.ctx.Done():
-			return nil, statusToSentinel("", status.FromContextError(s.ctx.Err()).Err())
+			return nil, statusToSentinel(s.host, status.FromContextError(s.ctx.Err()).Err())
 		}
 	}
 }
