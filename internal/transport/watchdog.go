@@ -18,6 +18,11 @@ type hostWatch struct {
 	done     chan struct{}
 	finished chan struct{}
 
+	// probeCancel ends an in-flight liveness probe. stop calls it so that
+	// an operation which has just finished is not held for the rest of a
+	// probe's budget on a Host that is slow but alive.
+	probeCancel context.CancelFunc
+
 	stopOnce sync.Once
 
 	mu      sync.Mutex
@@ -50,12 +55,18 @@ func watchHost(ctx context.Context, cancel context.CancelFunc, target Target, cl
 		finished: make(chan struct{}),
 	}
 	if target.Deadline <= 0 || target.Host == nil {
+		w.probeCancel = func() {}
 		close(w.finished)
 		return w
 	}
 	if clk == nil {
 		clk = clock.Real{}
 	}
+
+	// Probes run under a context of the watch's own, so that stopping the
+	// watch ends the call that is in flight rather than waiting it out.
+	probeCtx, probeCancel := context.WithCancel(ctx)
+	w.probeCancel = probeCancel
 
 	interval := target.Deadline / 2
 	if interval <= 0 {
@@ -68,6 +79,7 @@ func watchHost(ctx context.Context, cancel context.CancelFunc, target Target, cl
 
 	go func() {
 		defer close(w.finished)
+		defer probeCancel()
 		timer := clk.NewTimer(interval)
 		defer timer.Stop()
 		for {
@@ -79,10 +91,12 @@ func watchHost(ctx context.Context, cancel context.CancelFunc, target Target, cl
 			case <-w.activity:
 				resetTimer(timer, interval)
 			case <-timer.C():
-				if err := probeHost(ctx, target, probeTimeout); err != nil {
-					if ctx.Err() != nil {
-						// The operation ended under us; its own error is
-						// the one that matters.
+				if err := probeHost(probeCtx, target, probeTimeout); err != nil {
+					if stopped(w.done) || ctx.Err() != nil {
+						// The operation ended under us, or finished while
+						// the probe was in flight and stopped the watch;
+						// either way the probe's error is not a failure of
+						// the operation.
 						return
 					}
 					w.fail(err)
@@ -134,10 +148,26 @@ func (w *hostWatch) fail(err error) {
 }
 
 // stop ends the watch and waits for its goroutine, so that an operation
-// leaves nothing running behind it.
+// leaves nothing running behind it. A probe that is in flight is cancelled
+// rather than waited for: the operation is over, and holding its caller for
+// the rest of a probe's budget would add that much latency to every Stage
+// that finishes while the watch happens to be asking after the Host.
 func (w *hostWatch) stop() {
-	w.stopOnce.Do(func() { close(w.done) })
+	w.stopOnce.Do(func() {
+		close(w.done)
+		w.probeCancel()
+	})
 	<-w.finished
+}
+
+// stopped reports whether the watch has been told to stop.
+func stopped(done <-chan struct{}) bool {
+	select {
+	case <-done:
+		return true
+	default:
+		return false
+	}
 }
 
 // resetTimer re-arms a timer that may already have fired, draining the

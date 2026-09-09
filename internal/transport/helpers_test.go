@@ -239,3 +239,32 @@ func stderr(s string) *execv1.ExecCommandResponse {
 func errorPayload(msg string) *execv1.ExecCommandResponse {
 	return &execv1.ExecCommandResponse{Payload: &execv1.ExecCommandResponse_Error{Error: msg}}
 }
+
+// blockingStream is an ExecStream that answers one exit_code, and not until
+// release is closed. It exists so that a test can decide exactly when an
+// exchange finishes, for instance while a liveness probe is in flight.
+type blockingStream struct {
+	release <-chan struct{}
+
+	mu   sync.Mutex
+	sent bool
+}
+
+// Send implements flintlock.ExecStream.
+func (s *blockingStream) Send(*execv1.ExecCommandRequest) error { return nil }
+
+// CloseSend implements flintlock.ExecStream.
+func (s *blockingStream) CloseSend() error { return nil }
+
+// Recv implements flintlock.ExecStream: the exit code once the test lets it
+// go, and the end of the stream after that.
+func (s *blockingStream) Recv() (*execv1.ExecCommandResponse, error) {
+	<-s.release
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.sent {
+		return nil, io.EOF
+	}
+	s.sent = true
+	return exitCode(0), nil
+}

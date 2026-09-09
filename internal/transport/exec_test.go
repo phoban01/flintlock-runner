@@ -12,6 +12,7 @@ import (
 	"time"
 
 	execv1 "github.com/liquidmetal-dev/flintlock/api/services/microvmexec/v1alpha1"
+	"github.com/liquidmetal-dev/flintlock/api/types"
 
 	"github.com/phoban01/flintlock-runner/internal/clock"
 	"github.com/phoban01/flintlock-runner/internal/flintlock"
@@ -614,3 +615,72 @@ func (stoppedTimer) Stop() bool { return true }
 
 // Reset implements clock.Timer.
 func (stoppedTimer) Reset(time.Duration) bool { return true }
+
+// TestRunDoesNotWaitForAProbeItNoLongerNeeds checks what happens when a
+// Stage finishes while the liveness watch is in the middle of asking the
+// Host about the MicroVM. The operation is over, so the answer is of no
+// interest, and waiting for it would add the rest of the probe's budget to
+// every Stage that happens to end in that window on a Host that is slow but
+// alive.
+func TestRunDoesNotWaitForAProbeItNoLongerNeeds(t *testing.T) {
+	t.Parallel()
+	ctx, cancel := context.WithTimeout(context.Background(), testTimeout)
+	defer cancel()
+
+	const deadline = 10 * time.Second
+	release := make(chan struct{})
+	probing := make(chan struct{})
+	var once sync.Once
+	stub := &stubHost{
+		name: "h1",
+		exec: func(context.Context) (flintlock.ExecStream, error) {
+			return &blockingStream{release: release}, nil
+		},
+		getVM: func(ctx context.Context, _ string) (*types.MicroVM, error) {
+			// A Host that is answering, but slowly: this call would take
+			// the whole half-deadline it is given.
+			once.Do(func() { close(probing) })
+			<-ctx.Done()
+			return nil, ctx.Err()
+		},
+	}
+
+	clk := clock.NewFake(time.Now())
+	tr := newExecTransport(t, transport.Target{Host: stub, VMUID: "vm", Deadline: deadline}, transport.WithClock(clk))
+
+	type result struct {
+		status int
+		err    error
+	}
+	results := make(chan result, 1)
+	go func() {
+		status, err := tr.Run(ctx, transport.Command{Path: "sh"})
+		results <- result{status: status, err: err}
+	}()
+
+	// Half the deadline passes in silence, so the watch probes the Host.
+	if err := clk.BlockUntil(ctx, 1); err != nil {
+		t.Fatalf("the transport never armed its liveness timer: %v", err)
+	}
+	clk.Advance(deadline / 2)
+	select {
+	case <-probing:
+	case <-time.After(testTimeout):
+		t.Fatal("the watch never probed the host")
+	}
+
+	// The exit code arrives while that probe is still in flight.
+	close(release)
+	begin := time.Now()
+	select {
+	case r := <-results:
+		if r.err != nil || r.status != 0 {
+			t.Fatalf("Run returned (%d, %v), want the exit code the stream carried", r.status, r.err)
+		}
+		if took := time.Since(begin); took > deadline/4 {
+			t.Errorf("Run took %s to return after the exit code arrived, which is the in-flight probe's remaining budget of %s, not the exit code", took, deadline/2)
+		}
+	case <-time.After(testTimeout):
+		t.Fatal("Run never returned after the exit code arrived")
+	}
+}
