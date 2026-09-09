@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -441,13 +442,10 @@ func TestRunFailsWhenTheHostStopsAnswering(t *testing.T) {
 		}
 		host.SetFaults(flintlock.HostFaults{Unresponsive: true})
 
-		// Half the deadline passes with nothing received, so the watch asks
-		// the Host about the MicroVM; the Host no longer answers, and the
-		// other half of the deadline is what that call gets.
-		if err := clk.BlockUntil(ctx, 1); err != nil {
-			t.Fatalf("the transport never armed its liveness timer: %v", err)
-		}
-		clk.Advance(deadline / 2)
+		// Deadlines pass with nothing received, so the watch asks the Host
+		// about the MicroVM; the Host no longer answers, and the other half
+		// of the deadline is what that call gets.
+		defer keepAdvancing(clk, deadline)()
 
 		select {
 		case r := <-results:
@@ -492,11 +490,8 @@ func TestRunFailsWhenTheHostStopsAnswering(t *testing.T) {
 		// block in a Send, which is the state this subtest is about; then
 		// stop the Host and let the deadline pass on the transport's clock.
 		time.Sleep(100 * time.Millisecond)
-		if err := clk.BlockUntil(ctx, 1); err != nil {
-			t.Fatalf("the transport never armed its liveness timer: %v", err)
-		}
 		host.SetFaults(flintlock.HostFaults{Unresponsive: true})
-		clk.Advance(deadline / 2)
+		defer keepAdvancing(clk, deadline)()
 
 		select {
 		case err := <-done:
@@ -535,15 +530,10 @@ func TestRunFailsWhenTheHostStopsAnswering(t *testing.T) {
 			results <- result{status: status, out: out.String(), err: err}
 		}()
 
-		// Three deadlines pass in silence. Each one makes the watch probe
-		// the Host, which answers, so the watch arms again and the Stage is
-		// left alone.
-		for i := 0; i < 3; i++ {
-			if err := clk.BlockUntil(ctx, 1); err != nil {
-				t.Fatalf("the transport did not re-arm its liveness timer after probe %d: %v", i, err)
-			}
-			clk.Advance(deadline / 2)
-		}
+		// Deadline after deadline passes while the Stage says nothing. Each
+		// one makes the watch probe the Host, which answers, so the watch
+		// arms again and the Stage is left alone.
+		defer keepAdvancing(clk, deadline)()
 
 		select {
 		case r := <-results:
@@ -683,4 +673,47 @@ func TestRunDoesNotWaitForAProbeItNoLongerNeeds(t *testing.T) {
 	case <-time.After(testTimeout):
 		t.Fatal("Run never returned after the exit code arrived")
 	}
+}
+
+// TestRunReportsASendThatFails covers the exchange's send-failure path. A
+// Send that fails outright is reported as it stands; a Send that reports
+// io.EOF is gRPC saying only that the stream is already broken, so the
+// status the Host put on the response stream is what the failure has to
+// carry, because that is the one that says why.
+func TestRunReportsASendThatFails(t *testing.T) {
+	t.Parallel()
+	ctx, cancel := context.WithTimeout(context.Background(), testTimeout)
+	defer cancel()
+
+	t.Run("a send that fails outright", func(t *testing.T) {
+		stream := failingStream(1, errors.New("connection reset by peer"))
+		stub := &stubHost{name: "h1", exec: func(context.Context) (flintlock.ExecStream, error) { return stream, nil }}
+		tr := newExecTransport(t, transport.Target{Host: stub, VMUID: "vm"})
+		status, err := tr.Run(ctx, transport.Command{Path: "sh"})
+		if !errors.Is(err, transport.ErrStreamFailed) {
+			t.Fatalf("Run returned (%d, %v), want a failure wrapping ErrStreamFailed", status, err)
+		}
+		for _, want := range []string{"h1", "vm", "sending exec start", "connection reset"} {
+			if !strings.Contains(err.Error(), want) {
+				t.Errorf("the failure %q does not mention %q", err, want)
+			}
+		}
+	})
+
+	t.Run("a send that reports the stream is already broken", func(t *testing.T) {
+		// io.EOF from Send says nothing about why. The reason is on the
+		// response stream, and the failure has to repeat it rather than
+		// reporting an end-of-file the operator can do nothing with.
+		stream := failingStream(1, io.EOF)
+		stream.recvErr = errors.New("microvm vm is not running")
+		stub := &stubHost{name: "h1", exec: func(context.Context) (flintlock.ExecStream, error) { return stream, nil }}
+		tr := newExecTransport(t, transport.Target{Host: stub, VMUID: "vm"})
+		status, err := tr.Run(ctx, transport.Command{Path: "sh"})
+		if !errors.Is(err, transport.ErrStreamFailed) {
+			t.Fatalf("Run returned (%d, %v), want a failure wrapping ErrStreamFailed", status, err)
+		}
+		if !strings.Contains(err.Error(), "is not running") {
+			t.Errorf("the failure %q does not carry the status the host put on the response stream", err)
+		}
+	})
 }

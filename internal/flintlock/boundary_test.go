@@ -5,6 +5,7 @@ import (
 	"go/ast"
 	"go/parser"
 	"go/token"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
@@ -49,21 +50,11 @@ func TestRunnerSideCodeCannotCreateOrDeleteMicroVMs(t *testing.T) {
 
 	t.Run("no runner-side package calls them", func(t *testing.T) {
 		root := repoRoot(t)
-		// The Runner side: this package, the Inventory translation and the
-		// Guest Transports. Not the fake Host, which serves both RPCs, and
-		// not the fake Pool Manager, which calls them.
-		dirs := []string{
-			filepath.Join(root, "internal", "flintlock"),
-			filepath.Join(root, "internal", "flintlock", "inventory"),
-			filepath.Join(root, "internal", "transport"),
-		}
-		for _, dir := range dirs {
-			for _, file := range goFiles(t, dir) {
-				for _, call := range calledMethods(t, file) {
-					if call == "CreateMicroVM" || call == "DeleteMicroVM" {
-						t.Errorf("%s calls %s; the Runner never creates or deletes a MicroVM (HO-007)",
-							mustRel(t, root, file), call)
-					}
+		for _, file := range runnerSideFiles(t, root) {
+			for _, call := range calledMethods(t, file) {
+				if call == "CreateMicroVM" || call == "DeleteMicroVM" {
+					t.Errorf("%s calls %s; the Runner never creates or deletes a MicroVM (HO-007)",
+						mustRel(t, root, file), call)
 				}
 			}
 		}
@@ -89,21 +80,59 @@ func repoRoot(t *testing.T) string {
 	}
 }
 
-// goFiles lists the Go source files of the package in dir. Test files are
-// left out: a test that seeds a fake Host with a MicroVM is standing in for
-// the Pool Manager, which is the component that may create and delete.
-func goFiles(t *testing.T, dir string) []string {
+// poolManagerSide are the packages that may create and delete MicroVMs,
+// because being the Pool Manager is their whole job: the fake Host, which
+// serves both RPCs, and the fake Pool Manager, which calls them (TD-002).
+// Everything else in the module is the Runner.
+var poolManagerSide = []string{
+	filepath.Join("internal", "flintlock", "fake"),
+	filepath.Join("internal", "poolmgr"),
+}
+
+// runnerSideFiles lists every non-test Go file in the module that is not
+// part of the Pool Manager side. Walking the whole module rather than a
+// list of directories is what makes the subtest as broad as the sentence it
+// prints: a new Runner-side package is covered the day it is added.
+//
+// Test files are left out: a test that seeds a fake Host with a MicroVM is
+// standing in for the Pool Manager, which is the component that may create
+// and delete.
+func runnerSideFiles(t *testing.T, root string) []string {
 	t.Helper()
-	entries, err := os.ReadDir(dir)
-	if err != nil {
-		t.Fatalf("reading %s: %v", dir, err)
-	}
 	var files []string
-	for _, e := range entries {
-		if e.IsDir() || !strings.HasSuffix(e.Name(), ".go") || strings.HasSuffix(e.Name(), "_test.go") {
-			continue
+	err := filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
 		}
-		files = append(files, filepath.Join(dir, e.Name()))
+		rel, relErr := filepath.Rel(root, path)
+		if relErr != nil {
+			return relErr
+		}
+		if d.IsDir() {
+			if rel == "." {
+				return nil
+			}
+			if strings.HasPrefix(d.Name(), ".") || d.Name() == "vendor" {
+				return fs.SkipDir
+			}
+			for _, exempt := range poolManagerSide {
+				if rel == exempt {
+					return fs.SkipDir
+				}
+			}
+			return nil
+		}
+		if !strings.HasSuffix(d.Name(), ".go") || strings.HasSuffix(d.Name(), "_test.go") {
+			return nil
+		}
+		files = append(files, path)
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("walking %s: %v", root, err)
+	}
+	if len(files) == 0 {
+		t.Fatal("the source scan found no files; it would pass whatever the code said")
 	}
 	return files
 }

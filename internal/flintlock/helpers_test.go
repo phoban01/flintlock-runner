@@ -149,6 +149,21 @@ func (r *logRecorder) records(t *testing.T) []map[string]any {
 	return out
 }
 
+// warnsAbout reports whether the recorder holds a warning naming both a Pool
+// and one of its Hosts as missing from the Inventory. Matching the pair is
+// what matters where a Host is missing from more than one Pool.
+func warnsAbout(t *testing.T, r *logRecorder, pool, host string) bool {
+	t.Helper()
+	for _, rec := range r.records(t) {
+		msg, _ := rec["msg"].(string)
+		if rec["level"] == "WARN" && rec["host"] == host && rec["pool"] == pool &&
+			strings.Contains(msg, "missing from the inventory") {
+			return true
+		}
+	}
+	return false
+}
+
 // find returns the first record whose level and host match and whose
 // message contains want, or nil.
 func (r *logRecorder) find(t *testing.T, level, host, want string) map[string]any {

@@ -245,11 +245,13 @@ func TestCheckPoolHostsWarnsAboutHostsMissingFromTheInventory(t *testing.T) {
 	}
 	for pool, hosts := range want {
 		for _, host := range hosts {
-			warning := rec.find(t, "WARN", host, "missing from the inventory")
-			if warning == nil {
-				t.Fatalf("no warning names pool host %s; log was %v", host, rec.records(t))
+			// h3 is missing from two Pools, so the pair is what has to be
+			// matched: a warning naming the Host alone would not tell an
+			// operator which Pool to fix.
+			if !warnsAbout(t, rec, pool, host) {
+				t.Fatalf("no warning names pool host %s together with its pool %s; log was %v",
+					host, pool, rec.records(t))
 			}
-			_ = pool
 		}
 	}
 	for _, r := range rec.records(t) {

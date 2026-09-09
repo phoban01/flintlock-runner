@@ -11,6 +11,7 @@ import (
 	execv1 "github.com/liquidmetal-dev/flintlock/api/services/microvmexec/v1alpha1"
 	"github.com/liquidmetal-dev/flintlock/api/types"
 
+	"github.com/phoban01/flintlock-runner/internal/clock"
 	"github.com/phoban01/flintlock-runner/internal/flintlock"
 	"github.com/phoban01/flintlock-runner/internal/flintlock/fake"
 )
@@ -72,11 +73,30 @@ type scriptedStream struct {
 	closed    bool
 	closeSend chan struct{}
 	once      sync.Once
+	// failed is closed when a Send has failed, so that Recv answers instead
+	// of waiting for a half-close that will never come. It is what lets a
+	// test drive the transport's send-failure path, where the failure of a
+	// Send is followed by a Recv that looks for the real status.
+	failed   chan struct{}
+	failOnce sync.Once
 }
 
 // newScriptedStream builds a stream that answers with responses.
 func newScriptedStream(responses ...*execv1.ExecCommandResponse) *scriptedStream {
-	return &scriptedStream{responses: responses, closeSend: make(chan struct{})}
+	return &scriptedStream{
+		responses: responses,
+		closeSend: make(chan struct{}),
+		failed:    make(chan struct{}),
+	}
+}
+
+// failingStream builds a stream whose nth Send, counting from one, fails
+// with err.
+func failingStream(n int, err error, responses ...*execv1.ExecCommandResponse) *scriptedStream {
+	s := newScriptedStream(responses...)
+	s.failSend = n
+	s.sendErr = err
+	return s
 }
 
 // Send implements flintlock.ExecStream.
@@ -91,6 +111,7 @@ func (s *scriptedStream) Send(req *execv1.ExecCommandRequest) error {
 	s.sent = append(s.sent, req)
 	s.mu.Unlock()
 	if s.sendErr != nil && n == s.failSend {
+		s.failOnce.Do(func() { close(s.failed) })
 		return s.sendErr
 	}
 	return nil
@@ -98,7 +119,10 @@ func (s *scriptedStream) Send(req *execv1.ExecCommandRequest) error {
 
 // Recv implements flintlock.ExecStream.
 func (s *scriptedStream) Recv() (*execv1.ExecCommandResponse, error) {
-	<-s.closeSend
+	select {
+	case <-s.closeSend:
+	case <-s.failed:
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if len(s.responses) == 0 {
@@ -267,4 +291,34 @@ func (s *blockingStream) Recv() (*execv1.ExecCommandResponse, error) {
 	}
 	s.sent = true
 	return exitCode(0), nil
+}
+
+// advanceTick is how often keepAdvancing lets another deadline pass. It is
+// wall-clock pacing only: what the code under test sees is the fake clock
+// jumping a whole deadline each time.
+const advanceTick = 20 * time.Millisecond
+
+// keepAdvancing moves clk forward by d every tick until the returned
+// function is called, and is how a test says "let the deadline keep
+// passing" without waiting for it.
+//
+// A single Advance is not enough: the liveness watch re-arms its timer
+// whenever the Host is heard from, and a reset that lands around an advance
+// swallows the firing, which would leave the watch waiting for a deadline
+// that never comes again. Advancing until the operation ends takes that
+// race out of the test.
+func keepAdvancing(clk *clock.Fake, d time.Duration) (stop func()) {
+	done := make(chan struct{})
+	go func() {
+		for {
+			select {
+			case <-done:
+				return
+			case <-time.After(advanceTick):
+				clk.Advance(d)
+			}
+		}
+	}()
+	var once sync.Once
+	return func() { once.Do(func() { close(done) }) }
 }
