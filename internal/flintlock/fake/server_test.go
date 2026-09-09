@@ -145,6 +145,11 @@ func TestServeMicroVMService(t *testing.T) {
 	if _, err := vms.ServerInfo(ctx, &emptypb.Empty{}); err == nil {
 		t.Error("ServerInfo succeeded after Serve stopped")
 	}
+	// The harness's leak check (TD-054) reads this after every scenario: a
+	// run that deleted its MicroVMs has to leave the sandbox root empty.
+	if left, err := h.Sandboxes(); err != nil || len(left) != 0 {
+		t.Errorf("Sandboxes after a clean shutdown = %v, %v; want none", left, err)
+	}
 }
 
 // TestServeTwiceAndAfterClose: Serve is one-shot and refuses a closed Host.
@@ -262,6 +267,11 @@ func TestBasicAuth(t *testing.T) {
 	}
 }
 
+//= docs/requirements/10-test-doubles.md#fake-host
+//= type=test
+//# The fake Host SHALL enforce basic auth and TLS when configured so that
+//# the Runner's authentication code is exercised.
+
 // TestTLS: the Host serves TLS from cfg.TLS, verifiable against the test
 // CA, and requires a client certificate when ClientCAFile is set.
 func TestTLS(t *testing.T) {
@@ -375,6 +385,57 @@ func TestServerInfo(t *testing.T) {
 			t.Errorf("HostInfo = %+v, want %+v", info, want)
 		}
 	})
+
+	// Both flags, in both states, over both transports: the address is
+	// reported only for a service that is enabled, as flintlockd does.
+	flagTests := []struct {
+		name           string
+		exec, sshProxy bool
+	}{
+		{name: "neither service"},
+		{name: "exec only", exec: true},
+		{name: "ssh proxy only", sshProxy: true},
+		{name: "both services", exec: true, sshProxy: true},
+	}
+	for _, tt := range flagTests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			h := newTestHost(t, flintlock.FakeHostConfig{
+				Name: "h1", Version: "v0.14.0", ExecEnabled: tt.exec, SSHProxyEnabled: tt.sshProxy,
+			})
+			serveHost(t, h)
+			addr := func(enabled bool) string {
+				if enabled {
+					return h.Addr()
+				}
+				return ""
+			}
+
+			resp, err := mvmv1.NewMicroVMClient(dialHost(t, h, nil)).ServerInfo(testCtx(t), &emptypb.Empty{})
+			if err != nil {
+				t.Fatalf("ServerInfo over gRPC: %v", err)
+			}
+			if resp.GetExec().GetEnabled() != tt.exec || resp.GetExec().GetAddress() != addr(tt.exec) {
+				t.Errorf("exec = %v, want enabled=%v at %q", resp.GetExec(), tt.exec, addr(tt.exec))
+			}
+			if resp.GetSshProxy().GetEnabled() != tt.sshProxy || resp.GetSshProxy().GetAddress() != addr(tt.sshProxy) {
+				t.Errorf("ssh_proxy = %v, want enabled=%v at %q", resp.GetSshProxy(), tt.sshProxy, addr(tt.sshProxy))
+			}
+
+			info, err := h.Client().ServerInfo(testCtx(t))
+			if err != nil {
+				t.Fatalf("ServerInfo in process: %v", err)
+			}
+			wantExec := flintlock.GuestService{Enabled: tt.exec, Address: addr(tt.exec)}
+			wantSSH := flintlock.GuestService{Enabled: tt.sshProxy, Address: addr(tt.sshProxy)}
+			if info.Exec != wantExec || info.SSHProxy != wantSSH {
+				t.Errorf("HostInfo services = %+v/%+v, want %+v/%+v", info.Exec, info.SSHProxy, wantExec, wantSSH)
+			}
+			if info.Version != "v0.14.0" || !info.VersionKnown {
+				t.Errorf("HostInfo version = %q (known=%v), want v0.14.0", info.Version, info.VersionKnown)
+			}
+		})
+	}
 
 	t.Run("unimplemented", func(t *testing.T) {
 		t.Parallel()

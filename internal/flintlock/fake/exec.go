@@ -136,6 +136,13 @@ func (r *execRun) do() error {
 	// when the stream does, which is when this handler returns.
 	go pumpStdin(r.stream, stdin)
 
+	//= docs/requirements/10-test-doubles.md#fake-host
+	//# The fake Host SHALL honour the `cwd`, `env`, `timeout_seconds`,
+	//# `has_stdin` and `stdin_eof` fields of an exec request and SHALL accept
+	//# and ignore `user`.
+	// timeout_seconds is a deadline on the command, not on the stream: when
+	// it fires the process group is killed and the client is told why,
+	// rather than the stream being dropped (TD-023).
 	var timedOut atomic.Bool
 	if secs := r.start.GetTimeoutSeconds(); secs > 0 {
 		timer := r.h.clk.NewTimer(time.Duration(secs) * time.Second)
@@ -268,8 +275,15 @@ func mergeEnv(base []string, extra map[string]string) []string {
 	return out
 }
 
+//= docs/requirements/10-test-doubles.md#fake-host
+//# The fake Host SHALL honour the `cwd`, `env`, `timeout_seconds`,
+//# `has_stdin` and `stdin_eof` fields of an exec request and SHALL accept
+//# and ignore `user`.
+
 // pumpStdin relays stdin and stdin_eof messages into w until the client
-// half-closes or the stream ends. A nil w means the command took no stdin;
+// half-closes or the stream ends (TD-023): stdin_eof closes the pipe, which
+// is what lets a reader such as cat see end of input while the stream stays
+// open for its output. A nil w means the request did not set has_stdin;
 // messages are then drained and dropped.
 func pumpStdin(stream execStream, w io.WriteCloser) {
 	defer func() {

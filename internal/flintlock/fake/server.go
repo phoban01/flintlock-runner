@@ -161,6 +161,10 @@ func (h *Host) admit(ctx context.Context) error {
 	return h.authenticate(ctx)
 }
 
+//= docs/requirements/10-test-doubles.md#fake-host
+//# The fake Host SHALL enforce basic auth and TLS when configured so that
+//# the Runner's authentication code is exercised.
+
 // authenticate enforces basic auth when a token is configured (TD-024,
 // HO-004). It accepts exactly what flintlockd's BasicAuthFunc accepts: an
 // `authorization` header whose scheme is `basic` (case-insensitive) and

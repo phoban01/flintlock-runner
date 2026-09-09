@@ -335,6 +335,12 @@ func TestExecRejectsBadStreams(t *testing.T) {
 	}
 }
 
+//= docs/requirements/10-test-doubles.md#fake-host
+//= type=test
+//# The fake Host SHALL honour the `cwd`, `env`, `timeout_seconds`,
+//# `has_stdin` and `stdin_eof` fields of an exec request and SHALL accept
+//# and ignore `user`.
+
 // TestExecTimeout: timeout_seconds is enforced on the Host's clock; the
 // process group is killed and the client gets an error payload followed by
 // the exit code.
