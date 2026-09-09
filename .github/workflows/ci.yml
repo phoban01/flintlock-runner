@@ -43,6 +43,27 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          # the snapshot guard below diffs against the base branch
+          fetch-depth: 0
+      # The snapshot records every requirement's status. CONTRIBUTING reserves
+      # it for the lead at milestones, so that parallel work-package branches
+      # do not all conflict on it.
+      - name: snapshot is the lead's to change
+        if: github.event_name == 'pull_request'
+        env:
+          PR_BODY: ${{ github.event.pull_request.body }}
+          BASE: ${{ github.base_ref }}
+        run: |
+          if git diff --quiet "origin/$BASE...HEAD" -- .duvet/snapshot.txt; then
+            exit 0
+          fi
+          if printf '%s\n' "$PR_BODY" | tr -d '\r' | grep -q '^Snapshot: milestone'; then
+            echo "snapshot change accepted: the PR body declares a milestone snapshot"
+            exit 0
+          fi
+          echo "::error::this PR changes .duvet/snapshot.txt, which CONTRIBUTING reserves for the lead at milestones. Restore it with: git checkout origin/$BASE -- .duvet/snapshot.txt. A deliberate milestone snapshot must say 'Snapshot: milestone' on its own line in the PR body."
+          exit 1
       # awslabs/duvet ships a composite action that installs the crate at a
       # given version; pinned to a commit on main, version 0.4.3 (crates.io).
       - name: install duvet

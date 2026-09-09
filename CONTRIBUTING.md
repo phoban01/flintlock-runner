@@ -20,8 +20,11 @@ long one and `docs/PLAN.md` is the coordination contract.
   `internal/config/types.go` are owned by the lead. If you need a change,
   open a small PR against those files first; do not widen an interface
   inside a feature PR.
-- **Package boundaries** are the ones in `README.md`. `internal/executor` is
-  the only package that imports gitlab-runner; `internal/flintlock` and
+- **Package boundaries** are the ones in `README.md`. gitlab-runner is
+  imported only by `internal/executor`, by `internal/config/runnercfg` (which
+  holds the `RunnerConfig` translation so that `internal/config` itself stays
+  free of it), by the GitLab test doubles under `internal/testing`, and by
+  `cmd/flintlock-runner`; `internal/flintlock` and
   `internal/poolmgr` are the only packages that import the flintlock and
   battery generated code. Nothing on the Runner side holds a
   `flintlock.PoolHostClient` (HO-007).
@@ -41,8 +44,10 @@ long one and `docs/PLAN.md` is the coordination contract.
    `TD-001..010` are accepted.
 
 `.duvet/snapshot.txt` is regenerated and committed only at milestones, by
-the lead. `make duvet` rewrites it locally; do not include that change in a
-work-package PR unless asked.
+the lead. `make duvet` rewrites it locally; restore it with
+`git checkout origin/main -- .duvet/snapshot.txt` before you commit, because
+CI rejects a pull request that changes it. A milestone snapshot declares
+itself with a line reading `Snapshot: milestone` in the pull request body.
 
 ## Citing requirements
 
