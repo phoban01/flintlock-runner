@@ -193,6 +193,15 @@ func (p *PoolManager) Serve(ctx context.Context) error {
 		<-runErr
 		return fmt.Errorf("fake poolmgr: serve: %w", err)
 	case err := <-runErr:
+		// Cancelling ctx cancels runCtx too, so at a normal shutdown both
+		// this case and ctx.Done() become ready and the poll picks at
+		// random. A control loop that stopped because it was told to is
+		// not the control loop stopping early.
+		if ctx.Err() != nil {
+			srv.Stop()
+			<-serveErr
+			return err
+		}
 		srv.Stop()
 		<-serveErr
 		if err != nil {
