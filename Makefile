@@ -41,14 +41,17 @@ tidy-check:
 	git diff --exit-code -- go.mod go.sum
 
 ## duvet: extract requirements, build the HTML/JSON report and refresh the snapshot
+# --ci false is explicit: duvet turns the snapshot check on by itself when CI is
+# set in the environment, which would make this target reject every PR that adds
+# a citation. The snapshot is checked only by duvet-ci, at milestones.
 duvet:
 	rm -rf .duvet/requirements
-	$(DUVET) report
+	$(DUVET) report --ci false
 
 ## duvet-ci: same as duvet but fail if .duvet/snapshot.txt would change (milestones only)
 duvet-ci:
 	rm -rf .duvet/requirements
-	$(DUVET) report --ci
+	$(DUVET) report --ci true
 
 ## duvet-open: build the report and open it in a browser
 duvet-open: duvet
