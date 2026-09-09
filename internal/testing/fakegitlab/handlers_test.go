@@ -138,6 +138,12 @@ func TestLongPollWakesOnEnqueue(t *testing.T) {
 	if err := json.Unmarshal(r.body, &job); err != nil || job.ID != 5 {
 		t.Fatalf("woken request body = %s (%v), want job 5", r.body, err)
 	}
+	// GitLab sends the queue version only when it has no Job to hand out,
+	// so a request that produced a Job leaves the client's stored
+	// last_update alone.
+	if lu := r.header.Get("X-GitLab-Last-Update"); lu != "" {
+		t.Errorf("job response carried X-GitLab-Last-Update %q, want none", lu)
+	}
 
 	// The version moved on, so the stale one is answered at once.
 	stale := do(t, url, http.MethodPost, "/api/v4/jobs/request", nil, requestJobBody(t, version))
@@ -237,6 +243,74 @@ func TestPatchTraceRanges(t *testing.T) {
 				t.Errorf("Trace = %q, want %q", got, tt.wantTrace)
 			}
 		})
+	}
+}
+
+//= docs/requirements/10-test-doubles.md#fake-gitlab
+//= type=test
+//# The fake GitLab SHALL be able to cancel a running Job through the
+//# `Job-Status` header and to answer a final update with an
+//# accepted-but-pending response a configurable number of times.
+
+// TestUpdateJobStatusHeader pins the headers of the job update endpoint
+// across the life of a cancelled Job, since they are what the client reads
+// to decide between carrying on, cancelling gracefully and aborting: every
+// answered update carries the Job's status on the GitLab side, as the real
+// endpoint sets Job-Status from the job once its update service has run,
+// together with the trace update interval; a request for a Job that is no
+// longer processing on a runner is refused with the status alone.
+func TestUpdateJobStatusHeader(t *testing.T) {
+	t.Parallel()
+	s, url := newHandlerServer(t, Options{PendingFinalUpdates: 1, TraceUpdateInterval: 9 * time.Second})
+	s.Enqueue(&spec.Job{ID: 21, Token: "glcbt-21"})
+	if r := do(t, url, http.MethodPost, "/api/v4/jobs/request", nil, requestJobBody(t, "")); r.code != http.StatusCreated {
+		t.Fatalf("request job = %d, want 201", r.code)
+	}
+	update := func(state string) response {
+		body := jsonBody(t, map[string]any{"state": state, "failure_reason": "job_canceled"})
+		return do(t, url, http.MethodPut, "/api/v4/jobs/21", http.Header{"Job-Token": {"glcbt-21"}}, body)
+	}
+
+	steps := []struct {
+		name       string
+		cancel     bool
+		state      string
+		wantCode   int
+		wantStatus string
+	}{
+		{name: "heartbeat while running", state: "running", wantCode: http.StatusOK, wantStatus: StatusRunning},
+		{name: "heartbeat after Cancel", cancel: true, state: "running", wantCode: http.StatusOK, wantStatus: StatusCanceling},
+		{name: "pending final update stays cancelling", state: "failed", wantCode: http.StatusAccepted, wantStatus: StatusCanceling},
+		{name: "confirmed final update cancels", state: "failed", wantCode: http.StatusOK, wantStatus: StatusCanceled},
+		{name: "update after the job finished", state: "failed", wantCode: http.StatusForbidden, wantStatus: StatusCanceled},
+	}
+	for _, st := range steps {
+		t.Run(st.name, func(t *testing.T) {
+			if st.cancel {
+				if err := s.Cancel(21); err != nil {
+					t.Fatalf("Cancel: %v", err)
+				}
+			}
+			r := update(st.state)
+			if r.code != st.wantCode {
+				t.Fatalf("code = %d (%s), want %d", r.code, r.body, st.wantCode)
+			}
+			if got := r.header.Get(headerJobStatus); got != st.wantStatus {
+				t.Errorf("Job-Status = %q, want %q", got, st.wantStatus)
+			}
+			// The interval is advertised on an answered update and left off
+			// a refusal, as GitLab does.
+			want := "9"
+			if st.wantCode == http.StatusForbidden {
+				want = ""
+			}
+			if got := r.header.Get(headerTraceUpdateInterval); got != want {
+				t.Errorf("X-GitLab-Trace-Update-Interval = %q, want %q", got, want)
+			}
+		})
+	}
+	if rec := s.Record(21); rec.Status != StatusCanceled || rec.FailureReason != "job_canceled" {
+		t.Errorf("record = status %q reason %q, want canceled/job_canceled", rec.Status, rec.FailureReason)
 	}
 }
 

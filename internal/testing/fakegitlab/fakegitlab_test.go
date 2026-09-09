@@ -385,6 +385,11 @@ func TestRealClientPendingFinalUpdates(t *testing.T) {
 				if res.State != common.UpdateAcceptedButNotCompleted {
 					t.Fatalf("final update %d = %+v, want accepted-but-pending", i+1, res)
 				}
+				// The interval the pending answer advertises is the one the
+				// client backs off for before retrying (GL-063).
+				if res.NewUpdateInterval != fakegitlab.DefaultTraceUpdateInterval {
+					t.Errorf("final update %d interval = %v, want %v", i+1, res.NewUpdateInterval, fakegitlab.DefaultTraceUpdateInterval)
+				}
 				if rec := s.Record(job.ID); rec.Status != fakegitlab.StatusRunning {
 					t.Fatalf("Status while pending = %q, want running", rec.Status)
 				}
@@ -595,5 +600,55 @@ func TestRealClientProcessJobTrace(t *testing.T) {
 	}
 	if last := rec.Updates[len(rec.Updates)-1]; last.Checksum == "" || last.Bytesize != len("line\n") {
 		t.Errorf("final update = %+v, want a checksum and bytesize %d", last, len("line\n"))
+	}
+}
+
+//= docs/requirements/10-test-doubles.md#fake-gitlab
+//= type=test
+//# The fake GitLab SHALL be able to cancel a running Job through the
+//# `Job-Status` header and to answer a final update with an
+//# accepted-but-pending response a configurable number of times.
+
+func TestRealClientProcessJobTraceCancellation(t *testing.T) {
+	t.Parallel()
+	// The whole graceful-cancellation exchange through the client's own
+	// trace: the Runner streams the log, GitLab cancels the Job, and the
+	// Runner reports the Job as failed with job_canceled, which moves the
+	// Job to canceled. The final update comes back with Job-Status:
+	// canceled and so as UpdateAbort, and the client has to treat that as
+	// terminal rather than retrying: Fail returns without an error and the
+	// fake sees exactly one final update.
+	s := startServer(t, fakegitlab.Options{TraceUpdateInterval: time.Second})
+	client := network.NewGitLabClient()
+	cfg := runnerConfig(s.URL())
+	job := requestJob(t, s, client, testJob(602))
+
+	trace, err := client.ProcessJob(cfg, jobCredentials(s.URL(), job))
+	if err != nil {
+		t.Fatalf("ProcessJob: %v", err)
+	}
+	if _, err := io.WriteString(trace, "script output\n"); err != nil {
+		t.Fatalf("write trace: %v", err)
+	}
+	if err := s.Cancel(job.ID); err != nil {
+		t.Fatalf("Cancel: %v", err)
+	}
+	if err := trace.Fail(common.ErrJobCanceled, common.JobFailureData{Reason: common.JobCanceled}); err != nil {
+		t.Fatalf("trace.Fail after Cancel: %v", err)
+	}
+
+	rec := s.Record(job.ID)
+	if rec.Trace != "script output\n" {
+		t.Errorf("Trace = %q, want the streamed log", rec.Trace)
+	}
+	if rec.Status != fakegitlab.StatusCanceled || rec.FailureReason != "job_canceled" {
+		t.Errorf("record = status %q reason %q, want canceled/job_canceled", rec.Status, rec.FailureReason)
+	}
+	if wantStates := []string{"failed"}; !reflect.DeepEqual(rec.States, wantStates) {
+		t.Errorf("States = %v, want %v (one final update, not retried)", rec.States, wantStates)
+	}
+	if last := rec.Updates[len(rec.Updates)-1]; !last.Accepted || last.Checksum == "" ||
+		last.Bytesize != len("script output\n") {
+		t.Errorf("final update = %+v, want an accepted update with the log checksum and size", last)
 	}
 }
