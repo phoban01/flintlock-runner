@@ -79,11 +79,24 @@ func TestConnectionOutlivesTheHostAndReconnects(t *testing.T) {
 //# when a connection is lost.
 
 // TestReconnectionBackoffIsExponential watches a Host that refuses every
-// connection and times the attempts the client makes. Each gap has to be
-// longer than the one before it, which is what exponential backoff means
-// and what keeps a fleet of unreachable Hosts from being hammered.
+// connection and times the attempts the client makes. Each gap has to be at
+// least the configured backoff for that attempt, which grows by the
+// multiplier every time, and that is what keeps a fleet of unreachable
+// Hosts from being hammered.
+//
+// The assertion is a floor rather than a comparison between neighbouring
+// gaps: a loaded machine can stretch a gap but never shorten one, so floors
+// cannot fail for being slow, while "longer than the one before" can and
+// did.
 func TestReconnectionBackoffIsExponential(t *testing.T) {
 	t.Parallel()
+	// The Runner's own multiplier and jitter (HO-002); the base is short so
+	// that the test does not wait seconds for its fourth attempt.
+	const (
+		backoffBase = 100 * time.Millisecond
+		multiplier  = 1.6
+		jitter      = 0.2
+	)
 	attempts := make(chan time.Time, 16)
 	lis, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
@@ -114,7 +127,7 @@ func TestReconnectionBackoffIsExponential(t *testing.T) {
 		Address: lis.Addr().String(),
 		TLS:     flintlock.TLSOptions{Insecure: true},
 	}, flintlock.WithCallDeadline(100*time.Millisecond),
-		flintlock.WithReconnectBackoff(100*time.Millisecond, 5*time.Second))
+		flintlock.WithReconnectBackoff(backoffBase, 5*time.Second))
 
 	// The first call starts the connection; it and everything after it fails.
 	ctx, cancel := context.WithTimeout(context.Background(), testTimeout)
@@ -135,14 +148,18 @@ func TestReconnectionBackoffIsExponential(t *testing.T) {
 			t.Fatalf("saw only %d connection attempts, want %d", len(seen), want)
 		}
 	}
-	var previous time.Duration
+	// The nth gap must be at least the nth delay of the schedule, less the
+	// jitter that may shorten it. A client that did not back off at all, or
+	// that waited the same time every time, is under the floor by the third
+	// attempt.
+	floor := float64(backoffBase) * (1 - jitter)
 	for i := 1; i < len(seen); i++ {
 		gap := seen[i].Sub(seen[i-1])
-		if i > 1 && gap <= previous {
-			t.Errorf("connection attempt %d came %s after the one before, which is not longer than the previous gap of %s",
-				i, gap, previous)
+		if want := time.Duration(floor); gap < want {
+			t.Errorf("connection attempt %d came %s after the one before, less than the %s the backoff owes by then",
+				i, gap, want)
 		}
-		previous = gap
+		floor *= multiplier
 	}
 }
 
