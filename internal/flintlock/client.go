@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"log/slog"
 	"sync"
 
 	mvmv1 "github.com/liquidmetal-dev/flintlock/api/services/microvm/v1alpha1"
@@ -44,7 +43,6 @@ import (
 type Client struct {
 	ep   Endpoint
 	conn *grpc.ClientConn
-	log  *slog.Logger
 
 	vms  mvmv1.MicroVMClient
 	exec execv1.MicroVMExecClient
@@ -54,15 +52,15 @@ type Client struct {
 	closeErr  error
 }
 
-// newClient builds the Client over an established connection.
-func newClient(ep Endpoint, conn *grpc.ClientConn, log *slog.Logger) *Client {
-	if log == nil {
-		log = discardLogger()
-	}
+// newClient builds the Client over an established connection. It keeps no
+// logger of its own: what a Host answers is reported to the caller as an
+// error naming the Host, and the components that decide what is worth
+// saying about a Host -- Probe and the Registry -- have loggers of their
+// own.
+func newClient(ep Endpoint, conn *grpc.ClientConn) *Client {
 	return &Client{
 		ep:   ep,
 		conn: conn,
-		log:  log.With("host", ep.Name),
 		vms:  mvmv1.NewMicroVMClient(conn),
 		exec: execv1.NewMicroVMExecClient(conn),
 		ssh:  sshv1.NewMicroVMSSHProxyClient(conn),

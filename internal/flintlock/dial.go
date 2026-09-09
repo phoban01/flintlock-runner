@@ -53,16 +53,6 @@ func WithCallDeadline(d time.Duration) DialerOption {
 	}
 }
 
-// WithLogger sets the logger the connections report on. The default
-// discards.
-func WithLogger(log *slog.Logger) DialerOption {
-	return func(g *grpcDialer) {
-		if log != nil {
-			g.log = log
-		}
-	}
-}
-
 // WithKeepalive sets how often an idle connection is pinged and how long a
 // ping may go unanswered before the connection is re-established (HO-002).
 // Non-positive values keep the defaults. Production uses the defaults; it
@@ -99,7 +89,6 @@ func WithReconnectBackoff(base, max time.Duration) DialerOption {
 func NewDialer(opts ...DialerOption) Dialer {
 	g := &grpcDialer{
 		deadline:         DefaultCallDeadline,
-		log:              discardLogger(),
 		keepaliveTime:    keepaliveTime,
 		keepaliveTimeout: keepaliveTimeout,
 		backoffBase:      reconnectBaseDelay,
@@ -114,7 +103,6 @@ func NewDialer(opts ...DialerOption) Dialer {
 // grpcDialer is the production Dialer.
 type grpcDialer struct {
 	deadline         time.Duration
-	log              *slog.Logger
 	keepaliveTime    time.Duration
 	keepaliveTimeout time.Duration
 	backoffBase      time.Duration
@@ -172,7 +160,7 @@ func (g *grpcDialer) Dial(_ context.Context, ep Endpoint) (HostClient, error) {
 	if err != nil {
 		return nil, fmt.Errorf("flintlock: dialling host %s at %s: %w", ep.Name, ep.Address, err)
 	}
-	return newClient(ep, conn, g.log), nil
+	return newClient(ep, conn), nil
 }
 
 //= docs/requirements/05-hosts.md#flintlock-client
