@@ -308,8 +308,10 @@ func (s *memExecStream) server() execStream { return memServerStream{s} }
 // memServerStream is the execStream the handler drives.
 type memServerStream struct{ s *memExecStream }
 
+// Context implements execStream.
 func (m memServerStream) Context() context.Context { return m.s.ctx }
 
+// Send implements execStream.
 func (m memServerStream) Send(resp *execv1.ExecCommandResponse) error {
 	select {
 	case m.s.resps <- resp:
@@ -319,6 +321,7 @@ func (m memServerStream) Send(resp *execv1.ExecCommandResponse) error {
 	}
 }
 
+// Recv implements execStream.
 func (m memServerStream) Recv() (*execv1.ExecCommandRequest, error) {
 	// Deliver buffered requests before reporting the half-close, as gRPC
 	// does.

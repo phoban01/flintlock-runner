@@ -92,8 +92,6 @@ func (h *Host) Serve(ctx context.Context) error {
 		<-stopped
 	}
 	<-serveErr
-	h.mu.Lock()
-	h.mu.Unlock()
 	return nil
 }
 

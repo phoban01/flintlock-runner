@@ -75,13 +75,12 @@ func serveHost(t *testing.T, h *Host) (stop func() error) {
 }
 
 // dialHost opens a gRPC connection to a serving Host.
-func dialHost(t *testing.T, h *Host, creds credentials.TransportCredentials, opts ...grpc.DialOption) *grpc.ClientConn {
+func dialHost(t *testing.T, h *Host, creds credentials.TransportCredentials) *grpc.ClientConn {
 	t.Helper()
 	if creds == nil {
 		creds = insecure.NewCredentials()
 	}
-	opts = append([]grpc.DialOption{grpc.WithTransportCredentials(creds)}, opts...)
-	conn, err := grpc.NewClient(h.Addr(), opts...)
+	conn, err := grpc.NewClient(h.Addr(), grpc.WithTransportCredentials(creds))
 	if err != nil {
 		t.Fatalf("NewClient(%s): %v", h.Addr(), err)
 	}
