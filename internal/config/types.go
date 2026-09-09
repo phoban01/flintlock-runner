@@ -142,6 +142,14 @@ type Profile struct {
 	// names (SC-010).
 	ImageGlobs []string `yaml:"image_globs,omitempty"`
 	// Default marks the Default Profile; at most one Profile sets it (CF-022).
+	//
+	// It is an applied default: when the configuration declares exactly one
+	// Profile, ApplyDefaults marks that Profile as the Default whether or not
+	// the file said so. The effect is observable -- `config show` prints it,
+	// runnercfg.Build takes the runner-wide builds and cache directories from
+	// the Default Profile, and image resolution falls back to it. CF-022 says
+	// only that at most one Profile may be marked, so this is a documented
+	// default rather than a rule of the specification.
 	Default bool `yaml:"default,omitempty"`
 	// Transport selects and configures the Guest Transport (EX-042).
 	Transport Transport `yaml:"transport"`
@@ -641,6 +649,14 @@ type DistributedCache struct {
 	// in the end-to-end harness (TD-034).
 	Endpoint string `yaml:"endpoint,omitempty"`
 	// Insecure allows an http Endpoint; harness use only.
+	//
+	// It is rejected by validation as things stand. The Distributed cache
+	// authenticates with instance-metadata credentials so that no AWS
+	// credential enters a guest (CF-082), and gitlab-runner's IAM client
+	// hardcodes a TLS connection and never reads its Insecure field, so an
+	// http endpoint would validate here and be dialled as https at run time.
+	// Honouring it needs a credential source in the section, which is a
+	// specification change.
 	Insecure bool `yaml:"insecure,omitempty"`
 }
 

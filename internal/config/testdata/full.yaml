@@ -1,0 +1,275 @@
+# A complete flintlock-runner configuration. Every section and every optional
+# field is set, so this file doubles as the reference for the schema in
+# docs/requirements/07-configuration.md. testdata/full.show.golden is what
+# `flintlock-runner config show` prints for it. Secrets can also come from
+# the environment (FLINTLOCK_RUNNER_GITLAB_TOKEN, FLINTLOCK_RUNNER_HOST_TOKEN,
+# FLINTLOCK_RUNNER_HOST_TOKEN_<NAME>, FLINTLOCK_RUNNER_FLEET_HOST_TOKEN), which
+# wins over the file.
+
+gitlab:
+  url: https://gitlab.example.com
+  token: glrt-file-token
+  name: metal-runner
+  concurrent: 8
+  check_interval: 5s
+  output_limit_kb: 8192
+  shutdown_timeout: 45s
+  tls:
+    ca_file: /etc/flintlock-runner/gitlab-ca.pem
+    cert_file: /etc/flintlock-runner/gitlab-client.pem
+    key_file: /etc/flintlock-runner/gitlab-client.key
+  allow_insecure: false
+
+profiles:
+  - name: ubuntu-arm64
+    arch: arm64
+    vcpu: 4
+    memory_mb: 8192
+    kernel:
+      image: ghcr.io/example/kernel@sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
+      filename: boot/vmlinux
+      cmdline:
+        console: ttyS0
+        systemd.unified_cgroup_hierarchy: "1"
+    initrd:
+      image: ghcr.io/example/initrd:6.1
+      filename: boot/initrd.img
+    rootfs: ghcr.io/example/ubuntu-ci:24.04
+    additional_volumes:
+      - id: tools
+        image: ghcr.io/example/tools:1.2.3
+        mount_point: /opt/tools
+        read_only: true
+      - id: scratch
+        image: ghcr.io/example/scratch@sha256:fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210
+        mount_point: /scratch
+        size_mb: 20480
+    provider: firecracker
+    user_data: |
+      #cloud-config
+      hostname: {{ .Profile }}
+    shell: /bin/bash
+    builds_dir: /builds
+    cache_dir: /cache
+    helper_path: /usr/local/bin/gitlab-runner-helper
+    images:
+      - ubuntu
+      - ubuntu:24.04
+    image_globs:
+      - "ubuntu:*"
+    default: true
+    transport:
+      kind: exec
+    user: root
+    ready_timeout: 90s
+    host_selector:
+      tier: general
+    max_concurrency: 6
+    pool:
+      size: 3
+      name: ubuntu-arm64
+      namespace: metal-runner
+      strategy: min_size_threshold
+      min_size: 1
+      create_hooks:
+        - /usr/local/bin/warm-caches
+      pre_lease_hooks:
+        - /usr/local/bin/check-agent
+      hook_failure_policy: quarantine
+      heartbeat_interval: 15s
+      heartbeat_expiry: 60s
+
+  - name: builder-ssh
+    arch: arm64
+    vcpu: 8
+    memory_mb: 16384
+    kernel:
+      image: ghcr.io/example/kernel@sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
+    rootfs: ghcr.io/example/builder@sha256:89abcdef0123456789abcdef0123456789abcdef0123456789abcdef01234567
+    images:
+      - builder
+    transport:
+      kind: ssh
+      ssh:
+        user: ci
+        private_key_file: /etc/flintlock-runner/builder-ssh.key
+        known_host_key: ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIExampleExampleExampleExampleExampleExampleExam
+    user: ci
+    host_selector:
+      tier: builders
+    pool:
+      size: 1
+      strategy: replace_on_delete
+
+inventory:
+  hosts:
+    - name: host-a
+      endpoint: 10.0.1.10:9090
+      arch: arm64
+      vcpu: 62
+      memory_mb: 253952
+      labels:
+        tier: general
+        az: eu-west-1a
+      token: host-a-file-token
+      tls:
+        ca_file: /etc/flintlock-runner/fleet-ca.pem
+        cert_file: /etc/flintlock-runner/host-a.pem
+        key_file: /etc/flintlock-runner/host-a.key
+      services:
+        buildkit: tcp://172.31.0.1:1234
+        go_proxy: http://172.31.0.1:3000
+        registry_mirror: http://172.31.0.1:5000
+        http_cache:
+          npm: http://172.31.0.1:3128/npm
+          pypi: http://172.31.0.1:3128/pypi
+      versions:
+        flintlock: v0.12.1
+        firecracker: v1.10.1
+        cloud_hypervisor: v41.0
+        containerd: v1.7.22
+    - name: host-b
+      endpoint: 10.0.1.11:9090
+      arch: arm64
+      vcpu: 62
+      memory_mb: 253952
+      labels:
+        tier: builders
+        az: eu-west-1b
+      token: host-b-file-token
+      tls:
+        ca_file: /etc/flintlock-runner/fleet-ca.pem
+      services:
+        buildkit: tcp://172.31.0.1:1234
+        go_proxy: http://172.31.0.1:3000
+
+pool_manager:
+  endpoint: 10.0.0.5:9091
+  tls:
+    ca_file: /etc/flintlock-runner/poolmgr-ca.pem
+    cert_file: /etc/flintlock-runner/poolmgr-client.pem
+    key_file: /etc/flintlock-runner/poolmgr-client.key
+  deadline: 15s
+  health_backoff: 20s
+  health_interval: 8s
+  health_failure_threshold: 4
+  events_poll_interval: 3s
+  declare_retry_interval: 20s
+  release_retry_limit: 6
+
+scheduler:
+  namespace: metal-runner
+  allocation_timeout: 4m
+  host_health_interval: 12s
+  host_unhealthy_threshold: 2
+  host_call_deadline: 8s
+  keep_on_failure: true
+  keep_duration: 30m
+  allow_default_for_unknown_images: true
+
+executor:
+  prepare_timeout: 6m
+  graceful_kill_timeout: 20s
+  transport_deadline: 25s
+
+fleet:
+  region: eu-west-1
+  discovery:
+    tag_key: flintlock-runner:fleet
+    tag_value: metal
+  remote:
+    mode: ssm
+  parallelism: 6
+  versions:
+    flintlock: v0.12.1
+    firecracker: v1.10.1
+    cloud_hypervisor: v41.0
+    containerd: v1.7.22
+    pool_manager: v0.1.0
+  thin_pool_device: /dev/nvme1n1
+  guest_subnet: 172.31.0.0/16
+  flintlockd:
+    port: 9090
+    token: fleet-file-token
+    tls:
+      ca_file: /etc/flintlock-runner/fleet-ca.pem
+      cert_file: /etc/flintlock-runner/fleet-host.pem
+      key_file: /etc/flintlock-runner/fleet-host.key
+  host_reserve:
+    vcpu: 2
+    memory_mb: 8192
+  inventory_path: /etc/flintlock-runner/inventory.yaml
+  runner_config_path: /etc/flintlock-runner/config.yaml
+  endpoint_overrides:
+    i-0123456789abcdef0: 10.0.9.10:9090
+  launch_template:
+    parameters:
+      host_token: /flintlock-runner/host-token
+      tls_ca: /flintlock-runner/tls-ca
+      tls_cert: /flintlock-runner/tls-cert
+      tls_key: /flintlock-runner/tls-key
+    inventory_refresh_interval: 5m
+  egress_allow_list:
+    - 0.0.0.0/0
+  drain_timeout: 20m
+  verification_timeout: 15m
+
+host_services:
+  buildkit:
+    enabled: true
+    port: 1234
+    storage_limit: 40GiB
+    gc_policy: "keepBytes=30GB"
+  go_proxy:
+    enabled: true
+    port: 3000
+    upstream: https://proxy.golang.org
+    private_patterns:
+      - gitlab.example.com/*
+    private_vcs_host: gitlab.example.com
+    credential_parameter: /flintlock-runner/goproxy-token
+    private_revalidate_interval: 12h
+    storage_limit: 20GiB
+    prewarm:
+      - golang.org/x/tools@v0.30.0
+  registry_mirror:
+    enabled: true
+    port: 5000
+    upstreams:
+      - url: https://registry-1.docker.io
+      - url: https://ghcr.io
+        credential_parameter: /flintlock-runner/ghcr-token
+    storage_limit: 60GiB
+    prewarm:
+      - docker.io/library/alpine:3.20
+  http_cache:
+    enabled: true
+    port: 3128
+    upstreams:
+      - name: npm
+        url: https://registry.npmjs.org
+        size_limit: 10GiB
+        ttl: 48h
+        env_var: NPM_CONFIG_REGISTRY
+      - name: pypi
+        url: https://pypi.org/simple
+        size_limit: 10GiB
+        ttl: 24h
+        env_var: PIP_INDEX_URL
+  cache_volume:
+    device: /dev/nvme2n1
+    size_cap: 200GiB
+
+distributed_cache:
+  bucket: ci-cache
+  region: eu-west-1
+  prefix: metal-runner
+  endpoint: https://s3.eu-west-1.amazonaws.com
+  insecure: false
+
+observability:
+  log_format: json
+  log_level: info
+  listen_address: :9252
+
+state_dir: /var/lib/flintlock-runner

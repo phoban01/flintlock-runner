@@ -1,0 +1,21 @@
+# The smallest configuration that starts a Runner (CF-005). Everything else
+# takes its documented default; `config show` prints the result.
+gitlab:
+  url: https://gitlab.example.com
+  token: glrt-minimal
+pool_manager:
+  endpoint: 10.0.0.5:9091
+inventory:
+  hosts:
+    - name: host-a
+      endpoint: 10.0.1.10:9090
+      arch: arm64
+      vcpu: 62
+      memory_mb: 253952
+profiles:
+  - name: default
+    kernel:
+      image: ghcr.io/example/kernel@sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
+    rootfs: ghcr.io/example/ubuntu-ci@sha256:89abcdef0123456789abcdef0123456789abcdef0123456789abcdef01234567
+    pool:
+      size: 2
