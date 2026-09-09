@@ -37,7 +37,9 @@ type TrackerConfig struct {
 	// Log receives the Pool warnings of PL-055 and PL-056.
 	Log *slog.Logger
 	// OnEvent and OnPoll, when set, are called after an event or a poll has
-	// been applied. They are the observation seam a test synchronises on and
+	// been applied; OnEvent is called for an event dropped because its Pool
+	// is not tracked too, so that a caller sees every event that arrived.
+	// They are the observation seam a test synchronises on and
 	// a caller can use to react to Pool changes without a second
 	// subscription; they run on the Tracker's own goroutines and must not
 	// block.
@@ -59,7 +61,20 @@ type TrackerConfig struct {
 // there, is a no-op, so a replay cannot inflate the count. The MicroVMs a
 // poll reports whose uids no event has named are counted alongside them,
 // and the first event that names one moves it from the one group into the
-// other.
+// other -- the first, and only the first: the Pool Manager emits several
+// events for one leased MicroVM, VM_CLAIMED then VM_RELEASED then
+// VM_DELETED_ON_RELEASE, and if each of them took one MicroVM out of the
+// anonymous count a Pool that a poll had counted anonymously would bleed
+// three counts per Job and end up reporting zero while still holding warm
+// MicroVMs.
+//
+// The Pool Manager's other counts -- leased, provisioning and quarantined
+// -- are running totals folded from the same replayed stream, so a poll is
+// asked for as soon as a subscription is granted again, which overwrites
+// them with the Pool Manager's own figures and rebaselines the available
+// count with them. A Pool that an event counts down to nothing is polled
+// for the same reason: a wrong zero refuses Jobs and produces no event that
+// could correct it.
 type PoolTracker struct {
 	cfg TrackerConfig
 	log *slog.Logger
@@ -83,6 +98,13 @@ type trackedPool struct {
 	// unnamed is how many MicroVMs the last poll reported available whose
 	// uid no event has named.
 	unnamed int32
+	// accounted holds the uid of every MicroVM that has already been taken
+	// out of unnamed. It is what keeps one MicroVM from being taken out of
+	// the anonymous count more than once, however many events the Pool
+	// Manager sends for it. It is dropped as soon as unnamed reaches zero,
+	// where there is nothing left to account for, so it stays the size of a
+	// Pool rather than growing with every MicroVM the Runner ever sees.
+	accounted map[string]struct{}
 	// leased, provisioning and quarantined are the Pool Manager's other
 	// counts, from the last poll and the events since (OB-017, OB-019).
 	leased       int32
@@ -120,6 +142,24 @@ func (p *trackedPool) status() PoolStatus {
 	}
 }
 
+// takeUnnamed takes the MicroVM out of the count the last poll reported
+// without naming it, at most once for a given uid: the Pool Manager sends
+// several events for one MicroVM and only the first of them says anything
+// about how many of the poll's MicroVMs are still unaccounted for.
+func (p *trackedPool) takeUnnamed(uid string) {
+	if uid == "" || p.unnamed <= 0 {
+		return
+	}
+	if _, done := p.accounted[uid]; done {
+		return
+	}
+	p.accounted[uid] = struct{}{}
+	p.unnamed--
+	if p.unnamed == 0 {
+		clear(p.accounted)
+	}
+}
+
 // markAvailable records that a MicroVM is available, and reports whether it
 // was not before.
 func (p *trackedPool) markAvailable(uid string) bool {
@@ -131,7 +171,7 @@ func (p *trackedPool) markAvailable(uid string) bool {
 	}
 	p.available[uid] = struct{}{}
 	// This MicroVM may be one the last poll counted without naming it.
-	p.unnamed = decrement(p.unnamed)
+	p.takeUnnamed(uid)
 	return true
 }
 
@@ -145,8 +185,28 @@ func (p *trackedPool) markUnavailable(uid string) {
 		return
 	}
 	// Not one this Tracker had named: it can only be one of the MicroVMs a
-	// poll counted.
-	p.unnamed = decrement(p.unnamed)
+	// poll counted, and only the first event naming it takes it out.
+	p.takeUnnamed(uid)
+}
+
+// rebaseline folds an authoritative available count -- a GetPool answer or
+// the counts a POOL_SIZE_BELOW_TARGET event carries -- into the Pool. The
+// MicroVMs it reports that no event has named become the new anonymous
+// count; the ones events have named are already counted in it, so they are
+// marked accounted and can never be taken out of the anonymous count later.
+func (p *trackedPool) rebaseline(available int32) {
+	named := int32(len(p.available)) //nolint:gosec // pool sizes are small
+	p.unnamed = available - named
+	if p.unnamed < 0 {
+		p.unnamed = 0
+	}
+	clear(p.accounted)
+	if p.unnamed == 0 {
+		return
+	}
+	for uid := range p.available {
+		p.accounted[uid] = struct{}{}
+	}
 }
 
 // NewTracker builds the Tracker.
@@ -210,7 +270,17 @@ func (t *PoolTracker) Run(ctx context.Context) error {
 // after that same interval, so the Pool Manager is asked for a new
 // subscription as often as it is polled, and the Tracker goes back to
 // events as soon as one is granted.
+//
+// Every re-subscription asks for a poll. A new subscription is replayed the
+// recent events of every Pool, and the counts that are running totals
+// rather than uid-keyed sets -- leased, provisioning and quarantined --
+// would otherwise carry the replay's double counting for as long as the
+// stream stayed up, because the periodic poll only runs while it is down.
+// The poll replaces them with the Pool Manager's own figures and
+// rebaselines the available count with them. The first subscription needs
+// no poll of its own: Track polls every Pool as it starts being tracked.
 func (t *PoolTracker) subscribeLoop(ctx context.Context) {
+	subscribed := false
 	for ctx.Err() == nil {
 		stream, err := t.cfg.Events.Subscribe(ctx, EventFilter{})
 		if err != nil {
@@ -226,6 +296,10 @@ func (t *PoolTracker) subscribeLoop(ctx context.Context) {
 			continue
 		}
 		t.setStreamUp(true)
+		if subscribed {
+			t.requestPoll()
+		}
+		subscribed = true
 		t.readStream(ctx, stream)
 		t.setStreamUp(false)
 		if ctx.Err() != nil {
@@ -257,6 +331,12 @@ func (t *PoolTracker) readStream(ctx context.Context, stream EventStream) {
 // while the Events stream is down, at the configured interval. It shares
 // the interval with the re-subscription: while the stream is up the timer
 // only re-arms.
+//
+// The kick path re-arms the timer without draining it first, which is safe
+// here rather than an oversight: Reset drops a tick the timer has already
+// delivered, both on clock.Fake, which drains the channel itself, and on
+// the real timer at this module's Go version, where a stopped or reset
+// timer can no longer hand out a stale value.
 func (t *PoolTracker) pollLoop(ctx context.Context) {
 	timer := t.cfg.Clock.NewTimer(t.cfg.PollInterval)
 	defer timer.Stop()
@@ -405,6 +485,7 @@ func (t *PoolTracker) MarkExhausted(ref PoolRef) {
 	p.exhausted = true
 	p.available = make(map[string]struct{})
 	p.unnamed = 0
+	clear(p.accounted)
 }
 
 // Wait implements Tracker: a channel closed the next time a MicroVM in the
@@ -445,15 +526,14 @@ func (t *PoolTracker) Pools() []PoolAvailability {
 // applyPoll folds the counts of one GetPool answer into a Pool. The
 // MicroVMs the answer says are available that no event has named are
 // counted as unnamed; the ones events have named are already counted, so
-// the Pool Manager's total is not double counted.
+// the Pool Manager's total is not double counted. The other three counts
+// are running totals between polls, so the answer replaces them: this is
+// what a poll asked for on every new subscription undoes the replay's
+// double counting with.
 func (t *PoolTracker) applyPoll(ref PoolRef, size int32, status PoolStatus) {
 	t.mu.Lock()
 	p := t.poolLocked(ref)
-	named := int32(len(p.available)) //nolint:gosec // pool sizes are small
-	p.unnamed = status.Available - named
-	if p.unnamed < 0 {
-		p.unnamed = 0
-	}
+	p.rebaseline(status.Available)
 	p.leased, p.provisioning, p.quarantined = status.Leased, status.Provisioning, status.Quarantined
 	p.size = size
 	p.exhausted = false
@@ -495,10 +575,32 @@ func (t *PoolTracker) applyPoll(ref PoolRef, size int32, status PoolStatus) {
 // it. A POOL_SIZE_BELOW_TARGET event carries the Pool Manager's own counts,
 // so it resynchronises the Pool as well as producing the warning of
 // PL-055, and a hook failure produces the warning of PL-056.
+//
+// An event that counts a Pool down to nothing asks for a poll. A count that
+// is wrongly zero is the one error the Tracker cannot recover from on its
+// own -- an empty Pool is never claimed from, and a Pool that is never
+// claimed from produces no further event to correct it -- so the Pool
+// Manager is asked for its own figures whenever a Pool reads empty. A Pool
+// that really is empty costs one GetPool for the transition and no more.
+//
+// An event for a Pool this Runner does not track is dropped. The
+// subscription carries every Pool on the Pool Manager, and on a shared one
+// most of them belong to other Runners: adopting them would grow the
+// Tracker without bound, publish a metric series per foreign Pool (PL-054)
+// and poll each of them. Nothing is lost by dropping them, because Track
+// polls a Pool the moment the Runner starts tracking it (PL-017).
 func (t *PoolTracker) apply(event *Event) {
 	t.mu.Lock()
-	p := t.poolLocked(event.Pool)
+	p, tracked := t.pools[event.Pool]
+	if !tracked {
+		t.mu.Unlock()
+		if t.cfg.OnEvent != nil {
+			t.cfg.OnEvent(event)
+		}
+		return
+	}
 	woken := false
+	before := p.availableCount()
 	switch event.Type {
 	case poolmgrv1.EventType_VM_PROVISIONED:
 		p.exhausted = false
@@ -508,9 +610,9 @@ func (t *PoolTracker) apply(event *Event) {
 		p.exhausted = false
 		if p.markAvailable(event.VMUID) {
 			p.provisioning = decrement(p.provisioning)
+			closeWaiters(p)
+			woken = true
 		}
-		closeWaiters(p)
-		woken = true
 
 	case poolmgrv1.EventType_VM_CLAIMED:
 		p.markUnavailable(event.VMUID)
@@ -542,14 +644,15 @@ func (t *PoolTracker) apply(event *Event) {
 			p.exhausted = false
 			p.size = counts.Target
 			p.leased, p.provisioning, p.quarantined = counts.Leased, counts.Provisioning, counts.Quarantined
-			named := int32(len(p.available)) //nolint:gosec // pool sizes are small
-			p.unnamed = counts.Available - named
-			if p.unnamed < 0 {
-				p.unnamed = 0
-			}
+			p.rebaseline(counts.Available)
 		}
 	}
+	emptied := before > 0 && p.availableCount() == 0
 	t.mu.Unlock()
+
+	if emptied {
+		t.requestPoll()
+	}
 
 	switch event.Type {
 	case poolmgrv1.EventType_POOL_SIZE_BELOW_TARGET:
@@ -647,7 +750,11 @@ func hookFailureQuarantined(event *Event) bool { return hookFailurePayload(event
 func (t *PoolTracker) poolLocked(ref PoolRef) *trackedPool {
 	p, ok := t.pools[ref]
 	if !ok {
-		p = &trackedPool{available: make(map[string]struct{}), waiters: make(chan struct{})}
+		p = &trackedPool{
+			available: make(map[string]struct{}),
+			accounted: make(map[string]struct{}),
+			waiters:   make(chan struct{}),
+		}
 		t.pools[ref] = p
 	}
 	return p

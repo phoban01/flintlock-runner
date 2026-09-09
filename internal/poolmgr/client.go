@@ -300,6 +300,14 @@ func (c *client) ReleaseVM(ctx context.Context, leaseID string) error {
 
 // Subscribe implements Events. The stream lives until Close, until the
 // caller's context ends or until the server drops it.
+//
+// A failure is mapped against the caller's context rather than the stream's
+// own, which the line above has just cancelled: mapErr reads the context to
+// tell a cancellation the caller asked for from one it did not, and the
+// stream's context always says it was cancelled from here. A Pool Manager
+// that answers CANCELLED or DEADLINE_EXCEEDED, or a connection that is
+// closing, has to reach the Tracker as ErrUnavailable, which is what the
+// Events interface promises and what puts the Tracker onto polling.
 func (c *client) Subscribe(ctx context.Context, filter EventFilter) (EventStream, error) {
 	req := &poolmgrv1.SubscribeRequest{}
 	if filter.Pool != nil {
@@ -309,7 +317,7 @@ func (c *client) Subscribe(ctx context.Context, filter EventFilter) (EventStream
 	stream, err := c.events.Subscribe(streamCtx, req)
 	if err != nil {
 		cancel()
-		return nil, mapErr(streamCtx, err)
+		return nil, mapErr(ctx, err)
 	}
 	return newEventStream(streamCtx, cancel, stream), nil
 }

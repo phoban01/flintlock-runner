@@ -534,6 +534,49 @@ func TestSubscribeReportsADroppedStream(t *testing.T) {
 	}
 }
 
+// TestSubscribeThatCannotStartIsUnavailable checks that a Subscribe the
+// connection refuses comes back as ErrUnavailable rather than as a
+// cancellation. Subscribe cancels the stream's own context on the failure
+// path, so mapping the error against that context would answer with its
+// cancellation for a CANCELLED status, and a Tracker that saw
+// context.Canceled would take it for its own shutdown instead of polling
+// and re-subscribing (PL-051).
+func TestSubscribeThatCannotStartIsUnavailable(t *testing.T) {
+	t.Parallel()
+	ctx, cancel := context.WithTimeout(context.Background(), testTimeout)
+	defer cancel()
+
+	pm := startPoolManager(t, ctx, poolmgr.FakeConfig{}, "host-a")
+	c, err := poolmgr.NewClient(poolmgr.ClientConfig{
+		Endpoint: pm.addr,
+		TLS:      config.ClientTLS{Insecure: true},
+		Deadline: testTimeout,
+	})
+	if err != nil {
+		t.Fatalf("NewClient: %v", err)
+	}
+	// A connection that is closing answers every new call with CANCELLED,
+	// which is a cancellation the caller did not ask for.
+	if err := c.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+
+	stream, err := c.Subscribe(ctx, poolmgr.EventFilter{})
+	if err == nil {
+		_ = stream.Close()
+		t.Fatal("Subscribe succeeded on a closed connection")
+	}
+	if errors.Is(err, context.Canceled) {
+		t.Errorf("Subscribe on a closed connection = %v, want it not reported as the caller's cancellation", err)
+	}
+	if !errors.Is(err, poolmgr.ErrUnavailable) {
+		t.Errorf("Subscribe on a closed connection = %v, want ErrUnavailable", err)
+	}
+	if ctx.Err() != nil {
+		t.Errorf("the caller's context ended during the test: %v", ctx.Err())
+	}
+}
+
 // TestClientRejectsAnIncompleteConfiguration covers the configuration
 // mistakes NewClient can catch before anything is dialled.
 func TestClientRejectsAnIncompleteConfiguration(t *testing.T) {

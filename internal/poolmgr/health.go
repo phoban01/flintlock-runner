@@ -186,6 +186,14 @@ func (h *HealthMonitor) markFailure(err error) {
 // markHealthy records a successful call: the failure count is cleared, the
 // Pool Manager is healthy again and Contacted is closed if this was the
 // first success.
+//
+// It also ends a PL-034 backoff period that is still running. That is wider
+// than PL-034's wording, which asks only that a failed claim mark the Pool
+// Manager unhealthy for the period: a probe that has just reached the Pool
+// Manager is better evidence than a claim that failed a moment ago, and
+// holding every Pool at zero after that would refuse Jobs the Runner can
+// serve. The requirement's floor is still met -- a claim that cannot reach
+// the Pool Manager marks it unhealthy, and nothing but a success ends it.
 func (h *HealthMonitor) markHealthy() {
 	h.mu.Lock()
 	recovered := !h.healthy
