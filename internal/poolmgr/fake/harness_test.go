@@ -380,12 +380,14 @@ func (h *harness) advance(d time.Duration) {
 // waitEvent reads events until one of type typ arrives and returns it.
 func (h *harness) waitEvent(typ poolmgr.EventType) *poolmgr.Event {
 	h.t.Helper()
-	return h.collectUntil(typ)[0]
+	got := h.collectUntil(typ)
+	return got[len(got)-1]
 }
 
-// collectUntil reads events until one of type typ arrives and returns the
-// events read, the match last. Events of one Pool arrive in order, so the
-// slice is proof of what did and did not happen before the match.
+// collectUntil reads events until one of type typ arrives and returns every
+// event it read, in delivery order with the match last. Events of one Pool
+// arrive in order, so the slice is proof of what did and did not happen
+// before the match.
 func (h *harness) collectUntil(typ poolmgr.EventType) []*poolmgr.Event {
 	h.t.Helper()
 	var got []*poolmgr.Event
@@ -397,8 +399,6 @@ func (h *harness) collectUntil(typ poolmgr.EventType) []*poolmgr.Event {
 		h.seen[e.Type]++
 		got = append(got, e)
 		if e.Type == typ {
-			// Put the match first so waitEvent can return got[0].
-			got[0], got[len(got)-1] = got[len(got)-1], got[0]
 			return got
 		}
 	}

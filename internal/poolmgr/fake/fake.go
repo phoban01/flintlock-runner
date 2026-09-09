@@ -21,9 +21,12 @@
 // replenishment strategies, hook failure policies and the event types. Where
 // the fake is deliberately different it says so in the code: the tick tops a
 // Pool up to its size for every strategy (battery relies on the strategy
-// alone), event payloads carry JSON the Runner reads for PL-055, and
+// alone), event payloads carry JSON the Runner reads for PL-055,
+// VM_EXPIRING_SOON re-arms on every heartbeat, so a long Job sees one
+// warning per heartbeat where the proto describes one per Lease, and
 // DeletePool deletes the Pool's idle MicroVMs instead of refusing while any
-// exist.
+// exist. A test that counts VM_EXPIRING_SOON is therefore counting the
+// fake's behaviour, not battery's; wait for the first one instead.
 package fake
 
 import (

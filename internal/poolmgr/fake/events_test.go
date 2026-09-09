@@ -27,15 +27,11 @@ func TestEveryEventTypeIsEmittedAtItsTransition(t *testing.T) {
 	spec := h.spec("pool", 1, "host-a")
 	var all []*poolmgr.Event
 	// collect reads up to the next event of type typ and keeps every event
-	// read in delivery order, undoing the swap collectUntil makes to put the
-	// match first.
+	// read, so that all is the whole stream in delivery order.
 	collect := func(typ poolmgr.EventType) []*poolmgr.Event {
 		t.Helper()
 		got := h.collectUntil(typ)
-		ordered := make([]*poolmgr.Event, len(got))
-		copy(ordered, got)
-		ordered[0], ordered[len(ordered)-1] = ordered[len(ordered)-1], ordered[0]
-		all = append(all, ordered...)
+		all = append(all, got...)
 		return got
 	}
 

@@ -18,10 +18,11 @@ export GOTOOLCHAIN
 help:
 	@grep -E '^## ' $(MAKEFILE_LIST) | sed 's/^## //' | column -t -s ':'
 
-## build: compile every package and the flintlock-runner binary into bin/
+## build: compile every package and the binaries into bin/
 build:
 	$(GO) build ./...
 	$(GO) build -o $(BIN)/flintlock-runner ./cmd/flintlock-runner
+	$(GO) build -o $(BIN)/fake-poolmgr ./cmd/fake-poolmgr
 
 ## test: run every Go test with the race detector
 test:
