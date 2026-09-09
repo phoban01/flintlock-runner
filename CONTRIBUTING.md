@@ -41,7 +41,8 @@ long one and `docs/PLAN.md` is the coordination contract.
    issue.
 5. The PR body has a line `Owns: <ID> <ID> ...` listing the IDs it claims.
    CI runs the coverage gate over exactly that list. Ranges such as
-   `TD-001..010` are accepted.
+   `TD-001..010` are accepted. A pull request that implements no requirement,
+   such as a tooling or CI change, says `Owns: none` and the gate is skipped.
 
 `.duvet/snapshot.txt` is regenerated and committed only at milestones, by
 the lead. `make duvet` rewrites it locally; restore it with

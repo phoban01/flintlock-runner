@@ -87,8 +87,12 @@ jobs:
         run: |
           ids=$(printf '%s\n' "$PR_BODY" | tr -d '\r' | sed -n 's/^Owns:[[:space:]]*//p' | tr ',' ' ' | xargs || true)
           if [ -z "$ids" ]; then
-            echo "::error::PR body has no 'Owns:' line; list the requirement IDs this PR claims (docs/PLAN.md)"
+            echo "::error::PR body has no 'Owns:' line; list the requirement IDs this PR claims (docs/PLAN.md). A PR that implements no requirement, such as a tooling or CI change, says 'Owns: none'."
             exit 1
+          fi
+          if [ "$ids" = "none" ]; then
+            echo "no requirement IDs claimed; skipping the coverage gate"
+            exit 0
           fi
           echo "gating on: $ids"
           # shellcheck disable=SC2086
