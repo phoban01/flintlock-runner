@@ -314,6 +314,21 @@ func encodeJob(job *spec.Job) ([]byte, error) {
 	return json.Marshal(fields)
 }
 
+// copyJob deep-copies a Job by round-tripping it through the wire form
+// encodeJob produces, which is the form the fake hands out anyway, so that
+// the queue shares no reference field with the caller.
+func copyJob(job *spec.Job) (*spec.Job, error) {
+	raw, err := encodeJob(job)
+	if err != nil {
+		return nil, err
+	}
+	var out spec.Job
+	if err := json.Unmarshal(raw, &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
 // handleUpdateJob is PUT /api/v4/jobs/:id. A running state is a heartbeat
 // answered 200. A final state is answered 202 accepted-but-pending as many
 // times as Options.PendingFinalUpdates says and then 200, after which the

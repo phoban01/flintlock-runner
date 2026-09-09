@@ -264,13 +264,21 @@ func (s *Server) URL() string {
 
 // Enqueue adds a Job to hand out on the next job request (TD-031). A zero
 // ID gets the next free one and an empty Token gets a generated one, since
-// the real API never hands out a Job without either. The Job is copied;
-// later changes by the caller are not seen. Enqueue bumps the queue version
-// and wakes every long-polling job request.
-func (s *Server) Enqueue(job *spec.Job) {
+// the real API never hands out a Job without either. The Job is deep-copied
+// through the wire form the fake hands out, so that later changes by the
+// caller are not seen; a shallow copy would leave Steps, Variables,
+// Dependencies, Services, Artifacts and Cache shared, and since the fake
+// re-serialises at hand-out time a mutation made after Enqueue would be
+// picked up at request time. Enqueue bumps the queue version and wakes every
+// long-polling job request. It returns an error when the payload cannot be
+// serialised.
+func (s *Server) Enqueue(job *spec.Job) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	j := *job
+	j, err := copyJob(job)
+	if err != nil {
+		return fmt.Errorf("fakegitlab: enqueue job %d: %w", job.ID, err)
+	}
 	if j.ID == 0 {
 		for s.jobs[s.nextID] != nil {
 			s.nextID++
@@ -283,8 +291,9 @@ func (s *Server) Enqueue(job *spec.Job) {
 	if j.Token == "" {
 		j.Token = "glcbt-" + strconv.FormatInt(j.ID, 10)
 	}
-	s.queue = append(s.queue, &j)
+	s.queue = append(s.queue, j)
 	s.bumpQueueLocked()
+	return nil
 }
 
 // bumpQueueLocked advances the queue version and wakes long pollers. The

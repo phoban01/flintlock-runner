@@ -76,11 +76,19 @@ func testJob(id int64) *spec.Job {
 	}
 }
 
+// mustEnqueue queues a Job and fails the test if the fake refuses it.
+func mustEnqueue(t *testing.T, s *fakegitlab.Server, job *spec.Job) {
+	t.Helper()
+	if err := s.Enqueue(job); err != nil {
+		t.Fatalf("Enqueue(%d): %v", job.ID, err)
+	}
+}
+
 // requestJob enqueues job and fetches it through the real client, checking
 // the payload survived the round trip.
 func requestJob(t *testing.T, s *fakegitlab.Server, client *network.GitLabClient, job *spec.Job) *spec.Job {
 	t.Helper()
-	s.Enqueue(job)
+	mustEnqueue(t, s, job)
 	got, healthy := client.RequestJob(context.Background(), runnerConfig(s.URL()), nil)
 	if !healthy || got == nil {
 		t.Fatalf("RequestJob = (%v, %v), want a job", got, healthy)
@@ -263,9 +271,9 @@ func TestRealClientHandsOutJobsInOrder(t *testing.T) {
 	client := network.NewGitLabClient()
 	cfg := runnerConfig(s.URL())
 
-	s.Enqueue(testJob(1))
-	s.Enqueue(testJob(2))
-	s.Enqueue(&spec.Job{}) // gets an id and a token
+	mustEnqueue(t, s, testJob(1))
+	mustEnqueue(t, s, testJob(2))
+	mustEnqueue(t, s, &spec.Job{}) // gets an id and a token
 	if s.Pending() != 3 {
 		t.Fatalf("Pending = %d, want 3", s.Pending())
 	}
@@ -522,7 +530,7 @@ func TestRealClientRunnerScopedAuth(t *testing.T) {
 	t.Parallel()
 	s := startServer(t, fakegitlab.Options{})
 	client := network.NewGitLabClient()
-	s.Enqueue(testJob(501))
+	mustEnqueue(t, s, testJob(501))
 
 	tests := []struct {
 		name     string

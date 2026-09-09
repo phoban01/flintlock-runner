@@ -91,6 +91,14 @@ func newHandlerServer(t *testing.T, opts Options) (*Server, string) {
 	return s, ts.URL
 }
 
+// mustEnqueue queues a Job and fails the test if the fake refuses it.
+func mustEnqueue(t *testing.T, s *Server, job *spec.Job) {
+	t.Helper()
+	if err := s.Enqueue(job); err != nil {
+		t.Fatalf("Enqueue(%d): %v", job.ID, err)
+	}
+}
+
 func requestJobBody(t *testing.T, lastUpdate string) []byte {
 	t.Helper()
 	return jsonBody(t, map[string]any{"token": testRunnerToken, "system_id": testSystemID, "last_update": lastUpdate})
@@ -129,7 +137,7 @@ func TestLongPollWakesOnEnqueue(t *testing.T) {
 		t.Fatalf("request with the current version answered %d without waiting", r.code)
 	}
 
-	s.Enqueue(&spec.Job{ID: 5, Token: "glcbt-5"})
+	mustEnqueue(t, s, &spec.Job{ID: 5, Token: "glcbt-5"})
 	r := <-done
 	if r.code != http.StatusCreated || r.header.Get("Content-Type") != "application/json" {
 		t.Fatalf("woken request = %d %s, want 201 application/json", r.code, r.header.Get("Content-Type"))
@@ -196,7 +204,7 @@ func TestLongPollTimesOutAndClosesCleanly(t *testing.T) {
 func TestPatchTraceRanges(t *testing.T) {
 	t.Parallel()
 	s, url := newHandlerServer(t, Options{TraceUpdateInterval: 5 * time.Second})
-	s.Enqueue(&spec.Job{ID: 9, Token: "glcbt-9"})
+	mustEnqueue(t, s, &spec.Job{ID: 9, Token: "glcbt-9"})
 	if r := do(t, url, http.MethodPost, "/api/v4/jobs/request", nil, requestJobBody(t, "")); r.code != http.StatusCreated {
 		t.Fatalf("request job = %d, want 201", r.code)
 	}
@@ -262,7 +270,7 @@ func TestPatchTraceRanges(t *testing.T) {
 func TestUpdateJobStatusHeader(t *testing.T) {
 	t.Parallel()
 	s, url := newHandlerServer(t, Options{PendingFinalUpdates: 1, TraceUpdateInterval: 9 * time.Second})
-	s.Enqueue(&spec.Job{ID: 21, Token: "glcbt-21"})
+	mustEnqueue(t, s, &spec.Job{ID: 21, Token: "glcbt-21"})
 	if r := do(t, url, http.MethodPost, "/api/v4/jobs/request", nil, requestJobBody(t, "")); r.code != http.StatusCreated {
 		t.Fatalf("request job = %d, want 201", r.code)
 	}
@@ -323,7 +331,7 @@ func TestUpdateJobStatusHeader(t *testing.T) {
 func TestAuthentication(t *testing.T) {
 	t.Parallel()
 	s, url := newHandlerServer(t, Options{})
-	s.Enqueue(&spec.Job{ID: 11, Token: "glcbt-11"})
+	mustEnqueue(t, s, &spec.Job{ID: 11, Token: "glcbt-11"})
 	if r := do(t, url, http.MethodPost, "/api/v4/jobs/request", nil, requestJobBody(t, "")); r.code != http.StatusCreated {
 		t.Fatalf("request job = %d, want 201", r.code)
 	}
@@ -433,7 +441,7 @@ func TestAuthentication(t *testing.T) {
 func TestUnknownJobIsAlwaysForbidden(t *testing.T) {
 	t.Parallel()
 	s, url := newHandlerServer(t, Options{})
-	s.Enqueue(&spec.Job{ID: 11, Token: "glcbt-11"})
+	mustEnqueue(t, s, &spec.Job{ID: 11, Token: "glcbt-11"})
 	if r := do(t, url, http.MethodPost, "/api/v4/jobs/request", nil, requestJobBody(t, "")); r.code != http.StatusCreated {
 		t.Fatalf("request job = %d, want 201", r.code)
 	}
@@ -462,7 +470,7 @@ func TestUnknownJobIsAlwaysForbidden(t *testing.T) {
 
 	// A Job that exists but has no archive is the one 404 download answers,
 	// so the two cases are still told apart.
-	s.Enqueue(&spec.Job{ID: 13, Token: "glcbt-13"})
+	mustEnqueue(t, s, &spec.Job{ID: 13, Token: "glcbt-13"})
 	if r := do(t, url, http.MethodPost, "/api/v4/jobs/request", nil, requestJobBody(t, "")); r.code != http.StatusCreated {
 		t.Fatalf("request second job = %d, want 201", r.code)
 	}
@@ -485,6 +493,57 @@ func uploadBody(t *testing.T) ([]byte, string) {
 		t.Fatal(err)
 	}
 	return buf.Bytes(), mw.FormDataContentType()
+}
+
+//= docs/requirements/10-test-doubles.md#fake-gitlab
+//= type=test
+//# The fake GitLab SHALL hand out Jobs from a queue of `spec.Job` payloads
+//# supplied by the test and SHALL record every state update and the
+//# assembled trace for each Job.
+
+// TestEnqueueCopiesThePayload pins the promise in Enqueue's doc comment: the
+// queued Job shares nothing with the caller's, so a mutation made after
+// Enqueue is not picked up when the fake re-serialises the Job at hand-out
+// time. The reference fields are the ones a shallow copy would leave shared
+// (TD-031).
+func TestEnqueueCopiesThePayload(t *testing.T) {
+	t.Parallel()
+	s, url := newHandlerServer(t, Options{})
+	job := &spec.Job{
+		ID:           7,
+		Token:        "glcbt-7",
+		Steps:        spec.Steps{{Name: spec.StepNameScript, Script: spec.StepScript{"echo before"}}},
+		Variables:    spec.Variables{{Key: "FOO", Value: "before"}},
+		Dependencies: spec.Dependencies{{ID: 6, Name: "dep", Token: "glcbt-6"}},
+	}
+	mustEnqueue(t, s, job)
+
+	// Every mutation below is through a reference a shallow copy would share.
+	job.Steps[0].Script[0] = "echo after"
+	job.Variables[0].Value = "after"
+	job.Dependencies[0].Name = "changed"
+	job.Token = "glcbt-changed"
+
+	r := do(t, url, http.MethodPost, "/api/v4/jobs/request", nil, requestJobBody(t, ""))
+	if r.code != http.StatusCreated {
+		t.Fatalf("request job = %d (%s), want 201", r.code, r.body)
+	}
+	var got spec.Job
+	if err := json.Unmarshal(r.body, &got); err != nil {
+		t.Fatalf("decode job: %v", err)
+	}
+	if got.Steps[0].Script[0] != "echo before" {
+		t.Errorf("script = %q, want the value at Enqueue time", got.Steps[0].Script[0])
+	}
+	if got.Variables[0].Value != "before" {
+		t.Errorf("variable = %q, want the value at Enqueue time", got.Variables[0].Value)
+	}
+	if got.Dependencies[0].Name != "dep" {
+		t.Errorf("dependency name = %q, want the value at Enqueue time", got.Dependencies[0].Name)
+	}
+	if got.Token != "glcbt-7" {
+		t.Errorf("token = %q, want the value at Enqueue time", got.Token)
+	}
 }
 
 //= docs/requirements/10-test-doubles.md#fake-gitlab
@@ -527,9 +586,9 @@ func TestEncodeJobMatchesTheWireFormat(t *testing.T) {
 func TestEnqueueAssignsIDsAndTokens(t *testing.T) {
 	t.Parallel()
 	s := New(Options{RunnerToken: testRunnerToken})
-	s.Enqueue(&spec.Job{ID: 10})
-	s.Enqueue(&spec.Job{})
-	s.Enqueue(&spec.Job{Token: "custom"})
+	mustEnqueue(t, s, &spec.Job{ID: 10})
+	mustEnqueue(t, s, &spec.Job{})
+	mustEnqueue(t, s, &spec.Job{Token: "custom"})
 	ts := httptest.NewServer(s.Handler())
 	t.Cleanup(ts.Close)
 	var got []struct {
