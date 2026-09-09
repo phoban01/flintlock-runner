@@ -257,10 +257,10 @@ func TestLoadEnvOverridesSecrets(t *testing.T) {
 		{
 			name: "every variable set",
 			env: map[string]string{
-				EnvGitLabToken:            "glrt-env",
-				HostTokenEnv("host-a"):    "a-env",
-				EnvHostToken:              "fleet-wide-env",
-				EnvFleetHostToken:         "fleet-env",
+				EnvGitLabToken:                          "glrt-env",
+				HostTokenEnv("host-a"):                  "a-env",
+				EnvHostToken:                            "fleet-wide-env",
+				EnvFleetHostToken:                       "fleet-env",
 				"FLINTLOCK_RUNNER_HOST_TOKEN_UNRELATED": "ignored",
 			},
 			want: map[string]string{
