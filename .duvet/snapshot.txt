@@ -1082,34 +1082,33 @@ SPECIFICATION: [Test doubles](docs/requirements/10-test-doubles.md)
 
   SECTION: [Fake Host](#fake-host)
     TEXT[!MUST]: - **TD-020**
-    TEXT[!MUST,implementation,test]: The project SHALL provide a fake Host that serves the flintlock
-    TEXT[!MUST,implementation,test]:   `MicroVM` service, including `ServerInfo`, and the `MicroVMExec` service
-    TEXT[!MUST,implementation,test]:   over gRPC using the generated server stubs from the flintlock `api`
-    TEXT[!MUST,implementation,test]:   module.
+    TEXT[!MUST,todo]: The project SHALL provide a fake Host that serves the flintlock
+    TEXT[!MUST,todo]:   `MicroVM` service, including `ServerInfo`, and the `MicroVMExec` service
+    TEXT[!MUST,todo]:   over gRPC using the generated server stubs from the flintlock `api`
+    TEXT[!MUST,todo]:   module.
     TEXT[!MUST]: - **TD-021**
-    TEXT[!MUST,implementation,test]: The fake Host SHALL represent each MicroVM as a sandbox
-    TEXT[!MUST,implementation,test]:   directory on the local filesystem and SHALL run each `ExecCommand` as a
-    TEXT[!MUST,implementation,test]:   local process rooted in that directory, streaming standard input,
-    TEXT[!MUST,implementation,test]:   standard output, standard error and the exit code as `flintlockd` does.
+    TEXT[!MUST,todo]: The fake Host SHALL represent each MicroVM as a sandbox
+    TEXT[!MUST,todo]:   directory on the local filesystem and SHALL run each `ExecCommand` as a
+    TEXT[!MUST,todo]:   local process rooted in that directory, streaming standard input,
+    TEXT[!MUST,todo]:   standard output, standard error and the exit code as `flintlockd` does.
     TEXT[!MUST]: - **TD-022**
-    TEXT[!MUST,implementation,test]: The fake Host SHALL move a MicroVM from `PENDING` to `CREATED`
-    TEXT[!MUST,implementation,test]:   after a configurable boot delay and SHALL populate `vsock_path` in its
-    TEXT[!MUST,implementation,test]:   status.
+    TEXT[!MUST,todo]: The fake Host SHALL move a MicroVM from `PENDING` to `CREATED`
+    TEXT[!MUST,todo]:   after a configurable boot delay and SHALL populate `vsock_path` in its
+    TEXT[!MUST,todo]:   status.
     TEXT[!MUST]: - **TD-023**
-    TEXT[!MUST,implementation,test]: The fake Host SHALL honour the `cwd`, `env`, `timeout_seconds`,
-    TEXT[!MUST,implementation,test]:   `has_stdin` and `stdin_eof` fields of an exec request and SHALL accept
-    TEXT[!MUST,implementation,test]:   and ignore `user`.
-    TEXT[!MUST]: - **TD-024**
-    TEXT[!MUST,implementation,test]: The fake Host SHALL enforce basic auth and TLS when configured
-    TEXT[!MUST,implementation,test]:   so that the Runner's authentication code is exercised.
+    TEXT[!MUST,todo]: The fake Host SHALL honour the `cwd`, `env`, `timeout_seconds`,
+    TEXT[!MUST,todo]:   `has_stdin` and `stdin_eof` fields of an exec request and SHALL accept
+    TEXT[!MUST,todo]:   and ignore `user`.
+    TEXT[!MUST]: - **TD-024** The fake Host SHALL enforce basic auth and TLS when configured
+    TEXT[!MUST]:   so that the Runner's authentication code is exercised.
     TEXT[!MUST]: - **TD-025**
-    TEXT[!MUST,implementation,test]: The fake Host SHALL support fault injection for a create that
-    TEXT[!MUST,implementation,test]:   ends in `FAILED`, an exec stream dropped before the exit code, and a Host
-    TEXT[!MUST,implementation,test]:   that stops answering.
+    TEXT[!MUST,todo]: The fake Host SHALL support fault injection for a create that
+    TEXT[!MUST,todo]:   ends in `FAILED`, an exec stream dropped before the exit code, and a Host
+    TEXT[!MUST,todo]:   that stops answering.
     TEXT[!MUST]: - **TD-026**
-    TEXT[!MUST,implementation,test]: The fake Host SHALL report a configurable flintlock version and
-    TEXT[!MUST,implementation,test]:   service flags from `ServerInfo` and SHALL provide a mode in which
-    TEXT[!MUST,implementation,test]:   `ServerInfo` returns `UNIMPLEMENTED`.
+    TEXT[!MUST,todo]: The fake Host SHALL report a configurable flintlock version and
+    TEXT[!MUST,todo]:   service flags from `ServerInfo` and SHALL provide a mode in which
+    TEXT[!MUST,todo]:   `ServerInfo` returns `UNIMPLEMENTED`.
 
   SECTION: [Fake GitLab](#fake-gitlab)
     TEXT[!MUST]: - **TD-030**
