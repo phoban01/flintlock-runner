@@ -475,10 +475,24 @@ func (s *Server) handlePatchTrace(w http.ResponseWriter, r *http.Request) {
 // handleUploadArtifacts is POST /api/v4/jobs/:id/artifacts: a multipart
 // form whose file part is the artifact, with artifact_type, artifact_format
 // and expire_in as query parameters, answered 201.
+//
+// The token is checked before the form is parsed whenever it is in the
+// header or the query, which is where the real client puts it, so that an
+// unauthenticated upload is refused rather than buffered and spilled to
+// disk first. Only the body-form fallback has to wait for the parse.
 func (s *Server) handleUploadArtifacts(w http.ResponseWriter, r *http.Request) {
 	id, ok := pathJobID(w, r)
 	if !ok {
 		return
+	}
+	if token := jobToken(r, ""); token != "" {
+		s.mu.Lock()
+		_, apiErr := s.authJobLocked(id, token)
+		s.mu.Unlock()
+		if apiErr != nil {
+			apiErr.write(w)
+			return
+		}
 	}
 	if err := r.ParseMultipartForm(multipartMemory); err != nil {
 		writeError(w, http.StatusBadRequest, "400 Bad Request - "+err.Error())

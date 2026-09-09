@@ -479,11 +479,82 @@ func TestUnknownJobIsAlwaysForbidden(t *testing.T) {
 	}
 }
 
+//= docs/requirements/10-test-doubles.md#fake-gitlab
+//= type=test
+//# The fake GitLab SHALL require the runner token and a system
+//# identifier on runner-scoped requests and the Job token on job-scoped
+//# requests, as the real API does.
+
+// TestUploadAuthenticatesBeforeParsing pins that an artifact upload whose
+// Job token is in the header, which is where the real client puts it, is
+// refused before the multipart form is parsed. Otherwise a malformed body
+// gets a 400 that hides the 403, and an unauthenticated caller can make the
+// fake buffer the body and spill it to disk (TD-033).
+func TestUploadAuthenticatesBeforeParsing(t *testing.T) {
+	t.Parallel()
+	s, url := newHandlerServer(t, Options{})
+	mustEnqueue(t, s, &spec.Job{ID: 11, Token: "glcbt-11"})
+	if r := do(t, url, http.MethodPost, "/api/v4/jobs/request", nil, requestJobBody(t, "")); r.code != http.StatusCreated {
+		t.Fatalf("request job = %d, want 201", r.code)
+	}
+
+	// A body that cannot be parsed as the multipart form its Content-Type
+	// promises, so that a parse-first handler answers 400.
+	malformed := []byte("not a multipart body")
+	badType := http.Header{"Content-Type": {"multipart/form-data; boundary=zzz"}}
+
+	tests := []struct {
+		name   string
+		header http.Header
+	}{
+		{"wrong token", http.Header{"Job-Token": {"glcbt-wrong"}, "Content-Type": badType["Content-Type"]}},
+		{"another job's token", http.Header{"Job-Token": {testRunnerToken}, "Content-Type": badType["Content-Type"]}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			r := do(t, url, http.MethodPost, "/api/v4/jobs/11/artifacts", tt.header, malformed)
+			if r.code != http.StatusForbidden {
+				t.Errorf("code = %d (%s), want 403 before the form is parsed", r.code, r.body)
+			}
+		})
+	}
+
+	// The query token is checked the same way.
+	r := do(t, url, http.MethodPost, "/api/v4/jobs/11/artifacts?token=glcbt-wrong", badType, malformed)
+	if r.code != http.StatusForbidden {
+		t.Errorf("query token: code = %d (%s), want 403", r.code, r.body)
+	}
+
+	// A good token still reaches the parse, and a malformed body is 400.
+	good := http.Header{"Job-Token": {"glcbt-11"}, "Content-Type": badType["Content-Type"]}
+	if r := do(t, url, http.MethodPost, "/api/v4/jobs/11/artifacts", good, malformed); r.code != http.StatusBadRequest {
+		t.Errorf("authenticated malformed upload = %d (%s), want 400", r.code, r.body)
+	}
+
+	// And the body-form token fallback still works, after the parse.
+	body, contentType := uploadBodyWithToken(t, "glcbt-11")
+	if r := do(t, url, http.MethodPost, "/api/v4/jobs/11/artifacts", http.Header{"Content-Type": {contentType}}, body); r.code != http.StatusCreated {
+		t.Errorf("upload with a form token = %d (%s), want 201", r.code, r.body)
+	}
+}
+
 // uploadBody is a minimal artifact upload multipart form.
 func uploadBody(t *testing.T) ([]byte, string) {
 	t.Helper()
+	return uploadBodyWithToken(t, "")
+}
+
+// uploadBodyWithToken is uploadBody with a token form field, the fallback
+// location for the Job token.
+func uploadBodyWithToken(t *testing.T, token string) ([]byte, string) {
+	t.Helper()
 	var buf bytes.Buffer
 	mw := multipart.NewWriter(&buf)
+	if token != "" {
+		if err := mw.WriteField("token", token); err != nil {
+			t.Fatal(err)
+		}
+	}
 	fw, err := mw.CreateFormFile("file", "artifacts.zip")
 	if err != nil {
 		t.Fatal(err)
