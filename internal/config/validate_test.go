@@ -1546,16 +1546,54 @@ func TestDistributedCacheSection(t *testing.T) {
 			func(c *Config) { c.DistributedCache.Endpoint = "https://minio.example.com/bucket" },
 			"distributed_cache.endpoint", "must not have a path",
 		},
+		// The distributed cache authenticates with instance-metadata (IAM)
+		// credentials, and gitlab-runner's IAM client hardcodes TLS and never
+		// reads CacheS3Config.Insecure. A plaintext endpoint would therefore
+		// validate and then be dialled as https, so both the http endpoint and
+		// the insecure flag are rejected outright (CF-080, CF-081).
 		{
-			"an http endpoint without insecure",
+			"an http endpoint",
 			func(c *Config) { c.DistributedCache.Endpoint = "http://minio.example.com" },
-			"distributed_cache.endpoint", "set distributed_cache.insecure",
+			"distributed_cache.endpoint", "must be https",
+		},
+		{
+			"an http endpoint with insecure set",
+			func(c *Config) {
+				c.DistributedCache.Endpoint = "http://minio.example.com"
+				c.DistributedCache.Insecure = true
+			},
+			"distributed_cache.endpoint", "must be https",
+		},
+		{
+			"insecure with an https endpoint",
+			func(c *Config) {
+				c.DistributedCache.Endpoint = "https://minio.example.com"
+				c.DistributedCache.Insecure = true
+			},
+			"distributed_cache.insecure", "always connects over TLS",
 		},
 		{
 			"insecure without an endpoint",
 			func(c *Config) { c.DistributedCache.Endpoint = ""; c.DistributedCache.Insecure = true },
-			"distributed_cache.insecure", "applies only to an S3-compatible endpoint",
+			"distributed_cache.insecure", "cannot be honoured",
 		},
+	})
+
+	t.Run("the insecure rejection explains that instance-metadata credentials force TLS", func(t *testing.T) {
+		t.Parallel()
+		cfg := fullWith(t, func(c *Config) {
+			c.DistributedCache.Endpoint = "https://minio.example.com"
+			c.DistributedCache.Insecure = true
+		})
+		var verr *ValidationError
+		if !errors.As(Validate(cfg), &verr) {
+			t.Fatalf("Validate accepted distributed_cache.insecure")
+		}
+		for _, want := range []string{"instance-metadata credentials", "https"} {
+			if !hasFieldError(verr.Errors, "distributed_cache.insecure", want) {
+				t.Errorf("distributed_cache.insecure error does not mention %q: %v", want, verr.Errors)
+			}
+		}
 	})
 }
 

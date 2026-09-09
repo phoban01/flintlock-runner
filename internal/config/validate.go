@@ -822,10 +822,19 @@ func (v *validator) distributedCache(dc *DistributedCache) {
 	if strings.HasPrefix(dc.Prefix, "/") {
 		v.errorf("distributed_cache.prefix", "must not start with a slash, got %q", dc.Prefix)
 	}
+	// The distributed cache authenticates with instance-metadata (IAM)
+	// credentials so that no AWS credentials reach the guest (CF-082).
+	// gitlab-runner's IAM client hardcodes a TLS connection and never reads
+	// CacheS3Config.Insecure, so a plaintext endpoint cannot be honoured: it
+	// would validate here and then be dialled as https at run time. Reject
+	// the combination instead of mapping a configuration that cannot work
+	// (CF-080, CF-081).
+	if dc.Insecure {
+		v.errorf("distributed_cache.insecure",
+			"cannot be honoured: the distributed cache authenticates with instance-metadata credentials, "+
+				"and that client always connects over TLS and ignores this field; the store has to be reachable over https")
+	}
 	if dc.Endpoint == "" {
-		if dc.Insecure {
-			v.errorf("distributed_cache.insecure", "applies only to an S3-compatible endpoint")
-		}
 		return
 	}
 	u := v.httpURL("distributed_cache.endpoint", dc.Endpoint)
@@ -835,8 +844,10 @@ func (v *validator) distributedCache(dc *DistributedCache) {
 	if u.Path != "" && u.Path != "/" {
 		v.errorf("distributed_cache.endpoint", "must not have a path, got %q", dc.Endpoint)
 	}
-	if u.Scheme == "http" && !dc.Insecure {
-		v.errorf("distributed_cache.endpoint", "is http; set distributed_cache.insecure to allow it")
+	if u.Scheme == "http" {
+		v.errorf("distributed_cache.endpoint",
+			"must be https, got %q: the distributed cache authenticates with instance-metadata credentials, "+
+				"and that client always connects over TLS, so an http endpoint would be dialled as https anyway", dc.Endpoint)
 	}
 }
 

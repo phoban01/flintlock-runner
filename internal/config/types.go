@@ -641,6 +641,14 @@ type DistributedCache struct {
 	// in the end-to-end harness (TD-034).
 	Endpoint string `yaml:"endpoint,omitempty"`
 	// Insecure allows an http Endpoint; harness use only.
+	//
+	// It is rejected by validation as things stand. The Distributed cache
+	// authenticates with instance-metadata credentials so that no AWS
+	// credential enters a guest (CF-082), and gitlab-runner's IAM client
+	// hardcodes a TLS connection and never reads its Insecure field, so an
+	// http endpoint would validate here and be dialled as https at run time.
+	// Honouring it needs a credential source in the section, which is a
+	// specification change.
 	Insecure bool `yaml:"insecure,omitempty"`
 }
 

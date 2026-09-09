@@ -317,6 +317,36 @@ func TestDistributedCacheMapping(t *testing.T) {
 		}
 	})
 
+	// gitlab-runner reads CacheS3Config.Insecure only on its access-key path
+	// (cache/s3/minio.go): the IAM path this mapping selects builds its client
+	// with Secure: true and instance-metadata credentials and never looks at
+	// the field. Carrying distributed_cache.insecure through would produce a
+	// configuration that says http and dials https, so the value is rejected
+	// at validation and never reaches the mapping.
+	t.Run("an insecure endpoint is rejected before it reaches the mapping", func(t *testing.T) {
+		t.Parallel()
+		yaml := baseYAML + cacheYAML + "  endpoint: http://minio.example.com:9000\n  insecure: true\n"
+		if _, err := config.Parse([]byte(yaml), t.TempDir(), config.WithEnv(noEnv)); err == nil {
+			t.Fatal("config.Parse accepted an http distributed_cache endpoint; the IAM client would dial https")
+		}
+	})
+
+	t.Run("insecure is not silently honoured", func(t *testing.T) {
+		t.Parallel()
+		cfg := load(t, baseYAML+cacheYAML+"  endpoint: https://minio.example.com:9000\n")
+		// Set the field behind validation's back: the mapping must not carry
+		// it into a configuration that reads as plaintext.
+		cfg.DistributedCache.Insecure = true
+		out := build(t, cfg, "")
+		s3 := out.Runners[0].Cache.S3
+		if s3.Insecure {
+			t.Error("S3.Insecure = true; the IAM client ignores it and dials TLS, so the cache configuration would misrepresent the connection")
+		}
+		if s3.AuthType() != cacheconfig.S3AuthTypeIAM {
+			t.Fatalf("S3.AuthType() = %q, want IAM; the reason Insecure cannot be honoured", s3.AuthType())
+		}
+	})
+
 	t.Run("no section means no cache configuration", func(t *testing.T) {
 		t.Parallel()
 		out := build(t, load(t, baseYAML), "")

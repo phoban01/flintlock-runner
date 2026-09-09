@@ -146,7 +146,13 @@ func cacheConfig(dc *config.DistributedCache) (*cacheconfig.Config, error) {
 	s3 := &cacheconfig.CacheS3Config{
 		BucketName:     dc.Bucket,
 		BucketLocation: dc.Region,
-		Insecure:       dc.Insecure,
+		// distributed_cache.insecure is deliberately not carried over.
+		// gitlab-runner reads CacheS3Config.Insecure only on its access-key
+		// path; the IAM path below hardcodes a TLS connection. Passing the
+		// field through would look as if a plaintext store worked while the
+		// client dialled https, so validation rejects the field outright
+		// (see internal/config.validator.distributedCache) and the mapping
+		// leaves it false rather than silently honouring it.
 		//= docs/requirements/07-configuration.md#distributed-cache-section
 		//# The Runner SHALL configure the distributed cache so that
 		//# pre-signed URLs are generated on the Control Node and no AWS credentials
@@ -179,7 +185,8 @@ func cacheConfig(dc *config.DistributedCache) (*cacheconfig.Config, error) {
 }
 
 // serverAddress turns the endpoint URL into the host[:port] gitlab-runner
-// expects in ServerAddress; the scheme is carried by Insecure.
+// expects in ServerAddress. The scheme is dropped: the IAM client always
+// connects over TLS, and validation has already rejected anything but https.
 func serverAddress(endpoint string) (string, error) {
 	u, err := url.Parse(endpoint)
 	if err != nil || u.Host == "" {
