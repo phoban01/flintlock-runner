@@ -7,6 +7,7 @@ package fakegitlab
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"io"
 	"mime/multipart"
 	"net/http"
@@ -571,6 +572,53 @@ func uploadBodyWithToken(t *testing.T, token string) ([]byte, string) {
 //# The fake GitLab SHALL hand out Jobs from a queue of `spec.Job` payloads
 //# supplied by the test and SHALL record every state update and the
 //# assembled trace for each Job.
+
+// TestEnqueueRefusesADuplicateID pins that a Job id already queued, already
+// handed out or already seeded is refused rather than accepted, because
+// popLocked assigns s.jobs[job.ID] unconditionally and would drop the
+// earlier record (TD-031).
+func TestEnqueueRefusesADuplicateID(t *testing.T) {
+	t.Parallel()
+	s, url := newHandlerServer(t, Options{})
+
+	mustEnqueue(t, s, &spec.Job{ID: 3, Token: "glcbt-3"})
+	if err := s.Enqueue(&spec.Job{ID: 3, Token: "other"}); !errors.Is(err, ErrDuplicateJobID) {
+		t.Errorf("Enqueue of a queued id = %v, want ErrDuplicateJobID", err)
+	}
+
+	// Hand it out, so it has a record rather than a queue entry.
+	if r := do(t, url, http.MethodPost, "/api/v4/jobs/request", nil, requestJobBody(t, "")); r.code != http.StatusCreated {
+		t.Fatalf("request job = %d, want 201", r.code)
+	}
+	if err := s.Enqueue(&spec.Job{ID: 3, Token: "other"}); !errors.Is(err, ErrDuplicateJobID) {
+		t.Errorf("Enqueue of a handed-out id = %v, want ErrDuplicateJobID", err)
+	}
+	if rec := s.Record(3); rec == nil || rec.Token != "glcbt-3" {
+		t.Errorf("record for job 3 = %+v, want the one from the first Enqueue", rec)
+	}
+
+	s.SeedArtifact(4, "glcbt-4", "artifacts.zip", []byte("zip"))
+	if err := s.Enqueue(&spec.Job{ID: 4}); !errors.Is(err, ErrDuplicateJobID) {
+		t.Errorf("Enqueue of a seeded id = %v, want ErrDuplicateJobID", err)
+	}
+
+	// A zero ID skips every id in use, queued ones included.
+	mustEnqueue(t, s, &spec.Job{ID: 6})
+	mustEnqueue(t, s, &spec.Job{})
+	if s.Pending() != 2 {
+		t.Fatalf("Pending = %d, want 2", s.Pending())
+	}
+	for _, want := range []int64{6, 7} {
+		r := do(t, url, http.MethodPost, "/api/v4/jobs/request", nil, requestJobBody(t, ""))
+		var job spec.Job
+		if err := json.Unmarshal(r.body, &job); err != nil {
+			t.Fatalf("decode job: %v (%d %s)", err, r.code, r.body)
+		}
+		if job.ID != want {
+			t.Errorf("handed out job %d, want %d", job.ID, want)
+		}
+	}
+}
 
 // TestEnqueueCopiesThePayload pins the promise in Enqueue's doc comment: the
 // queued Job shares nothing with the caller's, so a mutation made after

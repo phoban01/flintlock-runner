@@ -59,6 +59,10 @@ var ErrUnknownJob = errors.New("fakegitlab: unknown job")
 // state has already been confirmed.
 var ErrJobFinished = errors.New("fakegitlab: job already finished")
 
+// ErrDuplicateJobID is returned by Enqueue for an explicit ID that is
+// already queued, already handed out or already seeded.
+var ErrDuplicateJobID = errors.New("fakegitlab: duplicate job id")
+
 // Options configure a Server.
 type Options struct {
 	// RunnerToken is the token required on runner-scoped requests (TD-033).
@@ -271,7 +275,9 @@ func (s *Server) URL() string {
 // re-serialises at hand-out time a mutation made after Enqueue would be
 // picked up at request time. Enqueue bumps the queue version and wakes every
 // long-polling job request. It returns an error when the payload cannot be
-// serialised.
+// serialised, and ErrDuplicateJobID for an explicit ID that is already
+// queued, handed out or seeded, since popLocked would otherwise overwrite
+// the earlier record.
 func (s *Server) Enqueue(job *spec.Job) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -279,11 +285,14 @@ func (s *Server) Enqueue(job *spec.Job) error {
 	if err != nil {
 		return fmt.Errorf("fakegitlab: enqueue job %d: %w", job.ID, err)
 	}
-	if j.ID == 0 {
-		for s.jobs[s.nextID] != nil {
+	switch {
+	case j.ID == 0:
+		for s.idTakenLocked(s.nextID) {
 			s.nextID++
 		}
 		j.ID = s.nextID
+	case s.idTakenLocked(j.ID):
+		return fmt.Errorf("%w: %d", ErrDuplicateJobID, j.ID)
 	}
 	if j.ID >= s.nextID {
 		s.nextID = j.ID + 1
@@ -294,6 +303,21 @@ func (s *Server) Enqueue(job *spec.Job) error {
 	s.queue = append(s.queue, j)
 	s.bumpQueueLocked()
 	return nil
+}
+
+// idTakenLocked reports whether a Job id is already in use, either by a
+// record the fake holds - handed out or seeded - or by a Job still waiting
+// in the queue. The caller holds s.mu.
+func (s *Server) idTakenLocked(id int64) bool {
+	if s.jobs[id] != nil {
+		return true
+	}
+	for _, q := range s.queue {
+		if q.ID == id {
+			return true
+		}
+	}
+	return false
 }
 
 // bumpQueueLocked advances the queue version and wakes long pollers. The
