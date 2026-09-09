@@ -291,19 +291,19 @@ func TestTimeoutSecondsComesFromTheContext(t *testing.T) {
 
 //= docs/requirements/02-executor.md#guest-transport
 //= type=test
-//# The `exec` Guest Transport SHALL treat an `error` payload in the
-//# response stream as a transport failure and SHALL treat an `exit_code`
-//# payload as the command's exit status.
+//# The `exec` Guest Transport SHALL treat an `exit_code`
+//# payload as the command's exit status and SHALL treat an `error` payload
+//# as a transport failure only where the stream ends without an `exit_code`.
 
-// TestErrorPayloadFailsAndExitCodeIsTheStatus separates the two payloads
-// that end an exchange. An exit_code is the command's own answer, zero or
-// not, and the transport reports it with no error. An error payload is the
-// Host saying the command never ran or was stopped from underneath it --
-// upstream's exec session passing its control-channel idle deadline reads
-// exactly like this -- so the status is unknown, the failure wraps
-// ErrStreamFailed and its message names the Host and repeats what the Host
-// said, whatever follows it on the stream.
-func TestErrorPayloadFailsAndExitCodeIsTheStatus(t *testing.T) {
+// TestExitCodeIsTheStatusAndAnErrorWithoutOneFails pins the ordering the
+// exec service's framing gives these payloads. An exit_code is the
+// command's own answer, zero or not, and the transport reports it with no
+// error -- including when an error payload came first, which is an ordinary
+// failing command whose Stage the Executor may re-run. An error payload
+// after which the stream simply ends is a broken session: the status is
+// unknown, the failure wraps ErrStreamFailed and its message names the Host
+// and repeats what the Host said.
+func TestExitCodeIsTheStatusAndAnErrorWithoutOneFails(t *testing.T) {
 	t.Parallel()
 	ctx, cancel := context.WithTimeout(context.Background(), testTimeout)
 	defer cancel()
@@ -327,11 +327,31 @@ func TestErrorPayloadFailsAndExitCodeIsTheStatus(t *testing.T) {
 		}
 	})
 
-	t.Run("an error payload is a transport failure", func(t *testing.T) {
-		// The exit code after the error payload is the guest agent's own
-		// framing; the error is still what the Stage's outcome is decided
-		// on, because the code that follows it is not the command's.
-		stream := newScriptedStream(stdout("partial"), errorPayload("exec session control channel idle deadline exceeded"), exitCode(0))
+	t.Run("an exit_code after an error payload wins", func(t *testing.T) {
+		// This is the shape the exec service documents: an error payload,
+		// typically followed by the exit_code that closes the stream. The
+		// command ran and exited, so the status is its own and the Stage
+		// failed as a script error rather than as a Runner fault.
+		for _, code := range []int32{0, 2} {
+			stream := newScriptedStream(stdout("partial"), errorPayload("command exited non-zero"), exitCode(code))
+			stub := &stubHost{name: "h1", exec: func(context.Context) (flintlock.ExecStream, error) { return stream, nil }}
+			tr := newExecTransport(t, transport.Target{Host: stub, VMUID: "vm"})
+			status, err := tr.Run(ctx, transport.Command{Path: "sh"})
+			if err != nil {
+				t.Fatalf("Run returned (%d, %v) for an error payload followed by exit_code %d, want the exit code", status, err, code)
+			}
+			if status != int(code) {
+				t.Errorf("Run returned %d, want the exit_code payload %d that followed the error", status, code)
+			}
+		}
+	})
+
+	t.Run("an error payload with no exit_code is a transport failure", func(t *testing.T) {
+		// The stream ends after the error payload and no exit_code ever
+		// arrives -- upstream's exec session passing its control-channel
+		// idle deadline reads exactly like this -- so the command's status
+		// is unknown and the Stage must not be re-run (EX-023).
+		stream := newScriptedStream(stdout("partial"), errorPayload("exec session control channel idle deadline exceeded"))
 		stub := &stubHost{name: "h1", exec: func(context.Context) (flintlock.ExecStream, error) { return stream, nil }}
 		tr := newExecTransport(t, transport.Target{Host: stub, VMUID: "vm"})
 		status, err := tr.Run(ctx, transport.Command{Path: "sh"})

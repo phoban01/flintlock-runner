@@ -182,11 +182,27 @@ func (t *execTransport) exchange(ctx context.Context, start *execv1.ExecStart, s
 	return status, nil
 }
 
+//= docs/requirements/02-executor.md#guest-transport
+//# The `exec` Guest Transport SHALL treat an `exit_code`
+//# payload as the command's exit status and SHALL treat an `error` payload
+//# as a transport failure only where the stream ends without an `exit_code`.
+
 // receive reads the response stream to its end, writing output as it
 // arrives and watching the Host for liveness while it does.
+//
+// An error payload does not end the exchange. The exec service sends one to
+// say that something went wrong and then, ordinarily, the exit_code that
+// closes the stream, so an exit_code arriving after an error payload is
+// still the command's own answer and wins. Only a stream that ends without
+// ever carrying an exit_code turns a recorded error payload into a
+// transport failure, because only then is the command's status unknown.
 func (t *execTransport) receive(ctx context.Context, cancel context.CancelFunc, stream flintlock.ExecStream, stdout, stderr io.Writer) (int, error) {
 	watch := t.watchHost(ctx, cancel)
 	defer watch.stop()
+
+	// reported is the failure a recorded error payload would become, held
+	// back until the stream ends in case an exit_code follows it.
+	var reported error
 
 	for {
 		resp, err := stream.Recv()
@@ -194,24 +210,23 @@ func (t *execTransport) receive(ctx context.Context, cancel context.CancelFunc, 
 			if unreachable := watch.err(); unreachable != nil {
 				return -1, t.streamFailure("host stopped answering", unreachable)
 			}
+			// The stream ended without an exit_code payload, so the
+			// command's status is unknown and the Stage must not be run
+			// again (EX-023). An error payload seen earlier is why the
+			// session broke, and is the better explanation of it.
+			if reported != nil {
+				return -1, reported
+			}
 			if errors.Is(err, io.EOF) {
-				// The stream ended without an exit_code payload, so the
-				// command's status is unknown and the Stage must not be run
-				// again (EX-023).
 				return -1, t.streamFailure("exec stream ended before the exit code", errors.New("no exit_code payload"))
 			}
 			return -1, t.streamFailure("exec stream failed", err)
 		}
 		watch.sawResponse()
 
-		//= docs/requirements/02-executor.md#guest-transport
-		//# The `exec` Guest Transport SHALL treat an `error` payload in the
-		//# response stream as a transport failure and SHALL treat an
-		//# `exit_code` payload as the command's exit status.
-
-		// Output is written on its way past; the other two payloads end the
-		// exchange, one as a failure whose status is unknown and one as the
-		// command's own answer.
+		// Output is written on its way past. An exit_code ends the exchange
+		// as the command's own answer; an error payload is only recorded,
+		// because the exit_code that usually follows it supersedes it.
 		switch payload := resp.GetPayload().(type) {
 		case *execv1.ExecCommandResponse_Stdout:
 			if err := write(stdout, payload.Stdout); err != nil {
@@ -222,7 +237,7 @@ func (t *execTransport) receive(ctx context.Context, cancel context.CancelFunc, 
 				return -1, t.streamFailure("writing stderr", err)
 			}
 		case *execv1.ExecCommandResponse_Error:
-			return -1, t.execError(payload.Error)
+			reported = t.execError(payload.Error)
 		case *execv1.ExecCommandResponse_ExitCode:
 			return int(payload.ExitCode), nil
 		}
@@ -230,19 +245,20 @@ func (t *execTransport) receive(ctx context.Context, cancel context.CancelFunc, 
 }
 
 //= docs/requirements/02-executor.md#guest-transport
-//# The `exec` Guest Transport SHALL treat an `error` payload in the
-//# response stream as a transport failure and SHALL treat an `exit_code`
-//# payload as the command's exit status.
+//# The `exec` Guest Transport SHALL treat an `exit_code`
+//# payload as the command's exit status and SHALL treat an `error` payload
+//# as a transport failure only where the stream ends without an `exit_code`.
 
-// execError turns an error payload into a transport failure. The payload is
+// execError turns an error payload into the transport failure receive
+// returns should the stream then end without an exit_code. The payload is
 // how the Host reports that the command never ran or was stopped from
 // underneath it -- a command it could not start, a MicroVM deleted
 // mid-Stage, an exec session whose control channel passed its idle deadline
-// -- and none of those leave the command's exit status known, so the
-// Executor has to treat it as a system error and must not re-run the Stage
-// (EX-023). The Host and the payload's own words are both in the message,
-// so the Job log says which Host gave up and why rather than reporting a
-// bare stream failure.
+// -- and where no exit_code follows, none of those leave the command's exit
+// status known, so the Executor has to treat it as a system error and must
+// not re-run the Stage (EX-023). The Host and the payload's own words are
+// both in the message, so the Job log says which Host gave up and why
+// rather than reporting a bare stream failure.
 func (t *execTransport) execError(payload string) error {
 	if payload == "" {
 		payload = "no reason given"
