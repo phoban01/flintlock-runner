@@ -203,6 +203,15 @@ func TestRealClientJobLifecycle(t *testing.T) {
 		t.Fatalf("PatchTrace(11) = %+v, want succeeded up to offset 12", patch)
 	}
 
+	// The confirmed final update carries the state the Job now has on the
+	// GitLab side, exactly as the real API answers with the job's status
+	// once the update service has run. For a Job that ends failed that
+	// header is "failed", which network.RemoteJobStateResponse.IsFailed
+	// reports as a job that is no longer the Runner's to work on, so the
+	// client returns UpdateAbort even though the request succeeded. The
+	// client treats that as a terminal outcome for a final update
+	// (clientJobTrace.finalUpdate returns nil for both UpdateSucceeded and
+	// UpdateAbort), which TestRealClientProcessJobTrace exercises.
 	res = client.UpdateJob(cfg, creds, common.UpdateJobInfo{
 		ID:            job.ID,
 		State:         common.Failed,
@@ -210,8 +219,8 @@ func TestRealClientJobLifecycle(t *testing.T) {
 		ExitCode:      3,
 		Output:        common.JobTraceOutput{Checksum: "crc32:deadbeef", Bytesize: 12},
 	})
-	if res.State != common.UpdateSucceeded {
-		t.Fatalf("final UpdateJob = %+v, want succeeded", res)
+	if res.State != common.UpdateAbort || res.CancelRequested {
+		t.Fatalf("final UpdateJob = %+v, want abort from Job-Status: failed", res)
 	}
 
 	rec = s.Record(job.ID)
@@ -310,9 +319,14 @@ func TestRealClientCancellation(t *testing.T) {
 	if res.State != common.UpdateSucceeded || !res.CancelRequested {
 		t.Fatalf("UpdateJob after Cancel = %+v, want succeeded with CancelRequested", res)
 	}
+	// The final update moves the Job from canceling to canceled, and the
+	// response carries that status, as GitLab's own update endpoint answers
+	// with the job's status after the transition. Job-Status: canceled is
+	// what IsFailed reports, so the client returns UpdateAbort; for a final
+	// update that is terminal and not an error.
 	res = client.UpdateJob(cfg, creds, common.UpdateJobInfo{ID: job.ID, State: common.Failed, FailureReason: common.JobCanceled})
-	if res.State != common.UpdateSucceeded {
-		t.Fatalf("final UpdateJob after Cancel = %+v, want succeeded", res)
+	if res.State != common.UpdateAbort || res.CancelRequested {
+		t.Fatalf("final UpdateJob after Cancel = %+v, want abort from Job-Status: canceled", res)
 	}
 	if rec := s.Record(job.ID); rec.Status != fakegitlab.StatusCanceled || rec.FailureReason != "job_canceled" {
 		t.Errorf("record after graceful cancel = status %q reason %q, want canceled/job_canceled", rec.Status, rec.FailureReason)
