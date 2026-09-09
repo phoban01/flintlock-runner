@@ -362,6 +362,36 @@ func TestMicroVMsGoThroughTheHostClient(t *testing.T) {
 
 // stubDialer is a flintlock.AdminDialer that hands out stub Hosts, standing
 // in for AdminDialer's connections to real flintlockd instances.
+// TestNamespaceRestrictionServesOnlyItsOwn exercises FakeConfig.Namespace,
+// which is the switch a Pool Manager that serves one Runner namespace is
+// modelled with (PL-017): a Pool in the served namespace behaves normally,
+// and every reference to another namespace is refused as invalid rather
+// than quietly served.
+func TestNamespaceRestrictionServesOnlyItsOwn(t *testing.T) {
+	h := newHarness(t, poolmgr.FakeConfig{Namespace: testNamespace}, "host-a")
+	h.createPool(h.spec("pool", 1, "host-a"))
+
+	elsewhere := h.spec("pool", 1, "host-a")
+	elsewhere.Ref.Namespace = "other-ns"
+	if _, err := h.client.CreatePool(h.ctx, elsewhere); !errors.Is(err, poolmgr.ErrInvalid) {
+		t.Fatalf("CreatePool in another namespace = %v, want ErrInvalid", err)
+	}
+	other := poolmgr.PoolRef{Name: "pool", Namespace: "other-ns"}
+	if _, err := h.client.GetPool(h.ctx, other); !errors.Is(err, poolmgr.ErrInvalid) {
+		t.Fatalf("GetPool in another namespace = %v, want ErrInvalid", err)
+	}
+	if _, err := h.client.ClaimVM(h.ctx, other); !errors.Is(err, poolmgr.ErrInvalid) {
+		t.Fatalf("ClaimVM in another namespace = %v, want ErrInvalid", err)
+	}
+
+	// The served namespace is untouched by the refusals.
+	claim := h.claim("pool")
+	if claim.LeaseID == "" {
+		t.Fatal("ClaimVM in the served namespace returned no lease")
+	}
+	h.release(claim.LeaseID)
+}
+
 type stubDialer struct{}
 
 func (*stubDialer) DialAdmin(_ context.Context, ep flintlock.Endpoint) (flintlock.PoolHostClient, error) {

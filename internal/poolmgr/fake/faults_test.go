@@ -264,6 +264,50 @@ func TestFaultDropEventsStream(t *testing.T) {
 	h.recvUntilClaim(resubscribed, claim.VMUID)
 }
 
+// TestFaultRefuseHeartbeats exercises Faults.RefuseHeartbeats, the switch
+// that produces "a Lease expiring during a Job" (TD-051, SC-061) without
+// waiting the expiry threshold out on a real clock. While it is set every
+// Heartbeat is NOT_FOUND, the Lease itself lives on until the threshold
+// passes, and the control loop then expires it and deletes the MicroVM;
+// clearing the switch puts heartbeats back.
+func TestFaultRefuseHeartbeats(t *testing.T) {
+	h := newHarness(t, poolmgr.FakeConfig{}, "host-a")
+	spec := h.spec("pool", 1, "host-a")
+	h.createPool(spec)
+	claim := h.claim("pool")
+
+	if _, err := h.client.Heartbeat(h.ctx, claim.LeaseID); err != nil {
+		t.Fatalf("Heartbeat before the fault: %v", err)
+	}
+
+	h.pm.SetFaults(poolmgr.Faults{RefuseHeartbeats: true})
+	if _, err := h.client.Heartbeat(h.ctx, claim.LeaseID); !errors.Is(err, poolmgr.ErrNotFound) {
+		t.Fatalf("Heartbeat while heartbeats are refused = %v, want ErrNotFound", err)
+	}
+	if leases := h.pm.Leases(); len(leases) != 1 {
+		t.Fatalf("leases while heartbeats are refused = %+v, want the one that cannot renew", leases)
+	}
+
+	// Clearing the switch restores it, which is how a test hands the Lease
+	// back after the failure it wanted.
+	h.pm.SetFaults(poolmgr.Faults{})
+	if _, err := h.client.Heartbeat(h.ctx, claim.LeaseID); err != nil {
+		t.Fatalf("Heartbeat after the fault was cleared: %v", err)
+	}
+
+	// Refused again and left alone, the Lease reaches its threshold and the
+	// loop expires it.
+	h.pm.SetFaults(poolmgr.Faults{RefuseHeartbeats: true})
+	h.advance(spec.HeartbeatExpiryThreshold)
+	expired := h.waitEvent(poolmgrv1.EventType_VM_DELETED_DUE_TO_EXPIRY)
+	if expired.VMUID != claim.VMUID {
+		t.Fatalf("VM_DELETED_DUE_TO_EXPIRY for %q, want the leased microvm %q", expired.VMUID, claim.VMUID)
+	}
+	if leases := h.pm.Leases(); len(leases) != 0 {
+		t.Fatalf("leases after the expiry = %+v, want none", leases)
+	}
+}
+
 // recvUntilClaim reads stream until it carries VM_CLAIMED for uid, which the
 // replay a new subscriber is given already holds.
 func (h *harness) recvUntilClaim(stream poolmgr.EventStream, uid string) {
