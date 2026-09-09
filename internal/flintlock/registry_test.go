@@ -12,9 +12,9 @@ import (
 
 // newRegistry builds a Registry over endpoints with the production Dialer
 // and closes it when the test ends.
-func newRegistry(t *testing.T, endpoints []flintlock.Endpoint, opts ...flintlock.RegistryOption) flintlock.Registry {
+func newRegistry(t *testing.T, endpoints []flintlock.Endpoint) flintlock.Registry {
 	t.Helper()
-	reg, err := flintlock.NewRegistry(context.Background(), flintlock.NewDialer(), endpoints, opts...)
+	reg, err := flintlock.NewRegistry(context.Background(), flintlock.NewDialer(), endpoints)
 	if err != nil {
 		t.Fatalf("NewRegistry: %v", err)
 	}

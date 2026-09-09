@@ -20,12 +20,12 @@ import (
 )
 
 // newExecTransport builds the exec Guest Transport for a target.
-func newExecTransport(t *testing.T, target transport.Target, opts ...transport.FactoryOption) transport.Transport {
+func newExecTransport(t *testing.T, target transport.Target) transport.Transport {
 	t.Helper()
 	if target.Kind == "" {
 		target.Kind = transport.KindExec
 	}
-	tr, err := transport.NewFactory(opts...).New(context.Background(), target)
+	tr, err := transport.NewFactory().New(context.Background(), target)
 	if err != nil {
 		t.Fatalf("building the %s transport: %v", target.Kind, err)
 	}

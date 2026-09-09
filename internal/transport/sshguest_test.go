@@ -34,6 +34,12 @@ type sshGuest struct {
 	stdout string
 	stderr string
 	status uint32
+	// silent makes the guest accept an exec request and then say nothing
+	// more, which is what a Stage looks like from outside while it works.
+	silent bool
+
+	// done is closed when the test ends, releasing a silent session.
+	done chan struct{}
 
 	mu       sync.Mutex
 	commands []string
@@ -59,7 +65,11 @@ func newSSHGuest(t *testing.T, authorized ssh.PublicKey, stdout, stderr string, 
 		},
 	}
 	guest.config.AddHostKey(hostKey)
+	guest.done = make(chan struct{})
 	t.Cleanup(guest.wg.Wait)
+	// Registered after the wait, so that it runs before it and releases a
+	// silent session that is still holding its channel open.
+	t.Cleanup(func() { close(guest.done) })
 	return guest
 }
 
@@ -125,6 +135,18 @@ func (g *sshGuest) session(channel ssh.Channel, requests <-chan *ssh.Request) {
 			return
 		}
 		_ = req.Reply(true, nil)
+
+		if g.silent {
+			g.mu.Lock()
+			g.commands = append(g.commands, payload.Command)
+			g.mu.Unlock()
+			// Say nothing at all until the test is over: no output, no exit
+			// status, and the channel kept open, which is what a Stage that
+			// is quietly working looks like from the Runner's side.
+			_, _ = io.Copy(io.Discard, channel)
+			<-g.done
+			return
+		}
 
 		var stdin []byte
 		if b, err := io.ReadAll(channel); err == nil {

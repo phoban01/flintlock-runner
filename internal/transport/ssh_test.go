@@ -7,7 +7,9 @@ import (
 	"io"
 	"strings"
 	"testing"
+	"time"
 
+	"github.com/liquidmetal-dev/flintlock/api/types"
 	"golang.org/x/crypto/ssh"
 
 	"github.com/phoban01/flintlock-runner/internal/flintlock"
@@ -252,6 +254,59 @@ func TestSSHReadyRunsATrivialCommand(t *testing.T) {
 			t.Fatalf("Ready returned %v, want ErrNotReady", err)
 		}
 	})
+}
+
+//= docs/requirements/02-executor.md#guest-transport
+//= type=test
+//# If the Host that runs the MicroVM becomes unreachable, then the
+//# Guest Transport SHALL fail the in-flight operation within the configured
+//# transport deadline.
+
+// TestSSHRunFailsWhenTheHostStopsAnswering runs a Stage against a guest that
+// accepts the command and then says nothing, on a Host that has stopped
+// answering. The ssh session itself cannot tell the two apart -- a working
+// Stage is silent too -- so the transport asks the Host about the MicroVM,
+// and when the Host does not answer that either the operation ends within
+// the configured deadline instead of waiting on a guest that will never
+// reply.
+func TestSSHRunFailsWhenTheHostStopsAnswering(t *testing.T) {
+	t.Parallel()
+	ctx, cancel := context.WithTimeout(context.Background(), testTimeout)
+	defer cancel()
+	key, public := generateKeyPair(t)
+	guest := newSSHGuest(t, public, "", "", 0)
+	guest.silent = true
+
+	target, host := sshTarget(guest, key, "")
+	const deadline = 400 * time.Millisecond
+	target.Deadline = deadline
+	host.getVM = func(ctx context.Context, _ string) (*types.MicroVM, error) {
+		// The Host has stopped answering: the call runs out of time.
+		<-ctx.Done()
+		return nil, errors.Join(flintlock.ErrUnavailable, ctx.Err())
+	}
+
+	tr, err := transport.NewFactory().New(context.Background(), target)
+	if err != nil {
+		t.Fatalf("building the ssh transport: %v", err)
+	}
+	t.Cleanup(func() { _ = tr.Close() })
+
+	begin := time.Now()
+	status, err := tr.Run(ctx, transport.Command{Path: "true"})
+	took := time.Since(begin)
+	if !errors.Is(err, transport.ErrStreamFailed) {
+		t.Fatalf("Run returned (%d, %v), want a failure wrapping ErrStreamFailed", status, err)
+	}
+	if !strings.Contains(err.Error(), "h1") {
+		t.Errorf("the failure %q does not name the host", err)
+	}
+	if took > 10*deadline {
+		t.Errorf("Run took %s to give up on an unreachable host, want about %s", took, deadline)
+	}
+	if _, _, probes := host.counts(); probes == 0 {
+		t.Error("the transport never asked the host about the microvm; it cannot know a silent stage from a dead host")
+	}
 }
 
 //= docs/requirements/02-executor.md#guest-transport

@@ -131,6 +131,7 @@ func (r *registry) Apply(ctx context.Context, endpoints []Endpoint) error {
 	var (
 		retired []*hostEntry
 		added   []string
+		dialled []*hostEntry
 	)
 	for _, ep := range endpoints {
 		if ep.Name == "" {
@@ -147,17 +148,17 @@ func (r *registry) Apply(ctx context.Context, endpoints []Endpoint) error {
 		if err != nil {
 			// Nothing has been published yet, so the Registry keeps the
 			// Inventory it had; the caller reports the configuration error.
-			for _, e := range next {
-				if _, kept := current[e.ep.Name]; !kept {
-					_ = e.client.Close()
-				}
-			}
+			// Everything dialled on the way to the failure is closed, so a
+			// refused reload leaks no connection.
+			closeAll(dialled)
 			return err
 		}
 		if existing, ok := current[ep.Name]; ok {
 			retired = append(retired, existing)
 		}
-		next[ep.Name] = &hostEntry{ep: ep, client: client}
+		entry := &hostEntry{ep: ep, client: client}
+		next[ep.Name] = entry
+		dialled = append(dialled, entry)
 		added = append(added, ep.Name)
 	}
 	for name, e := range current {
@@ -169,9 +170,7 @@ func (r *registry) Apply(ctx context.Context, endpoints []Endpoint) error {
 	r.mu.Lock()
 	if r.closed {
 		r.mu.Unlock()
-		for _, name := range added {
-			_ = next[name].client.Close()
-		}
+		closeAll(dialled)
 		return errors.New("flintlock: registry is closed")
 	}
 	r.hosts = next
@@ -215,6 +214,13 @@ func (r *registry) Close() error {
 		}
 	}
 	return errors.Join(errs...)
+}
+
+// closeAll closes the clients of entries whose reload never took effect.
+func closeAll(entries []*hostEntry) {
+	for _, e := range entries {
+		_ = e.client.Close()
+	}
 }
 
 // Compile-time check.

@@ -25,7 +25,7 @@ const testNamespace = "flintlock-runner-test"
 
 // startHost builds a fake Host, serves it until the test ends and returns
 // it. The Host answers on a loopback port with the given configuration.
-func startHost(t *testing.T, cfg flintlock.FakeHostConfig, opts ...fake.Option) *fake.Host {
+func startHost(t *testing.T, cfg flintlock.FakeHostConfig) *fake.Host {
 	t.Helper()
 	if cfg.Name == "" {
 		cfg.Name = "h1"
@@ -33,7 +33,7 @@ func startHost(t *testing.T, cfg flintlock.FakeHostConfig, opts ...fake.Option) 
 	if cfg.SandboxRoot == "" {
 		cfg.SandboxRoot = t.TempDir()
 	}
-	h := fake.New(cfg, opts...)
+	h := fake.New(cfg)
 	serve(t, h)
 	return h
 }
