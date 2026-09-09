@@ -277,7 +277,6 @@ func (p *poolManager) setFaults(f poolmgr.Faults) {
 	p.pm.SetFaults(f)
 }
 
-
 // gateAdmin wraps a PoolAdmin and fails every call with ErrUnavailable
 // while it is closed, so that a test can take the Pool Manager away from a
 // unit without stopping the fake and without moving any clock.

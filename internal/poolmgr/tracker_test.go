@@ -138,7 +138,10 @@ func TestPollingWhileTheEventStreamIsDown(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ClaimVM: %v", err)
 	}
-	// No event can report the claim, so only the next poll can.
+	// No event can report the claim, so only the next poll can. Both loops
+	// have to be waiting on their timers before the clock moves, or the one
+	// that is still arming would miss the tick.
+	awaitTimers(t, ctx, tracker.clk, 2)
 	tracker.clk.Advance(trackerPollInterval)
 	tracker.await(t, ctx, "the poll to notice the claim", func() bool {
 		return tracker.Available(spec.Ref) == 0
@@ -148,6 +151,7 @@ func TestPollingWhileTheEventStreamIsDown(t *testing.T) {
 	// With Subscribe working again the Tracker re-establishes the stream on
 	// the next interval, and events carry the counts from then on.
 	gate.block(false)
+	awaitTimers(t, ctx, tracker.clk, 2)
 	tracker.clk.Advance(trackerPollInterval)
 	pm.host("host-a").SetFaults(flintlock.HostFaults{})
 	if err := c.ReleaseVM(ctx, claim.LeaseID); err != nil {
@@ -380,6 +384,16 @@ func TestTrackerRejectsAnIncompleteConfiguration(t *testing.T) {
 	}
 	if _, err := poolmgr.NewTracker(poolmgr.TrackerConfig{Events: &eventGate{}}); err == nil {
 		t.Error("NewTracker accepted a configuration with no PoolAdmin client")
+	}
+}
+
+// awaitTimers blocks until n timers are armed on the clock. A test that
+// moves a fake clock has to know that everything it means to wake is
+// already waiting, or the tick fires into a gap.
+func awaitTimers(t *testing.T, ctx context.Context, clk *clock.Fake, n int) {
+	t.Helper()
+	if err := clk.BlockUntil(ctx, n); err != nil {
+		t.Fatalf("waiting for %d timers to be armed: %v", n, err)
 	}
 }
 
