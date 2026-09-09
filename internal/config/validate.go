@@ -7,6 +7,7 @@ import (
 	"net/url"
 	"path"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -97,6 +98,23 @@ func (v *validator) port(field string, p int) {
 	if p < 1 || p > 65535 {
 		v.errorf(field, "must be a port between 1 and 65535, got %d", p)
 	}
+}
+
+// normaliseHostPort reduces a host:port address to a comparable form: the
+// port is parsed as an integer, so 9090 and 09090 compare equal. An address
+// that does not split, or whose port is not a number, is returned unchanged;
+// hostPort reports it separately. Names are not resolved, so a Host named by
+// DNS and the same Host named by address still compare as two.
+func normaliseHostPort(addr string) string {
+	host, port, err := net.SplitHostPort(addr)
+	if err != nil {
+		return addr
+	}
+	n, err := strconv.Atoi(port)
+	if err != nil {
+		return addr
+	}
+	return net.JoinHostPort(host, strconv.Itoa(n))
 }
 
 // hostPort checks a host:port address without a scheme.
@@ -434,10 +452,15 @@ func (v *validator) inventory(c *Config) {
 		}
 		v.hostPort(f+".endpoint", h.Endpoint)
 		if h.Endpoint != "" {
-			if j, dup := endpoints[h.Endpoint]; dup {
-				v.errorf(f+".endpoint", "duplicates inventory.hosts[%d].endpoint %q", j, h.Endpoint)
+			// Key the check on the normalised address, not the raw string:
+			// 10.0.1.10:9090 and 10.0.1.10:09090 name the same flintlockd,
+			// and the Pool Manager would otherwise be told about one daemon
+			// as two Hosts.
+			key := normaliseHostPort(h.Endpoint)
+			if j, dup := endpoints[key]; dup {
+				v.errorf(f+".endpoint", "duplicates inventory.hosts[%d].endpoint %q", j, hosts[j].Endpoint)
 			} else {
-				endpoints[h.Endpoint] = i
+				endpoints[key] = i
 			}
 		}
 		v.arch(f+".arch", h.Arch)

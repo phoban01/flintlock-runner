@@ -3,6 +3,7 @@ package config
 import (
 	"errors"
 	"fmt"
+	"net"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -605,6 +606,38 @@ func TestDuplicateInventoryEntriesRejected(t *testing.T) {
 		cfg := fullWith(t, func(c *Config) { c.Inventory.Hosts[1].Endpoint = c.Inventory.Hosts[0].Endpoint })
 		if errs := fieldErrors(t, cfg); !hasFieldError(errs, "inventory.hosts[1].endpoint", "duplicates inventory.hosts[0].endpoint") {
 			t.Errorf("errors = %v, want the duplicate endpoint rejected", errs)
+		}
+	})
+
+	// The duplicate check compares normalised addresses, not raw strings:
+	// a leading zero in the port names the same flintlockd, and letting both
+	// through would declare one daemon to the Pool Manager as two Hosts.
+	t.Run("an endpoint differing only in a leading zero in the port", func(t *testing.T) {
+		t.Parallel()
+		cfg := fullWith(t, func(c *Config) {
+			host, port, err := net.SplitHostPort(c.Inventory.Hosts[0].Endpoint)
+			if err != nil {
+				t.Fatalf("SplitHostPort(%q): %v", c.Inventory.Hosts[0].Endpoint, err)
+			}
+			c.Inventory.Hosts[1].Endpoint = net.JoinHostPort(host, "0"+port)
+		})
+		if errs := fieldErrors(t, cfg); !hasFieldError(errs, "inventory.hosts[1].endpoint", "duplicates inventory.hosts[0].endpoint") {
+			t.Errorf("errors = %v, want the endpoint rejected as a duplicate of hosts[0]", errs)
+		}
+	})
+
+	t.Run("distinct ports on the same host are not duplicates", func(t *testing.T) {
+		t.Parallel()
+		cfg := fullWith(t, func(c *Config) {
+			host, _, err := net.SplitHostPort(c.Inventory.Hosts[0].Endpoint)
+			if err != nil {
+				t.Fatalf("SplitHostPort(%q): %v", c.Inventory.Hosts[0].Endpoint, err)
+			}
+			c.Inventory.Hosts[0].Endpoint = net.JoinHostPort(host, "9090")
+			c.Inventory.Hosts[1].Endpoint = net.JoinHostPort(host, "9091")
+		})
+		if err := Validate(cfg); err != nil {
+			t.Errorf("Validate = %v, want nil; two ports on one address are two daemons", err)
 		}
 	})
 
