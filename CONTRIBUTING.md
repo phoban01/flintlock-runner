@@ -83,6 +83,22 @@ code and are matched by the same source glob:
 func TestReserveRefusesWhenFull(t *testing.T) {
 ```
 
+**A test citation has to be on a test that would fail.** The gate counts
+citations; it cannot tell whether the test you cited actually exercises the
+sentence it quotes. Before you cite a test, break the code it covers and
+check that *that* test fails. If it still passes, you have cited the wrong
+test, and the requirement is unguarded however green the gate looks.
+
+This goes wrong most often on a requirement with two clauses. One clause is
+easy to test and gets both the citation and a passing test; the other
+carries the risk and is either untested or tested by a second test with no
+annotation. The gate is satisfied either way, so the clause that matters can
+be deleted without anything going red. Cite both tests, or cite the one that
+catches the regression.
+
+Reviewers check this by reverting a fix and seeing which test fails. It is
+worth doing to your own branch first.
+
 Other types: `type=exception` with a `reason=` line for a requirement
 deliberately not met, `type=implication` for one satisfied by construction
 (for example by an imported gitlab-runner package), and `type=todo` with

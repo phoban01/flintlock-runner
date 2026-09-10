@@ -8,6 +8,7 @@ require (
 	github.com/prometheus/client_golang v1.24.1
 	github.com/urfave/cli v1.22.17
 	gitlab.com/gitlab-org/gitlab-runner v1.11.1-0.20260907100838-7b010e09cf59
+	golang.org/x/crypto v0.55.0
 	google.golang.org/grpc v1.83.1
 	google.golang.org/protobuf v1.36.12
 	gopkg.in/yaml.v3 v3.0.1
@@ -153,7 +154,6 @@ require (
 	go.yaml.in/yaml/v3 v3.0.5 // indirect
 	go.yaml.in/yaml/v4 v4.0.0-rc.2 // indirect
 	gocloud.dev v0.46.0 // indirect
-	golang.org/x/crypto v0.55.0 // indirect
 	golang.org/x/net v0.57.0 // indirect
 	golang.org/x/oauth2 v0.36.0 // indirect
 	golang.org/x/sync v0.22.0 // indirect
