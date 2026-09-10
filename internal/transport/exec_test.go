@@ -490,6 +490,14 @@ func TestRunFailsWhenTheHostStopsAnswering(t *testing.T) {
 		// block in a Send, which is the state this subtest is about; then
 		// stop the Host and let the deadline pass on the transport's clock.
 		time.Sleep(100 * time.Millisecond)
+		// The liveness watch is what this subtest is about, so wait until
+		// the transport has armed it before letting the clock move. Without
+		// this the stuck Send fails on its own once the Host goes quiet and
+		// the subtest passes with the watch removed entirely, which is what
+		// it stopped doing when the arming assertion was dropped.
+		if err := clk.BlockUntil(ctx, 1); err != nil {
+			t.Fatalf("the transport never armed its liveness timer: %v", err)
+		}
 		host.SetFaults(flintlock.HostFaults{Unresponsive: true})
 		defer keepAdvancing(clk, deadline)()
 

@@ -22,20 +22,26 @@ func ProbeAll(ctx context.Context, reg Registry, namespace string, log *slog.Log
 	infos := make(map[string]*HostInfo)
 	var errs []error
 	for _, name := range reg.Names() {
-		client, release, err := reg.Lease(name)
-		if err != nil {
-			// The Host left the Inventory between Names and Lease.
-			continue
-		}
-		// The lease is what keeps the connection open for the length of the
-		// probe when a reload removes the Host underneath it (HO-014).
-		info, err := Probe(ctx, client, namespace, log)
-		release()
-		if err != nil {
+		info, err := func() (*HostInfo, error) {
+			client, release, err := reg.Lease(name)
+			if err != nil {
+				// The Host left the Inventory between Names and Lease.
+				return nil, nil
+			}
+			// The lease is what keeps the connection open for the length
+			// of the probe when a reload removes the Host underneath it
+			// (HO-014). Release it on every path out, including a panic
+			// in Probe, or the connection outlives the Runner's interest
+			// in the Host, which is the leak the lease exists to prevent.
+			defer release()
+			return Probe(ctx, client, namespace, log)
+		}()
+		switch {
+		case err != nil:
 			errs = append(errs, err)
-			continue
+		case info != nil:
+			infos[name] = info
 		}
-		infos[name] = info
 	}
 	return infos, errors.Join(errs...)
 }

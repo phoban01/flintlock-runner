@@ -190,6 +190,13 @@ func (r *registry) Names() []string {
 // and immediately when there was none. A Runner whose Inventory is
 // regenerated therefore does not accumulate connections to Hosts that have
 // left it.
+//
+// Apply is for one caller: the reload path, which is serialised by the
+// Reloader. It dials outside the lock, so two overlapping calls would each
+// build a replacement set and the loser's freshly dialled connections would
+// end up in neither the live set nor the retired one, where nothing could
+// ever close them. That is exactly the leak the retire-and-refcount path
+// above exists to prevent, so do not call Apply concurrently with itself.
 func (r *registry) Apply(ctx context.Context, endpoints []Endpoint) error {
 	r.mu.Lock()
 	if r.closed {
