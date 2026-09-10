@@ -71,12 +71,17 @@ type TrackerConfig struct {
 // while still holding warm MicroVMs.
 //
 // What the events cannot settle, a poll does. A Pool an event counts down
-// to nothing is polled, because a wrong zero refuses Jobs and produces no
-// event that could correct it. And a Pool short of its target where a
-// MicroVM became available by taking one of the anonymous MicroVMs with it
-// is polled, because the Tracker cannot tell a replayed availability event,
+// to nothing owes a poll, because a wrong zero refuses Jobs and produces no
+// event that could correct it. And a Pool that reads below its target after
+// a MicroVM became available by taking one of the anonymous MicroVMs with it
+// owes one, because the Tracker cannot tell a replayed availability event,
 // where taking one is right, from a MicroVM created since the poll, where
 // it leaves the Pool reading one short.
+//
+// A Pool goes on owing that poll until an answer arrives. GetPool can fail,
+// and a Pool stranded on a wrong count has no second chance of its own to
+// ask, so the debt is remembered on the Pool and the poll loop runs while
+// any Pool holds one, whether or not the Events stream is healthy.
 type PoolTracker struct {
 	cfg TrackerConfig
 	log *slog.Logger
@@ -165,11 +170,29 @@ func (c *uidCount) remove(uid string) bool {
 	return false
 }
 
-// rebaseline folds an authoritative total -- a GetPool answer or the counts
-// a POOL_SIZE_BELOW_TARGET event carries -- into the count. The MicroVMs it
-// reports that no event has named become the new unnamed part; the ones
-// events have named are already in the total, so they are marked accounted
-// and can never be taken out of the unnamed part later.
+// rebaseline folds the Pool Manager's own total -- a GetPool answer or the
+// counts a POOL_SIZE_BELOW_TARGET event carries -- into the count. The
+// MicroVMs it reports that no event has named become the new unnamed part;
+// the ones events have named are already in the total, so they are marked
+// accounted and can never be taken out of the unnamed part later.
+//
+// The total is authoritative upward only: it can raise the count and it can
+// lower it as far as the number of named uids, but no further, because the
+// unnamed part is clamped at zero. A uid that entered the named set and
+// whose terminating event never arrived therefore holds the count above the
+// Pool Manager's figure until something else removes it, and no later poll
+// can pull it back down.
+//
+// That is deliberate. The answer being folded in is a snapshot, and it can
+// be older than the events that arrived beside it: a poll taken before a
+// MicroVM became available lands after the VM_AVAILABLE that named it. To
+// let the total pull the count down, this would have to evict named uids to
+// fit, choosing which ones arbitrarily and discarding MicroVMs the Tracker
+// has better evidence for than the snapshot does. That trades an over-count
+// for an under-count, and an under-count is the worse of the two: it refuses
+// Jobs the Pool could have run, while an over-count only costs one claim,
+// which returns RESOURCE_EXHAUSTED and takes the count to zero through
+// MarkExhausted (PL-053), from where the next poll rebuilds it.
 func (c *uidCount) rebaseline(total int32) {
 	named := int32(len(c.named)) //nolint:gosec // pool sizes are small
 	c.unnamed = total - named
@@ -209,6 +232,21 @@ type trackedPool struct {
 	// exhausted records a RESOURCE_EXHAUSTED claim and holds the available
 	// count at zero until the next event or poll (PL-053).
 	exhausted bool
+	// needsPoll records that the events alone have left this Pool's counts
+	// unsettled and only the Pool Manager can settle them. It is set when
+	// an event drives the available count to nothing and when the Pool may
+	// be reading short, and only a GetPool answer clears it, so a repair
+	// the Pool Manager refused once is asked for again on the next tick
+	// instead of being lost with the request that failed.
+	needsPoll bool
+	// unsettled records that an event took a MicroVM out of the anonymous
+	// part of the available count while naming it, which is right if the
+	// event was the replay of the one that made that MicroVM available and
+	// wrong if it was a MicroVM created since the poll. It stays set until
+	// a poll settles the question, because the shortfall it may have
+	// introduced does not become visible on the availability event itself:
+	// the count only drops below the target on the claim that follows.
+	unsettled bool
 	// waiters is closed when a MicroVM in this Pool becomes available
 	// (SC-021); waiting counts the callers currently waiting on it.
 	waiters chan struct{}
@@ -361,10 +399,19 @@ func (t *PoolTracker) readStream(ctx context.Context, stream EventStream) {
 	}
 }
 
-// pollLoop polls every tracked Pool when a Pool starts being tracked and,
-// while the Events stream is down, at the configured interval. It shares
-// the interval with the re-subscription: while the stream is up the timer
-// only re-arms.
+// pollLoop polls every tracked Pool when a Pool starts being tracked, while
+// the Events stream is down, and while any Pool still owes a
+// resynchronisation, at the configured interval. It shares the interval with
+// the re-subscription: while the stream is up and no Pool owes a poll the
+// timer only re-arms.
+//
+// The owed poll is what makes a repair recoverable. Asking for one is
+// best-effort -- GetPool can fail, and the request itself is coalesced into
+// a single slot -- so a Pool that owes one keeps owing it until an answer
+// arrives. Without that, one transient error at the wrong moment strands a
+// Pool on a count no event will ever correct: an empty Pool is never claimed
+// from, so it produces no further event, and the Runner refuses every Job
+// for it until the stream happens to drop.
 //
 // The kick path re-arms the timer without draining it first, which is safe
 // here rather than an oversight: Reset drops a tick the timer has already
@@ -380,7 +427,7 @@ func (t *PoolTracker) pollLoop(ctx context.Context) {
 			return
 		case <-t.kick:
 		case <-timer.C():
-			if t.streamIsUp() {
+			if t.streamIsUp() && !t.pollOwed() {
 				timer.Reset(t.cfg.PollInterval)
 				continue
 			}
@@ -415,6 +462,20 @@ func (t *PoolTracker) streamIsUp() bool {
 	t.streamMu.Lock()
 	defer t.streamMu.Unlock()
 	return t.streamUp
+}
+
+// pollOwed reports whether any Pool is still waiting for the Pool Manager
+// to settle its counts, which is what puts the poll loop onto its interval
+// even while the Events stream is healthy.
+func (t *PoolTracker) pollOwed() bool {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	for _, p := range t.pools {
+		if p.needsPoll {
+			return true
+		}
+	}
+	return false
 }
 
 // pollAll refreshes every tracked Pool from GetPool. A Pool the Pool
@@ -456,11 +517,18 @@ func (t *PoolTracker) Track(ref PoolRef, declared bool) {
 }
 
 // setDeclared records whether a Pool is declared without asking for a poll,
-// which is what the poll loop itself needs.
+// which is what the poll loop itself needs. A Pool the Pool Manager says it
+// does not have no longer owes a resynchronisation: that answer is as
+// authoritative as a set of counts, and its count is zero because the Pool
+// is undeclared rather than because the events lost track of it.
 func (t *PoolTracker) setDeclared(ref PoolRef, declared bool) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	t.poolLocked(ref).declared = declared
+	p := t.poolLocked(ref)
+	p.declared = declared
+	if !declared {
+		p.needsPoll, p.unsettled = false, false
+	}
 }
 
 // Untrack implements Tracker. Anything waiting on the Pool is woken, since
@@ -568,6 +636,11 @@ func (t *PoolTracker) applyPoll(ref PoolRef, size int32, status PoolStatus) {
 	p.rebaseline(status)
 	p.size = size
 	p.exhausted = false
+	// The Pool Manager has answered, so whatever the events left unsettled
+	// is settled and the Pool no longer owes a poll. Only a successful
+	// answer reaches here: a GetPool that failed leaves the flags standing
+	// and the poll loop asks again on the next tick.
+	p.needsPoll, p.unsettled = false, false
 	woken := p.availableCount() > 0
 	if woken {
 		closeWaiters(p)
@@ -607,16 +680,22 @@ func (t *PoolTracker) applyPoll(ref PoolRef, size int32, status PoolStatus) {
 // so it resynchronises the Pool as well as producing the warning of
 // PL-055, and a hook failure produces the warning of PL-056.
 //
-// Two things ask for a poll, which is the only way to settle a count the
-// events alone cannot. An event that counts a Pool down to nothing: a count
-// that is wrongly zero is the one error the Tracker cannot recover from on
-// its own, because an empty Pool is never claimed from and a Pool that is
-// never claimed from produces no further event to correct it. And a MicroVM
-// becoming available that took one of the MicroVMs the last poll left
-// unnamed, since that is either the replay of an event the poll already
-// counted or a MicroVM created since, and the Pool reads one short if it is
-// the second. Both are self-limiting: a Pool whose MicroVMs are all named
-// asks for neither.
+// Two things leave a Pool owing a poll, which is the only way to settle a
+// count the events alone cannot. An event that counts a Pool down to
+// nothing: a count that is wrongly zero is the one error the Tracker cannot
+// recover from on its own, because an empty Pool is never claimed from and a
+// Pool that is never claimed from produces no further event to correct it.
+// And a Pool reading below its target after a MicroVM becoming available
+// took one of the MicroVMs the last poll left unnamed, since that is either
+// the replay of an event the poll already counted or a MicroVM created
+// since, and the Pool reads one short if it is the second. Both are
+// self-limiting: a Pool whose MicroVMs are all named asks for neither.
+//
+// What is owed is remembered on the Pool rather than spent on one request.
+// The request itself is best-effort -- it is coalesced into a single slot,
+// so a burst of events produces one poll round rather than a poll each, and
+// the GetPool behind it can fail -- and only an answer clears the debt, so
+// the poll loop keeps asking until one arrives.
 //
 // An event for a Pool this Runner does not track is dropped. The
 // subscription carries every Pool on the Pool Manager, and on a shared one
@@ -635,7 +714,7 @@ func (t *PoolTracker) apply(event *Event) {
 		}
 		return
 	}
-	woken, resync := false, false
+	woken := false
 	before := p.availableCount()
 	switch event.Type {
 	case poolmgrv1.EventType_VM_PROVISIONED:
@@ -653,10 +732,12 @@ func (t *PoolTracker) apply(event *Event) {
 		// Naming this MicroVM took one of the MicroVMs the last poll
 		// counted without naming it, which is right if the event is the
 		// replay of the one that made it available and wrong if it is a
-		// MicroVM created since the poll, in which case the Pool now reads
-		// one short. Only the Pool Manager can tell the two apart, and only
-		// a Pool that is short of its target can be reading short at all.
-		resync = tookUnnamed && (p.size <= 0 || p.availableCount() < p.size)
+		// MicroVM created since the poll, in which case the Pool reads one
+		// short. Only the Pool Manager can tell the two apart, so the Pool
+		// carries the doubt until a poll settles it.
+		if tookUnnamed {
+			p.unsettled = true
+		}
 
 	case poolmgrv1.EventType_VM_CLAIMED:
 		// A claimed MicroVM was available a moment before, so one the
@@ -700,12 +781,31 @@ func (t *PoolTracker) apply(event *Event) {
 				Provisioning: counts.Provisioning,
 				Quarantined:  counts.Quarantined,
 			})
+			// These are the Pool Manager's own counts, so this event is
+			// itself the resynchronisation any earlier one asked for.
+			p.needsPoll, p.unsettled = false, false
 		}
 	}
-	emptied := before > 0 && p.availableCount() == 0
+	// An event counted the Pool down to nothing. That is the one error the
+	// Tracker cannot recover from on its own, because an empty Pool is
+	// never claimed from and so produces no further event.
+	if before > 0 && p.availableCount() == 0 {
+		p.needsPoll = true
+	}
+	// A MicroVM the Tracker guessed about has left the Pool reading below
+	// its target. This is asked after the switch rather than in the
+	// VM_AVAILABLE arm because the event that introduces the doubt is not
+	// the event that makes the shortfall visible: replaying a whole
+	// lifecycle for a MicroVM that came and went before the poll takes the
+	// count down on the VM_CLAIMED, by which time the availability event
+	// that guessed is long applied.
+	if p.unsettled && (p.size <= 0 || p.availableCount() < p.size) {
+		p.needsPoll = true
+	}
+	owed := p.needsPoll
 	t.mu.Unlock()
 
-	if emptied || resync {
+	if owed {
 		t.requestPoll()
 	}
 

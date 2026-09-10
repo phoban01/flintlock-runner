@@ -7,6 +7,7 @@ import (
 	"slices"
 	"sync"
 	"testing"
+	"time"
 
 	poolmgrv1 "github.com/liquidmetal-dev/battery/api/proto/poolmgr/v1alpha1"
 
@@ -104,6 +105,209 @@ func TestAPoolCountedDownToNothingIsPolled(t *testing.T) {
 	tracker.await(t, ctx, "the pool manager's own count to be asked for", func() bool {
 		return admin.calls() > polls && tracker.Available(pool) == 3
 	})
+}
+
+//= docs/requirements/04-pool-manager.md#capacity-tracking
+//= type=test
+//# When an event reports a MicroVM in a Pool becoming available, claimed,
+//# released or deleted, the Scheduler SHALL update that Pool's available
+//# count before the next capacity computation.
+
+// TestARepairPollThatFailsIsAskedForAgain takes the previous test one step
+// further: the poll a Pool counted down to nothing asks for fails, as a
+// transient error on a Pool Manager that is about to be healthy again. The
+// Pool has to keep owing that resynchronisation, so that the next interval
+// asks for it again -- even though the Events stream never dropped, which
+// is what would otherwise put the poll loop back to work. Asking exactly
+// once strands the Pool on a count of zero for ever: the Runner refuses
+// every Job for it, no Job means no claim, and no claim means no event that
+// could correct it.
+func TestARepairPollThatFailsIsAskedForAgain(t *testing.T) {
+	t.Parallel()
+	ctx, cancel := context.WithTimeout(context.Background(), testTimeout)
+	defer cancel()
+
+	pool := ref("small")
+	events := newScriptedEvents()
+	admin := newStubAdmin(3, poolmgr.PoolStatus{Available: 3})
+	tracker := newTrackerWith(t, events, admin, nil, trackerPollInterval, nil)
+	tracker.run(t)
+	events.awaitSubscribed(t, ctx)
+	tracker.Track(pool, true)
+	tracker.await(t, ctx, "the poll to count three warm microvms", func() bool {
+		return tracker.Available(pool) == 3
+	})
+
+	// The repair the replayed backlog below asks for is refused. A poll
+	// that failed produces no OnPoll, so the stub itself is what says the
+	// repair was attempted and refused.
+	admin.failWith(errors.New("the pool manager is briefly unreachable"))
+	polls := admin.calls()
+	for i, uid := range []string{"vm-a", "vm-b", "vm-c"} {
+		events.send(vmEvent(pool, poolmgrv1.EventType_VM_CLAIMED, uid, int64(i+1)))
+	}
+	admin.awaitGet(t, ctx, polls+1)
+	if got := tracker.Available(pool); got != 0 {
+		t.Fatalf("available = %d after the replayed claims, want the wrong zero this test repairs", got)
+	}
+
+	// The Pool Manager is healthy again, and the stream never dropped, so
+	// only a Pool that remembers it owes a poll can ask for one.
+	admin.answer(3, poolmgr.PoolStatus{Available: 3})
+	awaitPollInterval(t, ctx, tracker, pool, 3)
+}
+
+// awaitPollInterval moves the clock an interval at a time until the Pool's
+// available count reads want. It moves it more than once on purpose: a poll
+// loop that is between a poll and re-arming its timer has the tick that has
+// just been delivered drained by Reset, so one interval can be swallowed.
+// Another interval costs nothing, and a Tracker that has forgotten a Pool
+// owes a poll never recovers however many of them pass.
+func awaitPollInterval(t *testing.T, ctx context.Context, tracker *trackerHarness, pool poolmgr.PoolRef, want int32) {
+	t.Helper()
+	for range 100 {
+		if got := tracker.Available(pool); got == want {
+			return
+		}
+		awaitTimers(t, ctx, tracker.clk, 1)
+		tracker.clk.Advance(trackerPollInterval)
+		select {
+		case <-time.After(20 * time.Millisecond):
+		case <-ctx.Done():
+			t.Fatalf("timed out waiting for the poll interval to repair the pool: %v", ctx.Err())
+		}
+	}
+	t.Errorf("available = %d after a hundred poll intervals with the pool manager healthy again, want %d",
+		tracker.Available(pool), want)
+}
+
+//= docs/requirements/04-pool-manager.md#capacity-tracking
+//= type=test
+//# When an event reports a MicroVM in a Pool becoming available, claimed,
+//# released or deleted, the Scheduler SHALL update that Pool's available
+//# count before the next capacity computation.
+
+// TestAReplacementBootedSinceThePollIsCounted covers the other half of the
+// guess a VM_AVAILABLE for an unnamed MicroVM forces. A Pool of two has one
+// warm MicroVM and one leased, so the poll leaves one MicroVM counted but
+// unnamed. The replacement for the leased one then finishes booting and its
+// VM_AVAILABLE arrives. Naming it takes the unnamed one with it, on the
+// assumption that the event is the replay of the one the poll already
+// counted -- which is wrong here, and leaves the Pool reading one where it
+// holds two. The Pool is short of its target, so only the Pool Manager can
+// say which case this is, and the Tracker has to ask.
+func TestAReplacementBootedSinceThePollIsCounted(t *testing.T) {
+	t.Parallel()
+	ctx, cancel := context.WithTimeout(context.Background(), testTimeout)
+	defer cancel()
+
+	pool := ref("small")
+	events := newScriptedEvents()
+	admin := newStubAdmin(2, poolmgr.PoolStatus{Available: 1, Leased: 1})
+	tracker := newTrackerWith(t, events, admin, nil, trackerPollInterval, nil)
+	tracker.run(t)
+	events.awaitSubscribed(t, ctx)
+	tracker.Track(pool, true)
+	tracker.await(t, ctx, "the poll to count one warm microvm and one leased", func() bool {
+		return tracker.Available(pool) == 1
+	})
+
+	// The replacement has booted, so the Pool Manager now holds two.
+	admin.answer(2, poolmgr.PoolStatus{Available: 2, Leased: 1})
+	events.send(vmEvent(pool, poolmgrv1.EventType_VM_AVAILABLE, "vm-new", 1))
+
+	// The clock never moves, so the only poll that can happen is the one
+	// the Pool asks for because it may be reading short.
+	tracker.await(t, ctx, "the replacement to be counted", func() bool {
+		return tracker.Available(pool) == 2
+	})
+}
+
+//= docs/requirements/04-pool-manager.md#capacity-tracking
+//= type=test
+//# When an event reports a MicroVM in a Pool becoming available, claimed,
+//# released or deleted, the Scheduler SHALL update that Pool's available
+//# count before the next capacity computation.
+
+// TestAReplayedLifecycleOnAFullPoolIsPolled replays one complete lifecycle
+// for a MicroVM that was created, claimed and gone before the poll: the
+// availability event and the claim that follows it. The availability event
+// lands while the Pool still reads three of three, so nothing looks wrong
+// at that moment; it is the claim after it that takes the count to two on a
+// Pool that in fact holds three. The doubt is introduced by one event and
+// only becomes visible on the next, so it has to outlive the event that
+// raised it.
+func TestAReplayedLifecycleOnAFullPoolIsPolled(t *testing.T) {
+	t.Parallel()
+	ctx, cancel := context.WithTimeout(context.Background(), testTimeout)
+	defer cancel()
+
+	pool := ref("small")
+	events := newScriptedEvents()
+	admin := newStubAdmin(3, poolmgr.PoolStatus{Available: 3})
+	tracker := newTrackerWith(t, events, admin, nil, trackerPollInterval, nil)
+	tracker.run(t)
+	events.awaitSubscribed(t, ctx)
+	tracker.Track(pool, true)
+	tracker.await(t, ctx, "the poll to count three warm microvms", func() bool {
+		return tracker.Available(pool) == 3
+	})
+
+	polls := admin.calls()
+	events.send(vmEvent(pool, poolmgrv1.EventType_VM_AVAILABLE, "vm-gone", 1))
+	events.send(vmEvent(pool, poolmgrv1.EventType_VM_CLAIMED, "vm-gone", 2))
+	tracker.awaitEvent(t, ctx, "the replayed claim", func(e *poolmgr.Event) bool {
+		return e.ID == 2
+	})
+
+	// The clock never moves, so the count can only come back through the
+	// poll the Pool asks for once it reads below its target.
+	tracker.await(t, ctx, "the pool manager's own count to be asked for", func() bool {
+		return admin.calls() > polls && tracker.Available(pool) == 3
+	})
+}
+
+// TestOneMicroVMLeavesThePolledLeasedCountOnce is the at-most-once guard on
+// its own, on a count no other part of the bookkeeping touches. A Pool of
+// two has both its MicroVMs leased and neither named, so the poll's figure
+// of two is entirely anonymous. One of them is then released and, its
+// replacement having failed, expires: two events about one MicroVM, and
+// only the first says anything about how many of the poll's leased MicroVMs
+// are still unaccounted for. Taking one per event instead reads zero for a
+// Pool that still has one MicroVM out on lease.
+func TestOneMicroVMLeavesThePolledLeasedCountOnce(t *testing.T) {
+	t.Parallel()
+	ctx, cancel := context.WithTimeout(context.Background(), testTimeout)
+	defer cancel()
+
+	pool := ref("small")
+	events := newScriptedEvents()
+	admin := newStubAdmin(2, poolmgr.PoolStatus{Leased: 2})
+	tracker := newTrackerWith(t, events, admin, nil, trackerPollInterval, nil)
+	tracker.run(t)
+	events.awaitSubscribed(t, ctx)
+	tracker.Track(pool, true)
+	tracker.await(t, ctx, "the poll to count two leased microvms", func() bool {
+		return poolStatus(t, tracker, pool).Leased == 2
+	})
+
+	// No poll may answer from here on: the count below has to be the one
+	// the events produced rather than one a poll repaired.
+	admin.failWith(errors.New("no more polls in this test"))
+
+	for i, typ := range []poolmgr.EventType{
+		poolmgrv1.EventType_VM_RELEASED,
+		poolmgrv1.EventType_VM_DELETED_DUE_TO_EXPIRY,
+	} {
+		events.send(vmEvent(pool, typ, "vm-1", int64(i+1)))
+		tracker.awaitEvent(t, ctx, "the event for the leased microvm", func(e *poolmgr.Event) bool {
+			return e.Type == typ && e.VMUID == "vm-1"
+		})
+	}
+
+	if got := poolStatus(t, tracker, pool).Leased; got != 1 {
+		t.Errorf("leased = %d after one microvm was released and then expired, want 1", got)
+	}
 }
 
 // TestOtherRunnersPoolsAreNotTracked sends an event for a Pool in another
@@ -351,10 +555,26 @@ type stubAdmin struct {
 	err    error
 	gets   int
 	refs   []poolmgr.PoolRef
+	// pinged carries one token per GetPool, so a test can wait for a poll
+	// that answered with an error, which produces nothing observable on
+	// the Tracker itself.
+	pinged chan struct{}
 }
 
 func newStubAdmin(size int32, status poolmgr.PoolStatus) *stubAdmin {
-	return &stubAdmin{size: size, status: status}
+	return &stubAdmin{size: size, status: status, pinged: make(chan struct{}, 256)}
+}
+
+// awaitGet blocks until GetPool has been called at least n times.
+func (a *stubAdmin) awaitGet(t *testing.T, ctx context.Context, n int) {
+	t.Helper()
+	for a.calls() < n {
+		select {
+		case <-a.pinged:
+		case <-ctx.Done():
+			t.Fatalf("timed out waiting for %d GetPool calls; saw %d: %v", n, a.calls(), ctx.Err())
+		}
+	}
 }
 
 // failWith makes every later GetPool fail, so that a test can be sure no
@@ -363,6 +583,14 @@ func (a *stubAdmin) failWith(err error) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	a.err = err
+}
+
+// answer changes what GetPool reports from now on and clears any failure,
+// which is how a test moves the Pool Manager on or lets it come back.
+func (a *stubAdmin) answer(size int32, status poolmgr.PoolStatus) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.size, a.status, a.err = size, status, nil
 }
 
 // calls is how many times GetPool has been called.
@@ -385,6 +613,10 @@ func (a *stubAdmin) GetPool(_ context.Context, poolRef poolmgr.PoolRef) (*poolmg
 	defer a.mu.Unlock()
 	a.gets++
 	a.refs = append(a.refs, poolRef)
+	select {
+	case a.pinged <- struct{}{}:
+	default:
+	}
 	if a.err != nil {
 		return nil, a.err
 	}
