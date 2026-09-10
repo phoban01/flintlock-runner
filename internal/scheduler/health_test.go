@@ -80,6 +80,13 @@ func TestProbeCallsServerInfoOnEveryHostAtTheConfiguredInterval(t *testing.T) {
 	}
 }
 
+//= docs/requirements/03-scheduler.md#host-health
+//= type=test
+//# The Scheduler SHALL probe every Host in the Inventory at the
+//# configured health interval by calling `ServerInfo`, falling back to
+//# `ListMicroVMs` on the Runner's namespace when `ServerInfo` is not
+//# implemented by the Host.
+
 // TestInventoryHostTheRegistryNeverDialledIsProbedAndGoesUnhealthy holds the
 // "every Host in the Inventory" clause of SC-040. The health table is built
 // from the Inventory and seeds every Host healthy, so taking the probe list

@@ -245,6 +245,12 @@ func TestCancelledJobContextReleasesTheLeaseObtained(t *testing.T) {
 	}
 }
 
+//= docs/requirements/03-scheduler.md#allocation
+//= type=test
+//# When the Job's context is cancelled during allocation, the
+//# Scheduler SHALL stop the allocation and release any Lease that was
+//# obtained.
+
 // TestCancelledAllocationDoesNotWaitForTheAbandonedRelease holds the "stop
 // the allocation" half of SC-023. Allocate holds the caller's Reservation
 // until it returns, so a release made on the calling goroutine keeps the
