@@ -346,6 +346,18 @@ func (r *testRegistry) Get(name string) (flintlock.HostClient, error) {
 	return c, nil
 }
 
+// Lease borrows a client and returns a release the caller must call. This
+// stub holds its clients for the length of the test, so the release is a
+// no-op; the real Registry uses it to keep a retired Host's connection open
+// until the last Job on it finishes (HO-014).
+func (r *testRegistry) Lease(name string) (flintlock.HostClient, func(), error) {
+	c, err := r.Get(name)
+	if err != nil {
+		return nil, nil, err
+	}
+	return c, func() {}, nil
+}
+
 func (r *testRegistry) Endpoint(name string) (flintlock.Endpoint, bool) {
 	r.mu.Lock()
 	defer r.mu.Unlock()

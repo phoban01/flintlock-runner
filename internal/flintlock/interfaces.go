@@ -182,7 +182,18 @@ type AdminDialer interface {
 // what the Scheduler and the Executor look a Placement up in.
 type Registry interface {
 	// Get returns the client for a named Host or ErrUnknownHost (SC-034).
+	// It is a borrow for immediate use: a reload that removes the Host may
+	// release the connection under a caller that is still holding one.
+	// Anything that holds a client across an operation takes a Lease.
 	Get(name string) (HostClient, error)
+	// Lease returns the client for a named Host together with a function
+	// that releases it, or ErrUnknownHost (SC-034). While a lease is
+	// outstanding the connection stays open even if a reload removes the
+	// Host, which is how a Job already running there finishes on it
+	// (HO-014); the Registry releases the connection when the last lease on
+	// a removed Host is released. The release function is safe to call more
+	// than once and from any goroutine.
+	Lease(name string) (client HostClient, release func(), err error)
 	// Endpoint returns the Endpoint a named Host was dialled with, so that
 	// the Scheduler can compare a claim's host.address with the Inventory
 	// (SC-030) without a second lookup structure.
@@ -192,7 +203,8 @@ type Registry interface {
 	// Apply reconciles the Registry with a new Inventory on reload (HO-014):
 	// new Hosts are dialled, removed Hosts are dropped from Names so probing
 	// stops, but a removed Host's client stays usable by Jobs that already
-	// hold it until they finish. It is a no-op for unchanged entries.
+	// hold a Lease on it until they finish, and its connection is released
+	// when the last of those leases is. It is a no-op for unchanged entries.
 	Apply(ctx context.Context, endpoints []Endpoint) error
 	// Close closes every client.
 	Close() error
