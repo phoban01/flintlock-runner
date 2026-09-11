@@ -1,13 +1,3 @@
-// The end-to-end test runs gitlab-runner's run loop in process, and that
-// loop has a data race of its own at the pinned commit: RunCommand.runWait
-// writes stopSignal while the workers read it in processRunners without
-// synchronisation (commands/multi.go). The race detector would fail the
-// test for code that is not ours, so under -race the test is not built;
-// `go test ./cmd/flintlock-runner/` without -race runs it, and the
-// harness (TD-050) runs the binary out of process.
-
-//go:build !race
-
 package main
 
 import (
@@ -33,13 +23,14 @@ import (
 )
 
 // stack is the fake GitLab, the fake Pool Manager and one fake Host, all in
-// process, with the real `run` subcommand pointed at them.
+// the test process, with the real flintlock-runner binary pointed at them.
 type stack struct {
 	gitlab   *fakegitlab.Server
 	pm       *pmfake.PoolManager
 	host     *hostfake.Host
 	dir      string
 	buildDir string
+	stateDir string
 }
 
 const testRunnerToken = "glrt-e2e-token"
@@ -94,7 +85,11 @@ func startStack(t *testing.T) (*stack, string) {
 		<-hostErr
 	})
 
-	s := &stack{gitlab: gl, pm: pm, host: host, dir: dir, buildDir: filepath.Join(dir, "guest", "builds")}
+	s := &stack{
+		gitlab: gl, pm: pm, host: host, dir: dir,
+		buildDir: filepath.Join(dir, "guest", "builds"),
+		stateDir: filepath.Join(dir, "state"),
+	}
 	cfg := fmt.Sprintf(`
 gitlab:
   url: %s
@@ -134,7 +129,7 @@ observability:
   log_format: text
   listen_address: 127.0.0.1:0
 state_dir: %s
-`, gl.URL(), testRunnerToken, pm.Addr(), host.Addr(), s.buildDir, filepath.Join(dir, "guest", "cache"), bashPath(t), filepath.Join(dir, "state"))
+`, gl.URL(), testRunnerToken, pm.Addr(), host.Addr(), s.buildDir, filepath.Join(dir, "guest", "cache"), bashPath(t), s.stateDir)
 	path := filepath.Join(dir, "config.yaml")
 	if err := os.WriteFile(path, []byte(cfg), 0o600); err != nil {
 		t.Fatal(err)
@@ -172,15 +167,64 @@ func waitFor(t *testing.T, d time.Duration, what string, cond func() bool) {
 	}
 }
 
-// TestRunRunsAJobEndToEnd starts the real `run` subcommand against the fake
-// GitLab, the fake Pool Manager and a fake Host, hands it one Job and checks
-// that the Job's script ran in the MicroVM, that its output reached GitLab
-// and that the Job was reported successful; then it stops the Runner with
-// SIGTERM and checks that every Lease was handed back.
+// buildBinary builds flintlock-runner without the race detector. The
+// binary runs gitlab-runner's run loop, which races on its own stop signal
+// at the pinned commit (RunCommand.runWait writes stopSignal while the
+// workers read it), so the test runs it out of process, as the harness
+// does, rather than in a race-instrumented test binary.
+func buildBinary(t *testing.T) string {
+	t.Helper()
+	bin := filepath.Join(t.TempDir(), "flintlock-runner")
+	cmd := exec.Command("go", "build", "-o", bin, ".")
+	cmd.Env = append(os.Environ(), "GOFLAGS=")
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("go build: %v\n%s", err, out)
+	}
+	return bin
+}
+
+//= docs/requirements/01-gitlab-protocol.md#library-basis
+//= type=test
+//# The Runner SHALL drive job acquisition and execution through the
+//# gitlab-runner run loop (`commands.NewRunCommand`) with a provider registry
+//# that contains the Executor, so that graceful shutdown, token rotation and
+//# the session server come from the library unchanged.
+
+//= docs/requirements/01-gitlab-protocol.md#authentication
+//= type=test
+//# The Runner SHALL authenticate to GitLab with a runner
+//# authentication token (a token beginning with `glrt-`) supplied by
+//# configuration.
+
+//= docs/requirements/01-gitlab-protocol.md#authentication
+//= type=test
+//# The Runner SHALL NOT call the runner registration endpoint
+//# `POST /api/v4/runners`.
+
+//= docs/requirements/01-gitlab-protocol.md#authentication
+//= type=test
+//# The Runner SHALL send its system identifier as `system_id` on
+//# every runner-scoped request to GitLab.
+
+//= docs/requirements/01-gitlab-protocol.md#authentication
+//= type=test
+//# When starting, the Runner SHALL call `POST /api/v4/runners/verify`
+//# with the full `info` payload before it requests any Job.
+
+// TestRunRunsAJobEndToEnd starts the flintlock-runner binary's `run` against
+// the fake GitLab, the fake Pool Manager and a fake Host, hands it one Job
+// and checks that the Job's script ran in the MicroVM, that its output
+// reached GitLab and that the Job was reported successful. The fake GitLab
+// accepts only the configured token, so the job getting through at all is
+// the authentication; the request log shows verification before the first
+// job request and no registration; the Job carries the system identifier
+// from the state directory. Then SIGTERM stops the Runner, and every Lease
+// has been handed back.
 func TestRunRunsAJobEndToEnd(t *testing.T) {
 	if testing.Short() {
 		t.Skip("end-to-end")
 	}
+	bin := buildBinary(t)
 	s, path := startStack(t)
 
 	job := &spec.Job{
@@ -205,14 +249,20 @@ func TestRunRunsAJobEndToEnd(t *testing.T) {
 	}
 
 	out := &syncBuffer{}
-	app := newApp()
-	app.Writer, app.ErrWriter = out, out
-	done := make(chan error, 1)
-	go func() { done <- app.Run([]string{"flintlock-runner", "--config", path, "run"}) }()
+	cmd := exec.Command(bin, "--config", path, "run")
+	cmd.Stdout, cmd.Stderr = out, out
+	if err := cmd.Start(); err != nil {
+		t.Fatal(err)
+	}
+	exited := make(chan error, 1)
+	go func() { exited <- cmd.Wait() }()
+	t.Cleanup(func() {
+		_ = cmd.Process.Kill()
+	})
 
 	waitFor(t, 90*time.Second, "the job to finish", func() bool {
 		select {
-		case err := <-done:
+		case err := <-exited:
 			t.Fatalf("runner exited early: %v\n%s", err, out.String())
 		default:
 		}
@@ -223,20 +273,45 @@ func TestRunRunsAJobEndToEnd(t *testing.T) {
 	if rec.Status != fakegitlab.StatusSuccess {
 		t.Fatalf("job status = %s (%s)\ntrace:\n%s\nrunner:\n%s", rec.Status, rec.FailureReason, rec.Trace, out.String())
 	}
-	t.Logf("trace:\n%s", rec.Trace)
-	for _, want := range []string{"hello-from-the-microvm", "section_start:", PrepareSectionName} {
+	for _, want := range []string{"hello-from-the-microvm", "section_start:", "flintlock_prepare", s.buildDir} {
 		if !strings.Contains(rec.Trace, want) {
 			t.Errorf("trace lacks %q:\n%s", want, rec.Trace)
 		}
 	}
 
-	if err := syscall.Kill(os.Getpid(), syscall.SIGTERM); err != nil {
+	verified, requested := -1, -1
+	for i, r := range s.gitlab.Requests() {
+		switch r {
+		case "POST /api/v4/runners":
+			t.Errorf("the runner registration endpoint was called")
+		case "POST /api/v4/runners/verify":
+			if verified < 0 {
+				verified = i
+			}
+		case "POST /api/v4/jobs/request":
+			if requested < 0 {
+				requested = i
+			}
+		}
+	}
+	if verified < 0 || requested < 0 || verified > requested {
+		t.Errorf("runners/verify at %d, first jobs/request at %d; want verify first", verified, requested)
+	}
+	id, err := os.ReadFile(filepath.Join(s.stateDir, systemIDFile))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := rec.SystemID, strings.TrimSpace(string(id)); got == "" || got != want {
+		t.Errorf("job handed to system_id %q, state directory holds %q", got, want)
+	}
+
+	if err := cmd.Process.Signal(syscall.SIGTERM); err != nil {
 		t.Fatal(err)
 	}
 	select {
-	case err := <-done:
+	case err := <-exited:
 		if err != nil {
-			t.Fatalf("run returned %v", err)
+			t.Errorf("runner exited with %v\n%s", err, out.String())
 		}
 	case <-time.After(60 * time.Second):
 		t.Fatalf("runner did not stop after SIGTERM\n%s", out.String())
@@ -245,9 +320,6 @@ func TestRunRunsAJobEndToEnd(t *testing.T) {
 		return len(s.pm.Leases()) == 0
 	})
 }
-
-// PrepareSectionName is the section the Executor writes during Prepare.
-const PrepareSectionName = "flintlock_prepare"
 
 // bashPath is the absolute path of bash on this machine. The fake Host runs
 // the Profile's shell as a local process, and not every machine has

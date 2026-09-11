@@ -78,10 +78,27 @@ func runRunner(c *cli.Context) error {
 	}
 	defer r.close()
 
+	//= docs/requirements/01-gitlab-protocol.md#authentication
+	//# The Runner SHALL authenticate to GitLab with a runner
+	//# authentication token (a token beginning with `glrt-`) supplied by
+	//# configuration.
+	//
+	// The token is gitlab.token (or its environment override), carried into
+	// the RunnerCredentials the network client authenticates every request
+	// with; nothing registers a runner to obtain one.
 	rcfg, err := runnercfg.Build(cfg, systemID)
 	if err != nil {
 		return cli.NewExitError(err.Error(), exitInvalidConfig)
 	}
+
+	//= docs/requirements/01-gitlab-protocol.md#authentication
+	//# The Runner SHALL send its system identifier as `system_id` on
+	//# every runner-scoped request to GitLab.
+	//
+	// The run loop's configuration goes into the state directory, next to
+	// the identifier file, which is where gitlab-runner's loader reads the
+	// identifier from; it then sets it on the RunnerConfig that every
+	// runner-scoped request of the network client carries.
 	runnerPath := filepath.Join(cfg.StateDir, runnerConfigFile)
 	if err := rcfg.SaveConfig(runnerPath); err != nil {
 		return cli.NewExitError(fmt.Sprintf("writing %s: %v", runnerPath, err), 1)
@@ -304,9 +321,22 @@ func newSystemID() (string, error) {
 //# If token verification returns a forbidden response, then the
 //# Runner SHALL log the failure and exit with a non-zero status.
 
+//= docs/requirements/01-gitlab-protocol.md#authentication
+//# The Runner SHALL NOT call the runner registration endpoint
+//# `POST /api/v4/runners`.
+
+//= docs/requirements/01-gitlab-protocol.md#authentication
+//= type=todo
+//= tracking-issue=23
+//# Where GitLab reports a token expiry time, the Runner SHALL rotate
+//# the token through `POST /api/v4/runners/reset_authentication_token` before
+//# that time is reached.
+
 // verifyRunner calls runners/verify through the network client, whose
 // request carries the full info payload with the flintlock executor's
-// features, before the run loop requests any Job. A forbidden answer ends
+// features, before the run loop requests any Job. It verifies; it never
+// registers, because the token comes from the configuration (GL-010). A
+// forbidden answer ends
 // the process with a non-zero status; a GitLab that cannot be reached is
 // retried a few times first, because the Runner commonly starts alongside
 // it.

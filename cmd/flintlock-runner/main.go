@@ -67,6 +67,9 @@ func newApp() *cli.App {
 	app.Name = "flintlock-runner"
 	app.Usage = "GitLab CI runner that executes every job in its own flintlock microVM"
 	app.Version = version
+	// cli.App leaves ErrWriter nil and falls back to os.Stderr only in its
+	// own printing; the subcommands log to it, so it is set explicitly.
+	app.ErrWriter = os.Stderr
 	app.Flags = []cli.Flag{
 		cli.StringFlag{
 			Name:   "config",
