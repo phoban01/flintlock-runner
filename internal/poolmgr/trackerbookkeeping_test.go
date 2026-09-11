@@ -721,3 +721,47 @@ func (a *stubAdmin) GetPool(ctx context.Context, poolRef poolmgr.PoolRef) (*pool
 	}
 	return pool, nil
 }
+
+// TestAPollAnsweredAfterUntrackDoesNotBringThePoolBack holds a GetPool answer
+// across Untrack. Folding that answer in re-created the Pool the Runner had
+// just stopped tracking, so it came back with a metric series and a place in
+// every later poll round; TestAvailableCountIsExposedAsAMetric caught it
+// intermittently in CI as a series left behind after untracking.
+func TestAPollAnsweredAfterUntrackDoesNotBringThePoolBack(t *testing.T) {
+	t.Parallel()
+	ctx, cancel := context.WithTimeout(context.Background(), testTimeout)
+	defer cancel()
+
+	pool, other := ref("small"), ref("other")
+	events := newScriptedEvents()
+	admin := newStubAdmin(2, poolmgr.PoolStatus{Available: 2})
+	tracker := newTrackerWith(t, events, admin, nil, trackerPollInterval, nil)
+	tracker.run(t)
+	events.awaitSubscribed(t, ctx)
+	tracker.Track(pool, true)
+	tracker.await(t, ctx, "the poll to count two warm microvms", func() bool {
+		return tracker.Available(pool) == 2
+	})
+
+	// Ask about the Pool again and hold the answer back.
+	release := admin.holdNext(t)
+	polls := admin.calls()
+	tracker.Track(pool, true)
+	admin.awaitGet(t, ctx, polls+1)
+
+	// The Runner stops tracking the Pool while the question is out, and
+	// starts tracking another, which queues the next poll round.
+	tracker.Untrack(pool)
+	tracker.Track(other, true)
+
+	// The held answer arrives. The poll loop works one round at a time, so
+	// the GetPool of the next round is what says it has been dealt with.
+	release()
+	admin.awaitGet(t, ctx, polls+2)
+
+	for _, p := range tracker.Pools() {
+		if p.Pool == pool {
+			t.Fatalf("%s is tracked again after an answer for it arrived once it was untracked", pool)
+		}
+	}
+}

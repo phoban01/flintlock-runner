@@ -669,7 +669,14 @@ func (t *PoolTracker) generation(ref PoolRef) uint64 {
 // events.
 func (t *PoolTracker) applyPoll(ref PoolRef, asked uint64, size int32, status PoolStatus) {
 	t.mu.Lock()
-	p := t.poolLocked(ref)
+	p, ok := t.pools[ref]
+	if !ok {
+		// Untracked while the question was out. The answer is for a Pool
+		// the Runner no longer counts, and folding it in would bring the
+		// Pool back, with a metric series and a place in every poll round.
+		t.mu.Unlock()
+		return
+	}
 	if p.generation != asked {
 		p.needsPoll = true
 		t.mu.Unlock()
