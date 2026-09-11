@@ -320,18 +320,7 @@ func serveHost(t *testing.T, name string) *hostfake.Host {
 
 func TestHardwareInventoryReplacesTheFakeHosts(t *testing.T) {
 	metal := serveHost(t, "metal-1")
-	inv := config.InventoryFile{Hosts: []config.HostEntry{{
-		Name: "metal-1", Endpoint: metal.Addr(), Arch: config.ArchARM64, VCPU: 4, MemoryMB: 8192,
-		Token: "metal-token", TLS: config.ClientTLS{Insecure: true},
-	}}}
-	data, err := yaml.Marshal(inv)
-	if err != nil {
-		t.Fatal(err)
-	}
-	path := filepath.Join(t.TempDir(), "inventory.yaml")
-	if err := os.WriteFile(path, data, 0o600); err != nil {
-		t.Fatal(err)
-	}
+	path := writeInventory(t, metal)
 
 	if _, err := Start(context.Background(), Options{HardwareInventory: path}); err == nil ||
 		!strings.Contains(err.Error(), EnvKernelImage) {
@@ -369,6 +358,49 @@ func TestHardwareInventoryReplacesTheFakeHosts(t *testing.T) {
 	}
 	if vms, err := metal.Client().ListMicroVMs(context.Background(), Namespace); err != nil || len(vms) != 0 {
 		t.Errorf("after Shutdown metal-1 lists %d microvms in %s (%v), want none", len(vms), Namespace, err)
+	}
+}
+
+// writeInventory writes a hardware Inventory listing hosts and returns its
+// path.
+func writeInventory(t *testing.T, hosts ...*hostfake.Host) string {
+	t.Helper()
+	var inv config.InventoryFile
+	for _, h := range hosts {
+		inv.Hosts = append(inv.Hosts, config.HostEntry{
+			Name: h.Config().Name, Endpoint: h.Addr(), Arch: config.ArchARM64, VCPU: 4, MemoryMB: 8192,
+			Token: config.Secret(h.Config().Token), TLS: config.ClientTLS{Insecure: true},
+		})
+	}
+	data, err := yaml.Marshal(inv)
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(t.TempDir(), "inventory.yaml")
+	if err := os.WriteFile(path, data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	return path
+}
+
+//= docs/requirements/10-test-doubles.md#end-to-end-harness
+//= type=test
+//# The harness SHALL fail if any scenario leaves a Lease held or
+//# a sandbox directory behind after the Runner has shut down.
+
+// TestShutdownFailsOnAMicroVMLeftOnHardware is the hardware tier's form of
+// a leftover sandbox: a MicroVM still in the Runner namespace on a listed
+// Host after the fake Pool Manager has deleted what it created.
+func TestShutdownFailsOnAMicroVMLeftOnHardware(t *testing.T) {
+	metal := serveHost(t, "metal-1")
+	s := start(t, Options{HardwareInventory: writeInventory(t, metal), KernelImage: "k:1", RootFSImage: "r:1"})
+	vm, err := metal.Client().CreateMicroVM(context.Background(), &types.MicroVMSpec{Namespace: Namespace})
+	if err != nil {
+		t.Fatalf("CreateMicroVM: %v", err)
+	}
+	err = s.Shutdown(context.Background())
+	if err == nil || !strings.Contains(err.Error(), vm.GetSpec().GetUid()) {
+		t.Errorf("Shutdown with a microvm left on a hardware Host: %v, want it named", err)
 	}
 }
 
