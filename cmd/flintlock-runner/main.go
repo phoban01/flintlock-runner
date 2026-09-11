@@ -67,10 +67,8 @@ func newApp() *cli.App {
 	app.Name = "flintlock-runner"
 	app.Usage = "GitLab CI runner that executes every job in its own flintlock microVM"
 	app.Version = version
-	// urfave/cli leaves ErrWriter nil unless it is set (it falls back to
-	// os.Stderr only internally), and the subcommands build loggers over
-	// it: a nil writer panics on the first log line, such as the CF-083
-	// notice a file without a distributed_cache section gets.
+	// cli.App leaves ErrWriter nil and falls back to os.Stderr only in its
+	// own printing; the subcommands log to it, so it is set explicitly.
 	app.ErrWriter = os.Stderr
 	app.Flags = []cli.Flag{
 		cli.StringFlag{
