@@ -187,6 +187,71 @@ func awaitPollInterval(t *testing.T, ctx context.Context, tracker *trackerHarnes
 //# released or deleted, the Scheduler SHALL update that Pool's available
 //# count before the next capacity computation.
 
+// TestAPollAnsweredBeforeAnEventIsNotFoldedAfterIt delivers a GetPool
+// answer out of order with an event: the Pool Manager answers while a Pool
+// of two holds two warm MicroVMs, one of them is claimed, and the answer
+// reaches the Tracker only after the claim has been applied. Folding it
+// would put the claimed MicroVM back, because a poll's total can raise a
+// count, and nothing would take it out again; the Runner would count a warm
+// MicroVM the Pool Manager no longer has. The answer has to be discarded,
+// and the Pool has to go on owing the poll it did not get an answer to.
+func TestAPollAnsweredBeforeAnEventIsNotFoldedAfterIt(t *testing.T) {
+	t.Parallel()
+	ctx, cancel := context.WithTimeout(context.Background(), testTimeout)
+	defer cancel()
+
+	pool := ref("small")
+	events := newScriptedEvents()
+	admin := newStubAdmin(2, poolmgr.PoolStatus{Available: 2})
+	tracker := newTrackerWith(t, events, admin, nil, trackerPollInterval, nil)
+	tracker.run(t)
+	events.awaitSubscribed(t, ctx)
+	tracker.Track(pool, true)
+	tracker.await(t, ctx, "the poll to count two warm microvms", func() bool {
+		return tracker.Available(pool) == 2
+	})
+
+	// Re-declaring the Pool asks for a poll. Its answer is taken now, while
+	// the Pool Manager still holds two warm MicroVMs, and held back.
+	release := admin.holdNext(t)
+	polls := admin.calls()
+	tracker.Track(pool, true)
+	admin.awaitGet(t, ctx, polls+1)
+
+	// One of them is claimed while the question is out.
+	events.send(vmEvent(pool, poolmgrv1.EventType_VM_CLAIMED, "vm-1", 1))
+	tracker.awaitEvent(t, ctx, "the claim", func(e *poolmgr.Event) bool {
+		return e.ID == 1
+	})
+	if got := tracker.Available(pool); got != 1 {
+		t.Fatalf("available = %d after the claim, want 1", got)
+	}
+
+	// The answer from before the claim arrives now. The poll loop works one
+	// round at a time, so the next GetPool, which fails, is what says the
+	// held answer has been dealt with; re-declaring the Pool again makes
+	// sure there is a next one.
+	admin.failWith(errors.New("the pool manager is briefly unreachable"))
+	release()
+	tracker.Track(pool, true)
+	admin.awaitGet(t, ctx, polls+2)
+	if got := tracker.Available(pool); got != 1 {
+		t.Fatalf("available = %d after a poll answered before the claim arrived after it, want 1", got)
+	}
+
+	// The replacement for the claimed MicroVM has booted, and no event says
+	// so. The discarded answer and the failed one after it left the Pool
+	// owing a poll, so the interval asks again with the stream up.
+	admin.answer(2, poolmgr.PoolStatus{Available: 2, Leased: 1})
+	awaitPollInterval(t, ctx, tracker, pool, 2)
+}
+
+//= docs/requirements/04-pool-manager.md#capacity-tracking
+//= type=test
+//# When an event reports a MicroVM in a Pool becoming available, claimed,
+//# released or deleted, the Scheduler SHALL update that Pool's available
+//# count before the next capacity computation.
+
 // TestAReplacementBootedSinceThePollIsCounted covers the other half of the
 // guess a VM_AVAILABLE for an unnamed MicroVM forces. A Pool of two has one
 // warm MicroVM and one leased, so the poll leaves one MicroVM counted but
@@ -555,6 +620,9 @@ type stubAdmin struct {
 	err    error
 	gets   int
 	refs   []poolmgr.PoolRef
+	// held, when set, is what the next GetPool waits on after it has taken
+	// its answer and before it returns it.
+	held chan struct{}
 	// pinged carries one token per GetPool, so a test can wait for a poll
 	// that answered with an error, which produces nothing observable on
 	// the Tracker itself.
@@ -607,21 +675,49 @@ func (a *stubAdmin) polled() []poolmgr.PoolRef {
 	return append([]poolmgr.PoolRef(nil), a.refs...)
 }
 
-// GetPool implements poolmgr.PoolAdmin.
-func (a *stubAdmin) GetPool(_ context.Context, poolRef poolmgr.PoolRef) (*poolmgr.Pool, error) {
+// holdNext makes the next GetPool take its answer when it is called and
+// then wait for release before returning it, which is how a test delivers
+// an answer the Pool Manager gave before an event after the Tracker has
+// applied that event.
+func (a *stubAdmin) holdNext(t *testing.T) (release func()) {
+	t.Helper()
+	gate := make(chan struct{})
 	a.mu.Lock()
-	defer a.mu.Unlock()
+	a.held = gate
+	a.mu.Unlock()
+	var once sync.Once
+	release = func() { once.Do(func() { close(gate) }) }
+	t.Cleanup(release)
+	return release
+}
+
+// GetPool implements poolmgr.PoolAdmin. The answer is taken when GetPool
+// is called, so a held call answers with the status as it was then.
+func (a *stubAdmin) GetPool(ctx context.Context, poolRef poolmgr.PoolRef) (*poolmgr.Pool, error) {
+	a.mu.Lock()
 	a.gets++
 	a.refs = append(a.refs, poolRef)
+	held := a.held
+	a.held = nil
+	err := a.err
+	pool := &poolmgr.Pool{
+		Spec:   poolmgr.PoolSpec{Ref: poolRef, Size: a.size},
+		Status: a.status,
+	}
+	a.mu.Unlock()
 	select {
 	case a.pinged <- struct{}{}:
 	default:
 	}
-	if a.err != nil {
-		return nil, a.err
+	if held != nil {
+		select {
+		case <-held:
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
 	}
-	return &poolmgr.Pool{
-		Spec:   poolmgr.PoolSpec{Ref: poolRef, Size: a.size},
-		Status: a.status,
-	}, nil
+	if err != nil {
+		return nil, err
+	}
+	return pool, nil
 }

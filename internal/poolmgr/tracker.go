@@ -81,7 +81,10 @@ type TrackerConfig struct {
 // A Pool goes on owing that poll until an answer arrives. GetPool can fail,
 // and a Pool stranded on a wrong count has no second chance of its own to
 // ask, so the debt is remembered on the Pool and the poll loop runs while
-// any Pool holds one, whether or not the Events stream is healthy.
+// any Pool holds one, whether or not the Events stream is healthy. An
+// answer only counts if no event for the Pool was applied while it was
+// out: one that raced an event may predate it, and folding it would undo
+// the event, so it is discarded and the question asked again.
 type PoolTracker struct {
 	cfg TrackerConfig
 	log *slog.Logger
@@ -237,7 +240,9 @@ type trackedPool struct {
 	// an event drives the available count to nothing and when the Pool may
 	// be reading short, and only a GetPool answer clears it, so a repair
 	// the Pool Manager refused once is asked for again on the next tick
-	// instead of being lost with the request that failed.
+	// instead of being lost with the request that failed. An answer that
+	// raced the Pool's events does not clear it but sets it, because that
+	// answer is discarded (see generation).
 	needsPoll bool
 	// unsettled records that an event took a MicroVM out of the anonymous
 	// part of the available count while naming it, which is right if the
@@ -247,6 +252,12 @@ type trackedPool struct {
 	// introduced does not become visible on the availability event itself:
 	// the count only drops below the target on the claim that follows.
 	unsettled bool
+	// generation counts the events applied to this Pool. A poll records it
+	// when it asks GetPool and applyPoll compares it when the answer comes
+	// back: a Pool whose generation has moved had events applied while the
+	// question was out, and the answer may be a snapshot from before any of
+	// them, which nothing on the answer can rule out.
+	generation uint64
 	// waiters is closed when a MicroVM in this Pool becomes available
 	// (SC-021); waiting counts the callers currently waiting on it.
 	waiters chan struct{}
@@ -480,16 +491,19 @@ func (t *PoolTracker) pollOwed() bool {
 
 // pollAll refreshes every tracked Pool from GetPool. A Pool the Pool
 // Manager does not know is marked undeclared, so that it counts as empty
-// until the declaration is retried (PL-016).
+// until the declaration is retried (PL-016). Each Pool's generation is
+// taken before its GetPool is sent, so that applyPoll can tell an answer
+// that raced the Pool's events from one that did not.
 func (t *PoolTracker) pollAll(ctx context.Context) {
 	for _, ref := range t.refs() {
 		if ctx.Err() != nil {
 			return
 		}
+		asked := t.generation(ref)
 		pool, err := t.cfg.Admin.GetPool(ctx, ref)
 		switch {
 		case err == nil:
-			t.applyPoll(ref, pool.Spec.Size, pool.Status)
+			t.applyPoll(ref, asked, pool.Spec.Size, pool.Status)
 		case errors.Is(err, ErrNotFound):
 			t.log.Warn("pool is not known to the pool manager; counting it as empty", "pool", ref.String())
 			t.setDeclared(ref, false)
@@ -623,6 +637,17 @@ func (t *PoolTracker) Pools() []PoolAvailability {
 	return out
 }
 
+// generation is the Pool's event generation, zero for a Pool that is not
+// tracked.
+func (t *PoolTracker) generation(ref PoolRef) uint64 {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if p, ok := t.pools[ref]; ok {
+		return p.generation
+	}
+	return 0
+}
+
 // applyPoll folds the counts of one GetPool answer into a Pool. The
 // MicroVMs the answer says are available that no event has named are
 // counted as unnamed; the ones events have named are already counted, so
@@ -630,16 +655,35 @@ func (t *PoolTracker) Pools() []PoolAvailability {
 // are running totals between polls, so the answer replaces them: this is
 // what the poll every re-subscription asks for undoes the replay's double
 // counting with.
-func (t *PoolTracker) applyPoll(ref PoolRef, size int32, status PoolStatus) {
+//
+// asked is the Pool's generation when the question was sent. An answer to a
+// Pool that has had events applied since is discarded rather than folded.
+// It may be a snapshot from before those events, and folding one that is
+// would undo them: rebaseline is authoritative upward, so a MicroVM the
+// events have since taken out of a count -- claimed, released, deleted --
+// is put back as an unnamed one, and nothing takes it out again. The Pool
+// is left owing a poll and the poll loop is asked for another straight
+// away, so the question is put again until an answer comes back that no
+// event raced. That cannot spin: every discarded answer means at least one
+// event was applied to the Pool, so there are never more re-polls than
+// events.
+func (t *PoolTracker) applyPoll(ref PoolRef, asked uint64, size int32, status PoolStatus) {
 	t.mu.Lock()
 	p := t.poolLocked(ref)
+	if p.generation != asked {
+		p.needsPoll = true
+		t.mu.Unlock()
+		t.log.Debug("discarding a poll that raced the pool's events; asking again", "pool", ref.String())
+		t.requestPoll()
+		return
+	}
 	p.rebaseline(status)
 	p.size = size
 	p.exhausted = false
 	// The Pool Manager has answered, so whatever the events left unsettled
 	// is settled and the Pool no longer owes a poll. Only a successful
-	// answer reaches here: a GetPool that failed leaves the flags standing
-	// and the poll loop asks again on the next tick.
+	// answer that no event raced reaches here: a GetPool that failed leaves
+	// the flags standing and the poll loop asks again on the next tick.
 	p.needsPoll, p.unsettled = false, false
 	woken := p.availableCount() > 0
 	if woken {
@@ -714,6 +758,9 @@ func (t *PoolTracker) apply(event *Event) {
 		}
 		return
 	}
+	// Whatever the event does to the counts, a poll that is out for this
+	// Pool may now answer from before it.
+	p.generation++
 	woken := false
 	before := p.availableCount()
 	switch event.Type {
