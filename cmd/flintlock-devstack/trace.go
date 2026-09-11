@@ -65,10 +65,17 @@ func (t *traceWriter) flush() {
 // it when both arrived together. A continuation arriving in a later chunk
 // is shown on a line of its own rather than holding every line back.
 func (t *traceWriter) render(records []string) {
-	var lines []string
+	type line struct {
+		text string
+		// marker is set on a line that held only section markers, which
+		// is noise unless a continuation fills it in; a blank line the Job
+		// printed is not.
+		marker bool
+	}
+	var lines []line
 	for _, rec := range records {
 		if t.raw {
-			lines = append(lines, strings.TrimSuffix(rec, "\r"))
+			lines = append(lines, line{text: strings.TrimSuffix(rec, "\r")})
 			continue
 		}
 		continues := false
@@ -83,17 +90,16 @@ func (t *traceWriter) render(records []string) {
 		}
 		cleaned = strings.TrimRight(cleaned, "\r")
 		if continues && len(lines) > 0 {
-			lines[len(lines)-1] += cleaned
+			last := &lines[len(lines)-1]
+			last.text += cleaned
+			last.marker = last.marker && cleaned == ""
 			continue
 		}
-		// A line that held nothing but a section marker is noise; a blank
-		// line the Job printed is not.
-		if cleaned == "" && rec != "" {
-			continue
-		}
-		lines = append(lines, cleaned)
+		lines = append(lines, line{text: cleaned, marker: cleaned == "" && rec != ""})
 	}
 	for _, l := range lines {
-		t.emit(t.prefix + l)
+		if !l.marker {
+			t.emit(t.prefix + l.text)
+		}
 	}
 }
