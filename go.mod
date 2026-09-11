@@ -6,6 +6,7 @@ require (
 	github.com/liquidmetal-dev/battery v0.1.0
 	github.com/liquidmetal-dev/flintlock/api v0.0.0-20260907114747-12b8cade120d
 	github.com/prometheus/client_golang v1.24.1
+	github.com/sirupsen/logrus v1.10.0
 	github.com/urfave/cli v1.22.17
 	gitlab.com/gitlab-org/gitlab-runner v1.11.1-0.20260907100838-7b010e09cf59
 	golang.org/x/crypto v0.55.0
@@ -127,7 +128,6 @@ require (
 	github.com/saracen/zipextra v0.0.0-20250129175152-f1aa42d25216 // indirect
 	github.com/secure-systems-lab/go-securesystemslib v0.10.0 // indirect
 	github.com/shibumi/go-pathspec v1.3.0 // indirect
-	github.com/sirupsen/logrus v1.10.0 // indirect
 	github.com/stretchr/objx v0.5.3 // indirect
 	github.com/stretchr/testify v1.12.0 // indirect
 	github.com/tinylib/msgp v1.6.1 // indirect
