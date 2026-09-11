@@ -7,6 +7,7 @@ import (
 	"gitlab.com/gitlab-org/gitlab-runner/common"
 
 	"github.com/phoban01/flintlock-runner/internal/config"
+	"github.com/phoban01/flintlock-runner/internal/flintlock"
 	"github.com/phoban01/flintlock-runner/internal/scheduler"
 	"github.com/phoban01/flintlock-runner/internal/transport"
 )
@@ -197,4 +198,9 @@ type Deps struct {
 	// in which case Jobs using `cache:` fail with runner_unsupported
 	// (CF-083).
 	CacheConfigured bool
+	// Hosts is the Host Registry the Placement is looked up in. The
+	// Executor takes a Lease on the Placement's Host for the life of the
+	// Job, so that a reload removing the Host does not close the
+	// connection under a running Stage (HO-014).
+	Hosts flintlock.Registry
 }

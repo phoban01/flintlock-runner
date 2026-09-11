@@ -80,11 +80,9 @@ func newApp() *cli.App {
 	}
 	app.Commands = []cli.Command{
 		{
-			Name:  "run",
-			Usage: "start the Runner",
-			Action: func(*cli.Context) error {
-				return notImplemented("run", "executor")
-			},
+			Name:   "run",
+			Usage:  "start the Runner",
+			Action: runRunner,
 		},
 		{
 			Name:  "config",
@@ -172,16 +170,29 @@ func notImplemented(command, workPackage string) error {
 	)
 }
 
+//= docs/requirements/01-gitlab-protocol.md#library-basis
+//# The Runner SHALL drive job acquisition and execution through the
+//# gitlab-runner run loop (`commands.NewRunCommand`) with a provider registry
+//# that contains the Executor, so that graceful shutdown, token rotation and
+//# the session server come from the library unchanged.
+
+//= docs/requirements/01-gitlab-protocol.md#library-basis
+//# The Runner SHALL perform every request to the GitLab API through
+//# the `GitLabClient` type of the gitlab-runner `network` package.
+
 // newRunLoopCommand builds the gitlab-runner run loop as a library command
 // (GL-004): the network client from the gitlab-runner network package
-// (GL-002), the API request metrics collector, and a provider registry that
-// will hold the flintlock executor. The `run` subcommand wraps it once the
-// configuration translation (CF-011) exists; until then it is constructed
-// here so that the wiring is compiled and tested.
+// (GL-002), the API request metrics collector, and a provider registry
+// holding the flintlock executor. The network client looks executors up in
+// the same registry, so the info payload of every request, runners/verify
+// included, carries the flintlock executor's features (GL-020, GL-022).
 func newRunLoopCommand(providers map[string]common.ExecutorProvider) (cli.Command, common.Network) {
 	collector := network.NewAPIRequestsCollector()
-	client := network.NewGitLabClient(network.WithAPIRequestsCollector(collector))
 	registry := executors.NewProviderRegistry(providers)
+	client := network.NewGitLabClient(
+		network.WithAPIRequestsCollector(collector),
+		network.WithExecutorProviderFunc(registry.GetByName),
+	)
 	return commands.NewRunCommand(client, prometheus.Collector(collector), registry), client
 }
 
