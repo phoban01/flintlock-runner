@@ -37,7 +37,7 @@ const testRunnerToken = "glrt-e2e-token"
 
 // startStack starts the fakes and returns them with a configuration file
 // for the Runner.
-func startStack(t *testing.T) (*stack, string) {
+func startStack(t *testing.T, shutdownTimeout time.Duration) (*stack, string) {
 	t.Helper()
 	dir := t.TempDir()
 	ctx, cancel := context.WithCancel(context.Background())
@@ -97,7 +97,7 @@ gitlab:
   name: e2e-runner
   allow_insecure: true
   check_interval: 1s
-  shutdown_timeout: 10s
+  shutdown_timeout: %s
 pool_manager:
   endpoint: %s
   tls:
@@ -129,7 +129,7 @@ observability:
   log_format: text
   listen_address: 127.0.0.1:0
 state_dir: %s
-`, gl.URL(), testRunnerToken, pm.Addr(), host.Addr(), s.buildDir, filepath.Join(dir, "guest", "cache"), bashPath(t), s.stateDir)
+`, gl.URL(), testRunnerToken, shutdownTimeout, pm.Addr(), host.Addr(), s.buildDir, filepath.Join(dir, "guest", "cache"), bashPath(t), s.stateDir)
 	path := filepath.Join(dir, "config.yaml")
 	if err := os.WriteFile(path, []byte(cfg), 0o600); err != nil {
 		t.Fatal(err)
@@ -174,13 +174,72 @@ func waitFor(t *testing.T, d time.Duration, what string, cond func() bool) {
 // does, rather than in a race-instrumented test binary.
 func buildBinary(t *testing.T) string {
 	t.Helper()
-	bin := filepath.Join(t.TempDir(), "flintlock-runner")
-	cmd := exec.Command("go", "build", "-o", bin, ".")
-	cmd.Env = append(os.Environ(), "GOFLAGS=")
-	if out, err := cmd.CombinedOutput(); err != nil {
-		t.Fatalf("go build: %v\n%s", err, out)
+	binOnce.Do(func() {
+		dir, err := os.MkdirTemp("", "flintlock-runner-e2e-")
+		if err != nil {
+			binErr = err
+			return
+		}
+		binPath = filepath.Join(dir, "flintlock-runner")
+		cmd := exec.Command("go", "build", "-o", binPath, ".")
+		cmd.Env = append(os.Environ(), "GOFLAGS=")
+		if out, err := cmd.CombinedOutput(); err != nil {
+			binErr = fmt.Errorf("go build: %w\n%s", err, out)
+		}
+	})
+	if binErr != nil {
+		t.Fatal(binErr)
 	}
-	return bin
+	return binPath
+}
+
+// The binary is built once per test process.
+var (
+	binOnce sync.Once
+	binPath string
+	binErr  error
+)
+
+// runner is a flintlock-runner child process.
+type runnerProc struct {
+	cmd    *exec.Cmd
+	out    *syncBuffer
+	exited chan error
+}
+
+// startRunner starts `bin --config path run`.
+func startRunner(t *testing.T, bin, path string) *runnerProc {
+	t.Helper()
+	r := &runnerProc{out: &syncBuffer{}, exited: make(chan error, 1)}
+	r.cmd = exec.Command(bin, "--config", path, "run")
+	r.cmd.Stdout, r.cmd.Stderr = r.out, r.out
+	if err := r.cmd.Start(); err != nil {
+		t.Fatal(err)
+	}
+	go func() { r.exited <- r.cmd.Wait() }()
+	t.Cleanup(func() { _ = r.cmd.Process.Kill() })
+	return r
+}
+
+// sigterm sends SIGTERM to the runner.
+func (r *runnerProc) sigterm(t *testing.T) {
+	t.Helper()
+	if err := r.cmd.Process.Signal(syscall.SIGTERM); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// waitExit waits for the runner to exit and fails on a non-zero status.
+func (r *runnerProc) waitExit(t *testing.T, d time.Duration) {
+	t.Helper()
+	select {
+	case err := <-r.exited:
+		if err != nil {
+			t.Errorf("runner exited with %v\n%s", err, r.out.String())
+		}
+	case <-time.After(d):
+		t.Fatalf("runner did not exit\n%s", r.out.String())
+	}
 }
 
 //= docs/requirements/01-gitlab-protocol.md#library-basis
@@ -225,7 +284,7 @@ func TestRunRunsAJobEndToEnd(t *testing.T) {
 		t.Skip("end-to-end")
 	}
 	bin := buildBinary(t)
-	s, path := startStack(t)
+	s, path := startStack(t, 10*time.Second)
 
 	job := &spec.Job{
 		ID: 42,

@@ -9,10 +9,12 @@ import (
 	"log/slog"
 	"math/big"
 	"os"
+	"os/signal"
 	"path/filepath"
 	"regexp"
 	"strings"
 	"sync/atomic"
+	"syscall"
 	"time"
 
 	"github.com/urfave/cli"
@@ -72,7 +74,7 @@ func runRunner(c *cli.Context) error {
 		return cli.NewExitError(err.Error(), 1)
 	}
 
-	r, err := newRunner(ctx, cfg, log)
+	r, err := newRunner(ctx, cfg, log, func(s executor.Stopper) { takeOverStopSignals(ctx, s, log) })
 	if err != nil {
 		return cli.NewExitError(err.Error(), 1)
 	}
@@ -104,6 +106,14 @@ func runRunner(c *cli.Context) error {
 		return cli.NewExitError(fmt.Sprintf("writing %s: %v", runnerPath, err), 1)
 	}
 
+	//= docs/requirements/01-gitlab-protocol.md#advertised-capabilities
+	//# The Runner SHALL advertise the executor name `flintlock` in the
+	//# `info.executor` field of every job request.
+	//
+	// The one RunnerConfig names the flintlock executor (runnercfg), the
+	// registry holds the provider under that name, and the network client
+	// reads the executor name and its features from that RunnerConfig and
+	// registry for the info of every request.
 	providers := map[string]common.ExecutorProvider{}
 	executor.Register(providers, r.provider)
 	cmd, client := newRunLoopCommand(providers)
@@ -142,7 +152,7 @@ type runner struct {
 // Transport factory, the Scheduler and the flintlock executor provider. The
 // provider owns the Scheduler's lifetime: the run loop's Init starts it and
 // its Shutdown stops it once every worker has stopped.
-func newRunner(ctx context.Context, cfg *config.Config, log *slog.Logger) (*runner, error) {
+func newRunner(ctx context.Context, cfg *config.Config, log *slog.Logger, onInit func(executor.Stopper)) (*runner, error) {
 	pm := cfg.PoolManager
 	client, err := poolmgr.NewClient(poolmgr.ClientConfig{
 		Endpoint: pm.Endpoint,
@@ -184,6 +194,13 @@ func newRunner(ctx context.Context, cfg *config.Config, log *slog.Logger) (*runn
 		return nil, fmt.Errorf("host registry: %w", err)
 	}
 
+	//= docs/requirements/01-gitlab-protocol.md#job-acquisition
+	//# The Runner SHALL run no more Jobs concurrently than the
+	//# configured concurrency limit.
+	//
+	// The limit is enforced twice: the run loop's concurrent and limit
+	// (runnercfg) and the Scheduler's Slots below, so a Job is not even
+	// requested once every Slot is taken (SC-001, SC-004).
 	sched, err := scheduler.New(scheduler.Deps{
 		PoolManager:  client,
 		Specs:        poolmgr.NewSpecBuilder(),
@@ -210,7 +227,13 @@ func newRunner(ctx context.Context, cfg *config.Config, log *slog.Logger) (*runn
 	}
 
 	inv := newInventoryView(cfg.Inventory.Hosts)
-	provider, err := executor.NewProvider(executor.Deps{
+	var provider executor.Provider
+	initHook := func() {
+		if s, ok := provider.(executor.Stopper); ok && onInit != nil {
+			onInit(s)
+		}
+	}
+	provider, err = executor.NewProvider(executor.Deps{
 		Scheduler:  sched,
 		Transports: transport.NewFactory(transport.WithLogger(log)),
 		Env:        executor.NewHostServiceEnv(cfg.HostServices),
@@ -227,6 +250,7 @@ func newRunner(ctx context.Context, cfg *config.Config, log *slog.Logger) (*runn
 		executor.WithLifecycle(sched),
 		executor.WithLogger(log),
 		executor.WithHTTPCacheUpstreams(cfg.HostServices.HTTPCache.Upstreams),
+		executor.WithInitHook(initHook),
 	)
 	if err != nil {
 		_ = hosts.Close()
@@ -264,6 +288,68 @@ func (v *inventoryView) set(hosts []config.HostEntry) {
 // Host implements executor.InventoryLookup.
 func (v *inventoryView) Host(name string) (*config.HostEntry, bool) {
 	return config.HostByName(*v.hosts.Load(), name)
+}
+
+//= docs/requirements/01-gitlab-protocol.md#shutdown
+//# While a graceful shutdown is in progress, the Runner SHALL allow
+//# running Jobs to finish for up to the configured shutdown timeout.
+
+//= docs/requirements/01-gitlab-protocol.md#shutdown
+//# If running Jobs have not finished when the shutdown timeout
+//# elapses, then the Runner SHALL cancel them, report them as failed with the
+//# reason `runner_system_failure` and release their MicroVMs.
+
+// takeOverStopSignals makes SIGTERM and SIGINT stop the Runner gracefully.
+//
+// gitlab-runner's run loop, at the pinned commit, treats SIGQUIT as a
+// graceful stop that waits for running builds without a limit, and SIGTERM
+// and SIGINT as a forceful one that aborts them at once as
+// runner_interrupted. GL-070 to GL-073 want every termination signal to be
+// graceful, bounded by the shutdown timeout, and a second one to cancel.
+// The run loop subscribes to all three signals before it calls the
+// provider's Init, which is where this runs: signal.Ignore takes SIGTERM
+// and SIGINT away from every subscriber, the run loop's included, and this
+// function subscribes to them again alone. On the first signal of any of
+// the three it starts the Scheduler's shutdown (no new Reservations,
+// unconverted ones released; running Jobs keep their Leases for the
+// shutdown timeout and are then aborted as runner_system_failure with their
+// Leases released) and, unless the signal was SIGQUIT already, sends the
+// process a SIGQUIT so that the run loop stops requesting Jobs and waits for
+// the running ones. Every later signal cancels all running Jobs at once.
+func takeOverStopSignals(ctx context.Context, s executor.Stopper, log *slog.Logger) {
+	signal.Ignore(syscall.SIGTERM, syscall.SIGINT)
+	ch := make(chan os.Signal, 4)
+	signal.Notify(ch, syscall.SIGTERM, syscall.SIGINT, syscall.SIGQUIT)
+	go func() {
+		defer signal.Stop(ch)
+		relayed, received := 0, 0
+		for {
+			var sig os.Signal
+			select {
+			case <-ctx.Done():
+				return
+			case sig = <-ch:
+			}
+			if sig == syscall.SIGQUIT && relayed > 0 {
+				relayed--
+				continue
+			}
+			received++
+			if received > 1 {
+				log.Warn("second stop signal: cancelling every running job", "signal", sig.String())
+				s.AbortAll()
+				continue
+			}
+			log.Warn("stop signal: requesting no more jobs; running jobs have the shutdown timeout to finish", "signal", sig.String())
+			s.BeginShutdown()
+			if sig != syscall.SIGQUIT {
+				relayed++
+				if err := syscall.Kill(os.Getpid(), syscall.SIGQUIT); err != nil {
+					log.Error("could not start the run loop's graceful shutdown", "error", err)
+				}
+			}
+		}
+	}()
 }
 
 //= docs/requirements/01-gitlab-protocol.md#authentication

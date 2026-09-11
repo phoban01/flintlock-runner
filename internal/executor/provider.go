@@ -77,6 +77,11 @@ type provider struct {
 	mu        sync.Mutex
 	runCancel context.CancelFunc
 	runDone   chan struct{}
+	initHook  func()
+
+	// abort is closed by AbortAll (GL-073).
+	abort     chan struct{}
+	abortOnce sync.Once
 }
 
 //= docs/requirements/02-executor.md#interface
@@ -103,7 +108,10 @@ func NewProvider(deps Deps, opts ...Option) (Provider, error) {
 	case deps.Hosts == nil:
 		return nil, errors.New("executor: deps: Hosts is required")
 	}
-	p := &provider{deps: deps, clk: clock.Real{}, log: slog.Default(), httpCacheVars: map[string]bool{}}
+	p := &provider{
+		deps: deps, clk: clock.Real{}, log: slog.Default(),
+		httpCacheVars: map[string]bool{}, abort: make(chan struct{}),
+	}
 	for _, o := range opts {
 		o(p)
 	}
@@ -124,8 +132,14 @@ func Register(providers map[string]common.ExecutorProvider, p Provider) {
 // CanCreate implements common.ExecutorProvider.
 func (p *provider) CanCreate() bool { return true }
 
+//= docs/requirements/01-gitlab-protocol.md#job-execution
+//# The Runner SHALL generate each Stage script with the `bash`
+//# shell implementation of the gitlab-runner `shells` package.
+
 // Create implements common.ExecutorProvider: one executor per Job, holding
-// nothing until Prepare.
+// nothing until Prepare. Its shell is gitlab-runner's bash implementation,
+// registered by the shells package the binary imports, which the Build
+// generates every Stage script with.
 func (p *provider) Create() common.Executor {
 	return &executor{
 		AbstractExecutor: executors.AbstractExecutor{
@@ -253,25 +267,28 @@ func (p *provider) GetConfigInfo(*common.RunnerConfig, *common.ConfigInfo) {}
 func (p *provider) GetDefaultShell() string { return DefaultShell }
 
 // Init implements common.ManagedExecutorProvider. It starts the Scheduler
-// when one was given with WithLifecycle; it does not block.
+// when one was given with WithLifecycle, then runs the WithInitHook hook;
+// it does not block. The run loop calls Init after it has subscribed to the
+// process's stop signals and before it starts its workers.
 func (p *provider) Init() {
-	if p.lifecycle == nil {
-		return
-	}
 	p.mu.Lock()
-	defer p.mu.Unlock()
-	if p.runCancel != nil {
-		return
+	if p.lifecycle != nil && p.runCancel == nil {
+		ctx, cancel := context.WithCancel(context.Background())
+		done := make(chan struct{})
+		p.runCancel, p.runDone = cancel, done
+		go func() {
+			defer close(done)
+			if err := p.lifecycle.Run(ctx); err != nil {
+				p.log.Error("scheduler stopped with an error", "error", err)
+			}
+		}()
 	}
-	ctx, cancel := context.WithCancel(context.Background())
-	done := make(chan struct{})
-	p.runCancel, p.runDone = cancel, done
-	go func() {
-		defer close(done)
-		if err := p.lifecycle.Run(ctx); err != nil {
-			p.log.Error("scheduler stopped with an error", "error", err)
-		}
-	}()
+	hook := p.initHook
+	p.initHook = nil
+	p.mu.Unlock()
+	if hook != nil {
+		hook()
+	}
 }
 
 // Shutdown implements common.ManagedExecutorProvider. The run loop calls it
@@ -280,16 +297,70 @@ func (p *provider) Init() {
 // still held and waits for the background releases to finish. It blocks
 // until Run has returned or ctx is done.
 func (p *provider) Shutdown(ctx context.Context, _ *common.Config) {
+	p.BeginShutdown()
 	p.mu.Lock()
-	cancel, done := p.runCancel, p.runDone
+	done := p.runDone
 	p.mu.Unlock()
-	if cancel == nil {
+	if done == nil {
 		return
 	}
-	cancel()
 	select {
 	case <-done:
 	case <-ctx.Done():
 		p.log.Warn("scheduler did not stop within the shutdown timeout")
 	}
+}
+
+// Stopper is the shutdown control of the provider NewProvider returns. `run`
+// drives it from the process's stop signals, because the run loop's own
+// handling of SIGTERM does not match GL-070 to GL-073 (see
+// cmd/flintlock-runner).
+type Stopper interface {
+	// BeginShutdown cancels the Scheduler's Run: every unconverted
+	// Reservation is released and no more are granted (GL-070); running
+	// Jobs keep their Leases for the shutdown timeout (GL-071), after which
+	// the Scheduler aborts them as runner_system_failure and releases their
+	// Leases (GL-072). It returns at once and is safe to call more than once.
+	BeginShutdown()
+	// AbortAll cancels every running Job at once as runner_system_failure,
+	// for a second termination signal (GL-073). Their MicroVMs are released
+	// by Cleanup as for any other Job.
+	AbortAll()
+}
+
+var _ Stopper = (*provider)(nil)
+
+// WithInitHook runs hook at the end of Init. `run` installs its stop signal
+// handling there, because that is the first point at which the run loop has
+// subscribed to the signals it has to take over.
+func WithInitHook(hook func()) Option {
+	return func(p *provider) { p.initHook = hook }
+}
+
+// ErrAborted is the cause of a Job cancelled by AbortAll.
+var ErrAborted = errors.New("executor: runner is shutting down; job aborted")
+
+//= docs/requirements/01-gitlab-protocol.md#shutdown
+//# When the Runner receives `SIGTERM` or `SIGQUIT`, the Runner SHALL
+//# stop requesting Jobs and release every unconverted Reservation.
+
+// BeginShutdown implements Stopper.
+func (p *provider) BeginShutdown() {
+	p.mu.Lock()
+	cancel := p.runCancel
+	p.mu.Unlock()
+	if cancel != nil {
+		cancel()
+	}
+}
+
+//= docs/requirements/01-gitlab-protocol.md#shutdown
+//# When the Runner receives a second termination signal during a
+//# graceful shutdown, the Runner SHALL cancel all running Jobs immediately.
+
+// AbortAll implements Stopper. Every Stage running now or started later
+// sees the abort and stops as runner_system_failure, and so does a Prepare
+// still waiting for a MicroVM.
+func (p *provider) AbortAll() {
+	p.abortOnce.Do(func() { close(p.abort) })
 }
