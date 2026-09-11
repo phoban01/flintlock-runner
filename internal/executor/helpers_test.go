@@ -329,6 +329,8 @@ type fixture struct {
 	provider *provider
 	// currentBuild is the Build runBuild is running.
 	currentBuild *common.Build
+	// runnerShell, when set, replaces the RunnerConfig shell runBuild uses.
+	runnerShell string
 }
 
 func newFixture(t *testing.T) *fixture {
@@ -430,6 +432,15 @@ func runnerConfig() *common.RunnerConfig {
 	}
 }
 
+// runnerConfig is runnerConfig with the fixture's shell override, if any.
+func (f *fixture) runnerConfig() *common.RunnerConfig {
+	rc := runnerConfig()
+	if f.runnerShell != "" {
+		rc.Shell = f.runnerShell
+	}
+	return rc
+}
+
 // runBuild runs job through the library's Build with the fixture's
 // provider, the way the run loop does after Acquire.
 func (f *fixture) runBuild(ctx context.Context, job spec.Job) (*recordTrace, *common.Build, error) {
@@ -442,7 +453,7 @@ func (f *fixture) runBuild(ctx context.Context, job spec.Job) (*recordTrace, *co
 		f.t.Fatalf("Acquire: %v", err)
 	}
 	defer f.provider.Release(runnerConfig(), data)
-	b, err := common.NewBuild(job, runnerConfig(), nil, data, f.provider)
+	b, err := common.NewBuild(job, f.runnerConfig(), nil, data, f.provider)
 	if err != nil {
 		f.t.Fatal(err)
 	}

@@ -99,6 +99,16 @@ func (e *executor) Prepare(options common.ExecutorPrepareOptions) (err error) {
 			fmt.Errorf("flintlock: prepare did not complete within %s", d))
 		defer cancel()
 	}
+	// A second termination signal aborts a Job still being prepared too.
+	ctx, abortPrepare := context.WithCancelCause(ctx)
+	defer abortPrepare(nil)
+	go func() {
+		select {
+		case <-e.p.abort:
+			abortPrepare(ErrAborted)
+		case <-ctx.Done():
+		}
+	}()
 
 	if err := e.resolveProfile(sec); err != nil {
 		return err
@@ -209,6 +219,9 @@ func (e *executor) jobInfo() scheduler.JobInfo {
 func (e *executor) configureShell() error {
 	e.Config.BuildsDir = e.profile.BuildsDir
 	e.Config.CacheDir = e.profile.CacheDir
+	// The RunnerConfig's shell would override the executor's; the guest
+	// runs the Profile's bash, so the scripts are always bash (GL-041).
+	e.Config.Shell = DefaultShell
 	e.Shell().RunnerCommand = e.profile.HelperPath
 	if err := e.PrepareBuildAndShell(); err != nil {
 		var be *common.BuildError
@@ -516,6 +529,8 @@ func (e *executor) runStage(cmd common.ExecutorCommand, command transport.Comman
 		select {
 		case <-h.Done():
 			cancel(&common.BuildError{Inner: h.Err(), FailureReason: common.RunnerSystemFailure})
+		case <-e.p.abort:
+			cancel(&common.BuildError{Inner: ErrAborted, FailureReason: common.RunnerSystemFailure})
 		case <-ctx.Done():
 		}
 	}()
