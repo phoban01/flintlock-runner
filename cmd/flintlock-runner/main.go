@@ -67,6 +67,11 @@ func newApp() *cli.App {
 	app.Name = "flintlock-runner"
 	app.Usage = "GitLab CI runner that executes every job in its own flintlock microVM"
 	app.Version = version
+	// urfave/cli leaves ErrWriter nil unless it is set (it falls back to
+	// os.Stderr only internally), and the subcommands build loggers over
+	// it: a nil writer panics on the first log line, such as the CF-083
+	// notice a file without a distributed_cache section gets.
+	app.ErrWriter = os.Stderr
 	app.Flags = []cli.Flag{
 		cli.StringFlag{
 			Name:   "config",
@@ -152,15 +157,7 @@ func configShow(c *cli.Context) error {
 // which names the first invalid field and the reason (and lists the rest).
 // Startup warnings go to the application's error writer.
 func loadConfig(c *cli.Context) (*config.Config, error) {
-	// urfave/cli leaves App.ErrWriter nil unless the caller sets it (it
-	// falls back to os.Stderr internally), and a text handler over a nil
-	// writer panics on the first startup line, such as the CF-083 notice
-	// that a file without a distributed_cache section gets.
-	errOut := c.App.ErrWriter
-	if errOut == nil {
-		errOut = os.Stderr
-	}
-	logger := slog.New(slog.NewTextHandler(errOut, nil))
+	logger := slog.New(slog.NewTextHandler(c.App.ErrWriter, nil))
 	cfg, err := config.Load(c.GlobalString("config"), config.WithLogger(logger))
 	if err != nil {
 		return nil, cli.NewExitError(err.Error(), exitInvalidConfig)
