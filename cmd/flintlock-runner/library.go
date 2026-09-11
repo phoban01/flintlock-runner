@@ -140,28 +140,3 @@ package main
 //# If a failure reason is not in the list GitLab advertised as
 //# supported, then the Runner SHALL report `runner_system_failure` in its
 //# place.
-
-//= docs/requirements/01-gitlab-protocol.md#shutdown
-//= type=todo
-//= tracking-issue=23
-//# When the Runner receives `SIGTERM` or `SIGQUIT`, the Runner SHALL
-//# stop requesting Jobs and release every unconverted Reservation.
-
-//= docs/requirements/01-gitlab-protocol.md#shutdown
-//= type=todo
-//= tracking-issue=23
-//# While a graceful shutdown is in progress, the Runner SHALL allow
-//# running Jobs to finish for up to the configured shutdown timeout.
-
-//= docs/requirements/01-gitlab-protocol.md#shutdown
-//= type=todo
-//= tracking-issue=23
-//# If running Jobs have not finished when the shutdown timeout
-//# elapses, then the Runner SHALL cancel them, report them as failed with the
-//# reason `runner_system_failure` and release their MicroVMs.
-
-//= docs/requirements/01-gitlab-protocol.md#shutdown
-//= type=todo
-//= tracking-issue=23
-//# When the Runner receives a second termination signal during a
-//# graceful shutdown, the Runner SHALL cancel all running Jobs immediately.
