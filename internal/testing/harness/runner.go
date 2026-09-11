@@ -237,8 +237,13 @@ func (s *Stack) stopRunner(grace time.Duration) error {
 			}
 		}
 	}
-	// Whatever the Runner started and left in its group goes too.
+	// Whatever the Runner started and left in its group goes too. A killed
+	// child lingers until its new parent reaps it, so wait for the group
+	// to empty rather than report a process that is already dead.
 	_ = signalGroup(r.cmd.Process.Pid, syscall.SIGKILL)
+	if err := waitGroupGone(r.cmd.Process.Pid, killGrace); err != nil {
+		errs = append(errs, err)
+	}
 	if !crashed && r.exited() && r.waitErr != nil && len(errs) == 0 {
 		errs = append(errs, fmt.Errorf("harness: flintlock-runner exited on SIGTERM with %s; last lines of %s:\n%s",
 			exitDescription(r.waitErr), s.RunnerLog, s.RunnerLogTail(20)))
@@ -254,6 +259,22 @@ func signalGroup(pid int, sig syscall.Signal) error {
 		return nil
 	}
 	return err
+}
+
+// waitGroupGone polls until no process of group pgid is left, or fails
+// after timeout.
+func waitGroupGone(pgid int, timeout time.Duration) error {
+	deadline := time.Now().Add(timeout)
+	for {
+		err := syscall.Kill(-pgid, 0)
+		if errors.Is(err, syscall.ESRCH) {
+			return nil
+		}
+		if time.Now().After(deadline) {
+			return fmt.Errorf("harness: processes of the runner's group %d still exist %s after SIGKILL", pgid, timeout)
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
 }
 
 // exitDescription renders cmd.Wait's result for a message.

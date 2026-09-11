@@ -11,11 +11,13 @@ import (
 	pmfake "github.com/phoban01/flintlock-runner/internal/poolmgr/fake"
 )
 
-// Bounds on the steps of Shutdown beyond the Runner's own shutdown timeout.
+// runnerStopMargin is added to the configured shutdown timeout before the
+// harness gives up on SIGTERM and kills the Runner. It is a variable so
+// that the tests of that path do not wait ten seconds.
+var runnerStopMargin = 10 * time.Second
+
+// Bounds on the other steps of Shutdown.
 const (
-	// runnerStopMargin is added to the configured shutdown timeout before
-	// the harness gives up on SIGTERM and kills the Runner.
-	runnerStopMargin = 10 * time.Second
 	// poolManagerStopTimeout covers the fake Pool Manager deleting every
 	// MicroVM it created, which it bounds at 30s itself.
 	poolManagerStopTimeout = 45 * time.Second
