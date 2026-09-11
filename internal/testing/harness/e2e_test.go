@@ -158,7 +158,7 @@ func runScenarios(t *testing.T, opts Options) {
 	for _, sc := range scenarios {
 		t.Run(sc.name, func(t *testing.T) {
 			s := New(t, opts)
-			if err := s.StartRunner(context.Background()); err != nil {
+			if err := startRunner(s); err != nil {
 				t.Fatal(err)
 			}
 			id, err := s.Enqueue(sc.job)
@@ -204,13 +204,21 @@ func TestHardwareTier(t *testing.T) {
 	runScenarios(t, HardwareTier(t))
 }
 
+// startRunner starts the Runner and waits until it polls for Jobs.
+func startRunner(s *Stack) error {
+	if err := s.StartRunner(context.Background()); err != nil {
+		return err
+	}
+	return s.WaitReady(context.Background())
+}
+
 // TestRunnerIsGoneAfterShutdown checks that the Runner's process group is
 // gone once Shutdown returns.
 func TestRunnerIsGoneAfterShutdown(t *testing.T) {
 	opts := FakeTier()
 	opts.RunnerBinary = runnerBinary
 	s := New(t, opts)
-	if err := s.StartRunner(context.Background()); err != nil {
+	if err := startRunner(s); err != nil {
 		t.Fatal(err)
 	}
 	pid := s.runner.cmd.Process.Pid

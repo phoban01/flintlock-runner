@@ -461,7 +461,52 @@ func Up(ctx context.Context, opts Options) (*Stack, error) {
 	if err := s.StartRunner(ctx); err != nil {
 		return nil, errors.Join(err, s.Shutdown(context.WithoutCancel(ctx)))
 	}
+	if err := s.WaitReady(ctx); err != nil {
+		return nil, errors.Join(err, s.Shutdown(context.WithoutCancel(ctx)))
+	}
 	return s, nil
+}
+
+// DefaultReadyTimeout bounds WaitReady when ctx has no deadline.
+const DefaultReadyTimeout = time.Minute
+
+// jobRequestPath is the job request endpoint of the GitLab API.
+const jobRequestPath = "POST /api/v4/jobs/request"
+
+// WaitReady blocks until the Runner has asked the fake GitLab for a Job.
+// The run loop asks only once it is running with its signal handlers in
+// place and the Scheduler has granted a Reservation (GL-030), so from then
+// on the Runner takes Jobs and a SIGTERM is a graceful shutdown rather than
+// the default kill of a process still starting. It fails early if the
+// Runner exits, and after DefaultReadyTimeout if ctx has no deadline.
+func (s *Stack) WaitReady(ctx context.Context) error {
+	if _, ok := ctx.Deadline(); !ok {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, DefaultReadyTimeout)
+		defer cancel()
+	}
+	exited := s.runnerExited()
+	if exited == nil {
+		return errors.New("harness: runner not started")
+	}
+	ticker := time.NewTicker(50 * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		for _, r := range s.GitLab.Requests() {
+			if r == jobRequestPath {
+				s.logf("flintlock-runner is polling the fake GitLab for jobs")
+				return nil
+			}
+		}
+		select {
+		case <-exited:
+			return s.runnerExitError()
+		case <-ctx.Done():
+			return fmt.Errorf("harness: flintlock-runner did not ask for a job: %w; last lines of %s:\n%s",
+				context.Cause(ctx), s.RunnerLog, s.RunnerLogTail(20))
+		case <-ticker.C:
+		}
+	}
 }
 
 // lookBash finds the bash the Profile's shell points at. The fake Host runs
