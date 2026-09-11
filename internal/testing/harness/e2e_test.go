@@ -143,8 +143,8 @@ var scenarios = []scenario{
 			if !strings.Contains(rec.Trace, "about to fail") || strings.Contains(rec.Trace, "not reached") {
 				t.Errorf("trace does not stop at the failing line:\n%s", rec.Trace)
 			}
-			if !strings.Contains(rec.Trace, "exit code 3") {
-				t.Errorf("trace does not report exit code 3:\n%s", rec.Trace)
+			if !strings.Contains(rec.Trace, "exit status 3") {
+				t.Errorf("trace does not report exit status 3:\n%s", rec.Trace)
 			}
 		},
 	},
