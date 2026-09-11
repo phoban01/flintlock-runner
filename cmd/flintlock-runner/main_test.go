@@ -170,6 +170,25 @@ func TestConfigShow(t *testing.T) {
 	}
 }
 
+// TestConfigShowWithTheDefaultErrorWriter runs config show on an app whose
+// ErrWriter is left unset, as main leaves it, over a file without a
+// distributed_cache section, whose startup notice (CF-083) is logged. It
+// used to panic on a nil writer; the end-to-end harness found it.
+func TestConfigShowWithTheDefaultErrorWriter(t *testing.T) {
+	t.Parallel()
+	path := writeConfig(t, minimalConfigFile)
+
+	var out bytes.Buffer
+	app := newApp()
+	app.Writer = &out
+	if err := app.Run([]string{"flintlock-runner", "--config", path, "config", "show"}); err != nil {
+		t.Fatalf("config show: %v", err)
+	}
+	if !strings.Contains(out.String(), "namespace: metal-runner") {
+		t.Errorf("config show printed no configuration:\n%s", out.String())
+	}
+}
+
 //= docs/requirements/07-configuration.md#file-and-precedence
 //= type=test
 //# When starting, the Runner SHALL validate the configuration and,

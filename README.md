@@ -25,6 +25,22 @@ exists is:
 | `Makefile` | `make build`, `test`, `lint`, `duvet`, `coverage-gate`, `e2e` |
 | `CONTRIBUTING.md` | Citation rules, branch naming, definition of done |
 
+## Try it locally
+
+No KVM, EC2 or GitLab needed: `make demo` starts a fake GitLab, the fake
+Pool Manager and two fake flintlock Hosts on loopback ports, runs the real
+`flintlock-runner` against them, queues a hello-world job and streams its
+log. The fake Hosts run each job's script as a local process under a
+temporary directory.
+
+```sh
+make demo                                  # one hello-world job
+make demo DEMO_ARGS='-jobs 3'              # three jobs at once
+make demo DEMO_ARGS="-script 'exit 3'"     # a failing job (exits 1)
+make demo DEMO_ARGS='-keep'                # leave the stack up; type commands to run them as jobs
+make e2e                                   # the end-to-end scenarios (TD-050)
+```
+
 ## Requirements tracing
 
 Requirements are written in EARS form with uppercase `SHALL` so that
@@ -45,6 +61,7 @@ make duvet-ci         # fails if .duvet/snapshot.txt is stale
 ```
 cmd/flintlock-runner/   main: run, config show, fleet {provision,verify,drain,teardown,emit-userdata}
 cmd/fake-poolmgr/       the fake Pool Manager as a standalone binary (TD-009)
+cmd/flintlock-devstack/ the end-to-end harness as a demo: fakes + the real runner + jobs (make demo)
 internal/clock/         Clock and Backoff interfaces shared by the scheduler, poolmgr and the fakes
 internal/executor/      common.ExecutorProvider + common.Executor ("flintlock")
 internal/scheduler/     capacity, profiles, claims, placement resolution, lease keep-alive
