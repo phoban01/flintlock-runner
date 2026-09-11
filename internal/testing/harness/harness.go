@@ -411,9 +411,10 @@ func (s *Stack) startPoolManager(ctx context.Context) error {
 		s.logf("using the Pool Manager at %s; no fake Pool Manager started", s.pmAddr)
 		return nil
 	}
-	// The Host names given to the fake are the Inventory names, which is
-	// what makes a claim's Placement resolvable by the Runner (CF-032).
-	hosts, err := pmfake.HostsFromDialer(ctx, s.adminDialer(), s.endpoints())
+	// The fake reaches every Host over gRPC at its Inventory endpoint, as it
+	// reaches flintlockd, under its Inventory name, which is what makes a
+	// claim's Placement resolvable by the Runner (CF-032).
+	hosts, err := pmfake.HostsFromDialer(ctx, pmfake.AdminDialer{}, s.endpoints())
 	if err != nil {
 		return fmt.Errorf("harness: dialing hosts for the fake pool manager: %w", err)
 	}
@@ -441,22 +442,6 @@ func (s *Stack) startPoolManager(ctx context.Context) error {
 	s.pmAddr = pm.Addr()
 	s.logf("fake Pool Manager listening on %s (hosts %v)", s.pmAddr, hosts.Names())
 	return nil
-}
-
-// adminDialer is how the fake Pool Manager reaches the Hosts: over gRPC to
-// their listen addresses, as it reaches flintlockd. On the fake tier each
-// client is wrapped so that a new MicroVM's sandbox is prepared for the
-// fake Host's split view of the filesystem (see prepareSandbox).
-func (s *Stack) adminDialer() flintlock.AdminDialer {
-	if len(s.Hosts) == 0 {
-		return pmfake.AdminDialer{}
-	}
-	builds, cache := s.guestDirs()
-	byName := make(map[string]*hostfake.Host, len(s.Hosts))
-	for _, h := range s.Hosts {
-		byName[h.Config().Name] = h
-	}
-	return sandboxDialer{inner: pmfake.AdminDialer{}, hosts: byName, dirs: []string{builds, cache}}
 }
 
 // RunnerRunning reports whether the Runner process is running.

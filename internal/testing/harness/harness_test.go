@@ -221,27 +221,6 @@ func TestShutdownFailsOnALeftoverSandbox(t *testing.T) {
 	}
 }
 
-func TestSandboxHoldsTheProfileDirectories(t *testing.T) {
-	s := start(t, Options{Hosts: 1})
-	c := s.PoolManager.Client()
-	defer func() { _ = c.Close() }()
-	cl := claim(t, c, hostNames(s))
-
-	sandbox, ok := s.Hosts[0].SandboxPath(cl.VMUID)
-	if !ok {
-		t.Fatalf("host-1 has no sandbox for the claimed microvm %s", cl.VMUID)
-	}
-	p := s.Config.Profiles[0]
-	for _, dir := range []string{p.BuildsDir, p.CacheDir} {
-		if info, err := os.Stat(filepath.Join(sandbox, dir)); err != nil || !info.IsDir() {
-			t.Errorf("sandbox is missing %s, which a Stage's cwd resolves to: %v", dir, err)
-		}
-	}
-	if err := c.ReleaseVM(context.Background(), cl.LeaseID); err != nil {
-		t.Fatalf("ReleaseVM: %v", err)
-	}
-}
-
 func TestOptionsFromEnv(t *testing.T) {
 	env := map[string]string{
 		EnvHardwareInventory: "/etc/inventory.yaml",
