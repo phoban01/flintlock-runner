@@ -371,7 +371,7 @@ type recordTrace struct {
 
 func newRecordTrace() *recordTrace {
 	t := &recordTrace{}
-	t.Trace.Writer = writerFunc(func(p []byte) (int, error) {
+	t.Writer = writerFunc(func(p []byte) (int, error) {
 		t.mu.Lock()
 		defer t.mu.Unlock()
 		return t.buf.Write(p)

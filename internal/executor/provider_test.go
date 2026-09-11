@@ -27,7 +27,7 @@ func TestProviderAndExecutorImplementTheLibraryInterfaces(t *testing.T) {
 	if err := common.ValidateExecutorProvider(ep); err != nil {
 		t.Fatalf("gitlab-runner rejects the provider: %v", err)
 	}
-	var ex common.Executor = ep.Create()
+	ex := ep.Create()
 	if ex == nil {
 		t.Fatal("Create returned nil")
 	}
