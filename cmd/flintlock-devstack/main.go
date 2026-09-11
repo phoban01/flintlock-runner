@@ -26,8 +26,10 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"log/slog"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"strings"
 	"sync"
 	"syscall"
@@ -36,6 +38,9 @@ import (
 	"github.com/phoban01/flintlock-runner/internal/testing/fakegitlab"
 	"github.com/phoban01/flintlock-runner/internal/testing/harness"
 )
+
+// fakesLog is the file in the stack's directory the fakes log to.
+const fakesLog = "fakes.log"
 
 // defaultScript is the hello-world Job.
 var defaultScript = []string{
@@ -152,11 +157,16 @@ func (u *ui) paint(code, s string) string {
 	return "\x1b[" + code + "m" + s + "\x1b[0m"
 }
 
-// isTerminal reports whether f is a character device, which is close
-// enough to "a terminal" to decide on colour and on reading commands.
+// isTerminal reports whether f is a character device other than the null
+// device, which is close enough to "a terminal" to decide on colour and on
+// reading commands without a terminal library.
 func isTerminal(f *os.File) bool {
 	info, err := f.Stat()
-	return err == nil && info.Mode()&os.ModeCharDevice != 0
+	if err != nil || info.Mode()&os.ModeCharDevice == 0 {
+		return false
+	}
+	null, err := os.Stat(os.DevNull)
+	return err != nil || !os.SameFile(info, null)
 }
 
 func run(args []string, stdout, stderr io.Writer) int {
@@ -178,11 +188,28 @@ func run(args []string, stdout, stderr io.Writer) int {
 	defer stop()
 
 	u.step("flintlock-devstack: fake GitLab, fake Pool Manager and %d fake flintlock Host(s), with the real flintlock-runner", o.hosts)
+	// The fakes log through slog's default logger; their lines go to a
+	// file in the stack's directory so that the terminal shows the jobs.
+	root, err := os.MkdirTemp("", "flintlock-devstack-")
+	if err != nil {
+		fmt.Fprintf(stderr, "flintlock-devstack: %v\n", err)
+		return 1
+	}
+	logFile, err := os.Create(filepath.Join(root, fakesLog))
+	if err != nil {
+		_ = os.RemoveAll(root)
+		fmt.Fprintf(stderr, "flintlock-devstack: %v\n", err)
+		return 1
+	}
+	defer func() { _ = logFile.Close() }()
+	slog.SetDefault(slog.New(slog.NewTextHandler(logFile, nil)))
+
 	opts := harness.Options{
 		Hosts:        o.hosts,
 		PoolSize:     o.poolSize,
 		BootDelay:    harness.DefaultBootDelay,
 		RunnerBinary: o.runnerBin,
+		Root:         root,
 		Logf:         u.step,
 	}
 	if o.runnerLogs {
@@ -221,12 +248,13 @@ func session(ctx context.Context, s *harness.Stack, u *ui, o *options, stderr io
 	}
 
 	ok := summarise(u, runJobs(ctx, s, u, o, o.jobs))
-	if o.keep && ctx.Err() == nil {
-		keep(ctx, s, u, o)
-	}
 	if ctx.Err() != nil {
 		u.step("interrupted")
 		return false
+	}
+	if o.keep {
+		// Ctrl-C is how keep mode ends, so it is not a failure here.
+		keep(ctx, s, u, o)
 	}
 	return ok
 }
@@ -317,9 +345,10 @@ func keep(ctx context.Context, s *harness.Stack, u *ui, o *options) {
 	u.line("    GitLab (fake)   " + s.GitLab.URL() + "   runner token " + harness.RunnerToken)
 	u.line("    Pool Manager    " + s.PoolManagerAddr())
 	for _, h := range s.Inventory {
-		u.line(fmt.Sprintf("    Host %-10s %s   basic auth token %s", h.Name, h.Endpoint, h.Token))
+		u.line(fmt.Sprintf("    Host %-10s %s   basic auth token %s", h.Name, h.Endpoint, string(h.Token)))
 	}
 	u.line("    runner metrics  http://" + s.Config.Observability.ListenAddress + "/metrics")
+	u.line("    fakes' log      " + filepath.Join(s.Root, fakesLog))
 	u.line("    try             flintlock-runner --config " + s.ConfigPath + " config show")
 	if !isTerminal(os.Stdin) {
 		<-ctx.Done()
