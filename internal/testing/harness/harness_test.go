@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"strings"
 	"testing"
@@ -158,6 +159,7 @@ func TestStartWritesAConfigurationForTheFakes(t *testing.T) {
 }
 
 func TestShutdownIsCleanAndRemovesTheRoot(t *testing.T) {
+	baseline := runtime.NumGoroutine()
 	s := start(t, Options{})
 	c := s.PoolManager.Client()
 	defer func() { _ = c.Close() }()
@@ -174,6 +176,18 @@ func TestShutdownIsCleanAndRemovesTheRoot(t *testing.T) {
 	}
 	if err := s.Shutdown(context.Background()); err != nil {
 		t.Errorf("second Shutdown: %v", err)
+	}
+
+	// Every goroutine the Stack started ends with it. Connections wind
+	// down asynchronously, so allow them a moment.
+	_ = c.Close()
+	deadline := time.Now().Add(5 * time.Second)
+	for runtime.NumGoroutine() > baseline && time.Now().Before(deadline) {
+		time.Sleep(20 * time.Millisecond)
+	}
+	if n := runtime.NumGoroutine(); n > baseline {
+		buf := make([]byte, 1<<20)
+		t.Errorf("%d goroutines after Shutdown, %d before Start:\n%s", n, baseline, buf[:runtime.Stack(buf, true)])
 	}
 }
 
