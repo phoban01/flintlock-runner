@@ -221,10 +221,10 @@ func startRunner(t *testing.T, bin, path string) *runnerProc {
 	return r
 }
 
-// signal sends sig to the runner.
-func (r *runnerProc) signal(t *testing.T, sig os.Signal) {
+// sigterm sends SIGTERM to the runner.
+func (r *runnerProc) sigterm(t *testing.T) {
 	t.Helper()
-	if err := r.cmd.Process.Signal(sig); err != nil {
+	if err := r.cmd.Process.Signal(syscall.SIGTERM); err != nil {
 		t.Fatal(err)
 	}
 }

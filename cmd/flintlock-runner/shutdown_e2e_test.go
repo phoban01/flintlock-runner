@@ -5,7 +5,6 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
-	"syscall"
 	"testing"
 	"time"
 
@@ -56,7 +55,7 @@ func runUntilMidScript(t *testing.T, shutdownTimeout time.Duration, sleep int) (
 }
 
 // finalRecord waits for the Job's final state.
-func finalRecord(t *testing.T, s *stack, r *runnerProc, d time.Duration) *fakegitlab.JobRecord {
+func finalRecord(t *testing.T, s *stack, d time.Duration) *fakegitlab.JobRecord {
 	t.Helper()
 	waitFor(t, d, "the job to finish", func() bool {
 		rec := s.gitlab.Record(7)
@@ -84,10 +83,10 @@ func TestSIGTERMLetsARunningJobFinish(t *testing.T) {
 		t.Skip("end-to-end")
 	}
 	s, r := runUntilMidScript(t, 60*time.Second, 4)
-	r.signal(t, syscall.SIGTERM)
+	r.sigterm(t)
 	signalledAt := len(s.gitlab.Requests())
 
-	rec := finalRecord(t, s, r, 60*time.Second)
+	rec := finalRecord(t, s, 60*time.Second)
 	if rec.Status != fakegitlab.StatusSuccess {
 		t.Fatalf("job ended %s (%s) after SIGTERM; want it to finish\ntrace:\n%s\nrunner:\n%s",
 			rec.Status, rec.FailureReason, rec.Trace, r.out.String())
@@ -120,8 +119,8 @@ func TestShutdownTimeoutFailsTheJobAsARunnerSystemFailure(t *testing.T) {
 	}
 	s, r := runUntilMidScript(t, 2*time.Second, 120)
 	start := time.Now()
-	r.signal(t, syscall.SIGTERM)
-	rec := finalRecord(t, s, r, 60*time.Second)
+	r.sigterm(t)
+	rec := finalRecord(t, s, 60*time.Second)
 	if rec.Status != fakegitlab.StatusFailed || rec.FailureReason != "runner_system_failure" {
 		t.Fatalf("job ended %s (%s); want failed with runner_system_failure\nrunner:\n%s", rec.Status, rec.FailureReason, r.out.String())
 	}
@@ -144,11 +143,11 @@ func TestSecondSignalCancelsRunningJobs(t *testing.T) {
 		t.Skip("end-to-end")
 	}
 	s, r := runUntilMidScript(t, 5*time.Minute, 120)
-	r.signal(t, syscall.SIGTERM)
+	r.sigterm(t)
 	time.Sleep(time.Second)
 	start := time.Now()
-	r.signal(t, syscall.SIGTERM)
-	rec := finalRecord(t, s, r, 45*time.Second)
+	r.sigterm(t)
+	rec := finalRecord(t, s, 45*time.Second)
 	if rec.Status != fakegitlab.StatusFailed || rec.FailureReason != "runner_system_failure" {
 		t.Fatalf("job ended %s (%s); want failed with runner_system_failure\nrunner:\n%s", rec.Status, rec.FailureReason, r.out.String())
 	}

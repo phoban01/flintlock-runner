@@ -288,7 +288,7 @@ func TestPrepareTimeout(t *testing.T) {
 		if !strings.Contains(err.Error(), "prepare did not complete within 50ms") {
 			t.Errorf("error = %v, want the prepare timeout", err)
 		}
-		buildError(t, err)
+		_ = buildError(t, err)
 	case <-time.After(10 * time.Second):
 		t.Fatal("Prepare did not return after the prepare timeout")
 	}
