@@ -327,6 +327,8 @@ type fixture struct {
 	deps     Deps
 	opts     []Option
 	provider *provider
+	// currentBuild is the Build runBuild is running.
+	currentBuild *common.Build
 }
 
 func newFixture(t *testing.T) *fixture {
@@ -445,6 +447,7 @@ func (f *fixture) runBuild(ctx context.Context, job spec.Job) (*recordTrace, *co
 		f.t.Fatal(err)
 	}
 	trace := newRecordTrace()
+	f.currentBuild = b
 	err = b.Run(ctx, &common.Config{}, trace)
 	return trace, b, err
 }

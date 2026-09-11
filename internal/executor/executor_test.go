@@ -50,7 +50,9 @@ func TestPrepareResolvesTheProfileForTheJob(t *testing.T) {
 func TestPrepareWithoutAProfileFailsRunnerUnsupported(t *testing.T) {
 	t.Parallel()
 	f := newFixture(t)
-	f.sched.profileErr = &scheduler.ProfileError{Image: "ruby:3.3"}
+	// The Scheduler's error deliberately does not name the image, so the
+	// log line has to.
+	f.sched.profileErr = scheduler.ErrNoProfile
 	job := testJob()
 	job.Image.Name = "ruby:3.3"
 	_, trace, err := f.prepareOnly(context.Background(), job)
@@ -580,12 +582,13 @@ func TestCancelTerminatesTheStageWithinTheGracefulKillTimeout(t *testing.T) {
 	if err := clk.BlockUntil(context.Background(), 1); err != nil {
 		t.Fatal(err)
 	}
+	clk.Advance(7*time.Second - time.Millisecond)
 	select {
 	case err := <-errc:
 		t.Fatalf("Run returned %v before the graceful kill timeout", err)
-	default:
+	case <-time.After(200 * time.Millisecond):
 	}
-	clk.Advance(7 * time.Second)
+	clk.Advance(time.Millisecond)
 	select {
 	case err := <-errc:
 		if !errors.Is(err, context.Canceled) {
@@ -646,6 +649,47 @@ func TestHandleDoneAbortsTheJobAsARunnerSystemFailure(t *testing.T) {
 				t.Errorf("microvm handed back %d times, want 1", released)
 			}
 		})
+	}
+}
+
+//= docs/requirements/03-scheduler.md#host-health
+//= type=test
+//# When a Host becomes unhealthy, the Scheduler SHALL abort every
+//# Job whose MicroVM is placed on that Host with the failure reason
+//# `runner_system_failure` and release their Leases.
+
+// TestHandleDoneAbortsAStageBeforeTheBuildContextExists closes the Handle
+// while a Stage runs under a context that knows nothing of it, which is the
+// prepare_script Stage's position: the Build derives its context from the
+// Handle only for the Stages after it. Run itself has to stop the Stage
+// with a runner_system_failure.
+func TestHandleDoneAbortsAStageBeforeTheBuildContextExists(t *testing.T) {
+	t.Parallel()
+	f := newFixture(t)
+	e, _, err := f.prepareOnly(context.Background(), testJob())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer e.Cleanup()
+	f.tr.hook = func(ctx context.Context, _ transport.Command, _ []byte) (int, error) {
+		h := f.sched.handles[0]
+		h.err = scheduler.ErrHostUnhealthy
+		close(h.done)
+		<-ctx.Done()
+		return -1, ctx.Err()
+	}
+	errc := make(chan error, 1)
+	go func() {
+		errc <- e.Run(common.ExecutorCommand{Script: "true\n", Stage: common.BuildStagePrepare, Context: context.Background()})
+	}()
+	select {
+	case err := <-errc:
+		be := buildError(t, err)
+		if be.FailureReason != common.RunnerSystemFailure || !errors.Is(err, scheduler.ErrHostUnhealthy) {
+			t.Errorf("error = %v (%s), want runner_system_failure from the unhealthy host", err, be.FailureReason)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("the stage kept running after the handle was done")
 	}
 }
 
@@ -753,8 +797,14 @@ func TestKeepOnFailureRetainsAFailedJobsMicroVM(t *testing.T) {
 				if retained != 1 || released != 0 {
 					t.Errorf("retained %d, released %d; want the failed job's microvm retained", retained, released)
 				}
-				if !strings.Contains(trace.String(), "vm-a") || !strings.Contains(trace.String(), "host-a") {
-					t.Errorf("job log does not name the retained microvm and host:\n%s", trace)
+				found := false
+				for _, line := range strings.Split(trace.String(), "\n") {
+					if strings.Contains(line, "keep_on_failure") && strings.Contains(line, "vm-a") && strings.Contains(line, "host-a") {
+						found = true
+					}
+				}
+				if !found {
+					t.Errorf("job log has no keep-on-failure line naming the microvm and host:\n%s", trace)
 				}
 				return
 			}
