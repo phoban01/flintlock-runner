@@ -41,6 +41,14 @@ make demo DEMO_ARGS='-keep'                # leave the stack up; type commands t
 make e2e                                   # the end-to-end scenarios (TD-050)
 ```
 
+## Releases
+
+Tagged builds for `linux/amd64` and `linux/arm64` are on the
+[releases page](https://github.com/phoban01/flintlock-runner/releases):
+`vX.Y.Z-rc.N` tags are release candidates, published as pre-releases, and
+`vX.Y.Z` tags are releases. Each ships the requirements report for its
+commit. [docs/RELEASING.md](docs/RELEASING.md) is the procedure.
+
 ## Requirements tracing
 
 Requirements are written in EARS form with uppercase `SHALL` so that
@@ -73,3 +81,7 @@ internal/config/        YAML schema, validation, RunnerConfig translation
 internal/testing/       fakegitlab, fakes3 and harness (TD-050..TD-054); the harness exports the hardware-tier env var names
 hack/                   CI helper scripts
 ```
+
+## License
+
+Apache License 2.0, the same as [battery](https://github.com/liquidmetal-dev/battery). See [LICENSE](LICENSE).
