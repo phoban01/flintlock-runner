@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"slices"
 	"sort"
 	"sync"
 	"time"
@@ -77,8 +78,22 @@ type impl struct {
 	// it before returning, so nothing outlives the Scheduler.
 	wg sync.WaitGroup
 
-	mu           sync.Mutex
-	state        runState
+	// applyMu serialises handing the Inventory and the Profiles on to the
+	// Host Registry and the Pool Manager: Run's startup and every Reload take
+	// it around their snapshot and the Apply and declarations made from it.
+	// Unlike mu it is held across those calls, which is the point: without it
+	// Run could apply the Inventory it started with after a Reload had
+	// applied a newer one, and two Reloads could apply theirs in the opposite
+	// order to the one they were set in. It is taken before mu, never after.
+	applyMu sync.Mutex
+
+	mu    sync.Mutex
+	state runState
+	// profiles, set.Profiles, set.Inventory and hosts are what Reload
+	// replaces. They are read only under mu, or through profileSnapshot,
+	// profileByName, inventorySnapshot and inventoryHosts, which copy them
+	// under it; Reload replaces all four in one hold of mu, so no reader sees
+	// the Inventory of one Reload with the Host health table of another.
 	profiles     []*Profile
 	reservations map[uint64]time.Time
 	allocations  map[uint64]*handle
@@ -114,6 +129,9 @@ func New(deps Deps, settings Settings) (Scheduler, error) {
 	if settings.Slots <= 0 {
 		return nil, fmt.Errorf("scheduler: settings: slots is %d, want at least 1", settings.Slots)
 	}
+	// The caller keeps its slices; the Scheduler reads its own copies.
+	settings.Profiles = slices.Clone(settings.Profiles)
+	settings.Inventory = slices.Clone(settings.Inventory)
 	s := &impl{
 		deps:         deps,
 		set:          settings,
@@ -145,7 +163,7 @@ func New(deps Deps, settings Settings) (Scheduler, error) {
 		s.metrics = nopMetrics{}
 	}
 	s.profiles = resolveProfiles(settings.Profiles, settings.Namespace)
-	s.resetHosts(settings.Inventory)
+	s.resetHostsLocked(settings.Inventory)
 	return s, nil
 }
 
@@ -192,12 +210,11 @@ func resolveProfiles(profiles []config.Profile, namespace string) []*Profile {
 	return out
 }
 
-// resetHosts replaces the Host health table with one entry per Inventory
-// Host, keeping the state of Hosts that are in both. A new Host starts
-// healthy so that a Job placed on it before its first probe is not aborted.
-func (s *impl) resetHosts(inventory []config.HostEntry) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
+// resetHostsLocked replaces the Host health table with one entry per
+// Inventory Host, keeping the state of Hosts that are in both. A new Host
+// starts healthy so that a Job placed on it before its first probe is not
+// aborted. The caller holds mu, or is New and has not shared s yet.
+func (s *impl) resetHostsLocked(inventory []config.HostEntry) {
 	next := make(map[string]*hostState, len(inventory))
 	for _, h := range inventory {
 		if old, ok := s.hosts[h.Name]; ok {
@@ -253,10 +270,7 @@ func (s *impl) Run(ctx context.Context) error {
 	runCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
-	if err := s.deps.Hosts.Apply(runCtx, endpoints(s.set.Inventory)); err != nil {
-		s.log.Warn("host registry could not be built from the inventory", "error", err)
-	}
-	s.declareAll(runCtx)
+	s.applyCurrent(runCtx)
 
 	var loops sync.WaitGroup
 	s.startLoop(&loops, func() { s.runTracker(runCtx) })
@@ -276,6 +290,20 @@ func (s *impl) Run(ctx context.Context) error {
 	s.wg.Wait()
 	s.setState(stateStopped)
 	return nil
+}
+
+// applyCurrent builds the Host Registry from the Inventory and declares the
+// Pools, at Run's startup. It holds applyMu, so a Reload that lands while Run
+// is starting is applied either wholly before this, in which case the
+// snapshot here already has its Inventory, or wholly after it; either way the
+// last Inventory applied is the last one set.
+func (s *impl) applyCurrent(ctx context.Context) {
+	s.applyMu.Lock()
+	defer s.applyMu.Unlock()
+	if err := s.deps.Hosts.Apply(ctx, endpoints(s.inventorySnapshot())); err != nil {
+		s.log.Warn("host registry could not be built from the inventory", "error", err)
+	}
+	s.declareAll(ctx)
 }
 
 // start claims the run and builds the background context. It returns
@@ -357,15 +385,25 @@ func (s *impl) contacted() bool {
 	}
 }
 
-// Reload implements Lifecycle (CF-007).
+// Reload implements Lifecycle (CF-007). The Profiles, the Inventory and the
+// Host health table are replaced together, under one hold of mu, and the
+// Registry and the Pools are brought up to date under applyMu, so that
+// Reloads racing each other or Run's startup are applied in the order they
+// were set. Reload may be called at any time, before, during or after Run.
 func (s *impl) Reload(ctx context.Context, profiles []config.Profile, inventory []config.HostEntry) error {
+	profiles = slices.Clone(profiles)
+	inventory = slices.Clone(inventory)
 	next := resolveProfiles(profiles, s.set.Namespace)
+
+	s.applyMu.Lock()
+	defer s.applyMu.Unlock()
 
 	s.mu.Lock()
 	previous := s.profiles
 	s.profiles = next
 	s.set.Profiles = profiles
 	s.set.Inventory = inventory
+	s.resetHostsLocked(inventory)
 	s.mu.Unlock()
 
 	for _, p := range previous {
@@ -381,7 +419,6 @@ func (s *impl) Reload(ctx context.Context, profiles []config.Profile, inventory 
 		s.deps.Tracker.Untrack(p.PoolRef)
 	}
 
-	s.resetHosts(inventory)
 	if err := s.deps.Hosts.Apply(ctx, endpoints(inventory)); err != nil {
 		return fmt.Errorf("scheduler: reload host registry: %w", err)
 	}
