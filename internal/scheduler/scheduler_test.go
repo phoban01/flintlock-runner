@@ -280,6 +280,98 @@ func TestReloadReplacesProfilesAndKeepsTheOldPool(t *testing.T) {
 	}
 }
 
+// TestReloadWhileRunningIsRaceFree is the regression test for Run reading
+// the Inventory without the lock while Reload replaced it, which the race
+// detector found once the Runner refreshed its Inventory periodically
+// (FL-092). Reload is called over and over, with an Inventory and a Profile
+// list that change every time, from before Run starts until after it has
+// stopped, while the probe loop probes, the declaration loop retries and Jobs
+// are allocated and released. It checks little of its own beyond the Jobs
+// going through: its point is that `go test -race` sees every access to what
+// Reload replaces. Run is started afresh in every round, because its startup
+// is where it first reads the Inventory.
+func TestReloadWhileRunningIsRaceFree(t *testing.T) {
+	t.Parallel()
+	ctx := testContext(t)
+	for round := range 20 {
+		reloadWhileRunning(t, ctx, round)
+	}
+}
+
+// reloadWhileRunning is one round of TestReloadWhileRunningIsRaceFree.
+func reloadWhileRunning(t *testing.T, ctx context.Context, round int) {
+	t.Helper()
+	client := newStubClient()
+	client.script(func(c *stubClient) {
+		c.claimFn = claimsFrom("host-1")
+		c.beatFn = beatsFor(clock.NewFake(testEpoch), time.Hour)
+	})
+	// Every Inventory keeps host-1, which every claim names; the others come
+	// and go. The Registry holds all three, so Apply keeps whichever are named.
+	inventories := [][]config.HostEntry{
+		{testHostEntry("host-1")},
+		{testHostEntry("host-1"), testHostEntry("host-2")},
+		{testHostEntry("host-1"), testHostEntry("host-2"), testHostEntry("host-3")},
+		{testHostEntry("host-3"), testHostEntry("host-1")},
+	}
+	profiles := [][]config.Profile{
+		{testProfile("default", 2)},
+		{testProfile("default", 3), testProfile("extra", 1)},
+	}
+	e := newEnv(t, envConfig{client: client, inventory: inventories[2]})
+	e.health.contact()
+	e.tracker.setAvailable(e.poolOf("default"), 100)
+
+	// The reloader starts before Run, so that its Reloads overlap Run's
+	// startup as well as its steady state.
+	stopReloads := make(chan struct{})
+	reloaded := make(chan int, 1)
+	go func() {
+		n := 0
+		defer func() { reloaded <- n }()
+		for {
+			select {
+			case <-stopReloads:
+				return
+			default:
+			}
+			if err := e.sched.Reload(ctx, profiles[n%len(profiles)], inventories[(n+round)%len(inventories)]); err != nil {
+				t.Errorf("Reload: %v", err)
+				return
+			}
+			n++
+		}
+	}()
+	stop := e.run(ctx)
+
+	for job := range 5 {
+		// Probes, heartbeats and declaration retries all run on the fake
+		// clock; moving it lets each of them run against a changing Inventory.
+		e.clk.Advance(30 * time.Second)
+		_ = e.sched.Snapshot()
+
+		r, err := e.sched.Reserve(ctx)
+		if err != nil {
+			t.Fatalf("round %d: Reserve: %v", round, err)
+		}
+		p, err := e.sched.ResolveProfile(JobInfo{ID: int64(job)})
+		if err != nil {
+			t.Fatalf("round %d: ResolveProfile: %v", round, err)
+		}
+		h, err := e.sched.Allocate(ctx, r, JobInfo{ID: int64(job)}, p)
+		if err != nil {
+			t.Fatalf("round %d: Allocate: %v", round, err)
+		}
+		e.sched.Release(h)
+	}
+
+	close(stopReloads)
+	if n := <-reloaded; n == 0 {
+		t.Fatalf("round %d: no Reload overlapped the running Scheduler", round)
+	}
+	stop()
+}
+
 func TestRunTwiceIsRefused(t *testing.T) {
 	t.Parallel()
 	ctx := testContext(t)
