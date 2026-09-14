@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
@@ -139,6 +140,60 @@ func TestSaveWritesEveryHostWithEveryField(t *testing.T) {
 	}
 	if !reflect.DeepEqual(loaded.Hosts, inv.Hosts) {
 		t.Errorf("Store.Load = %#v, want %#v", loaded.Hosts, inv.Hosts)
+	}
+}
+
+// TestSaveKeepsAGroupReadGrant rewrites an Inventory whose group was given
+// read access, as `fleet up --install-runner` gives the Runner's user, and
+// checks that the rewrite keeps the group and its read permission but drops
+// anything wider.
+func TestSaveKeepsAGroupReadGrant(t *testing.T) {
+	t.Parallel()
+	path := filepath.Join(t.TempDir(), "inventory.yaml")
+	inv := &fleet.Inventory{Hosts: []config.HostEntry{fullEntry("host-a", "10.0.1.10")}}
+	if err := (Store{}).Save(context.Background(), path, inv); err != nil {
+		t.Fatal(err)
+	}
+	// A supplementary group of this process, when it has one, stands in
+	// for the Runner's group.
+	gid := os.Getgid()
+	if groups, err := os.Getgroups(); err == nil {
+		for _, g := range groups {
+			if g != gid {
+				gid = g
+				break
+			}
+		}
+	}
+	if err := os.Chown(path, -1, gid); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(path, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := (Store{}).Save(context.Background(), path, inv); err != nil {
+		t.Fatal(err)
+	}
+	fi, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if fi.Mode().Perm() != 0o640 {
+		t.Errorf("rewritten mode = %v, want 0640: the group read kept, the world read dropped", fi.Mode().Perm())
+	}
+	if got := int(fi.Sys().(*syscall.Stat_t).Gid); got != gid {
+		t.Errorf("rewritten group = %d, want %d", got, gid)
+	}
+
+	// Without a group grant the file stays owner-only.
+	if err := os.Chmod(path, 0o604); err != nil {
+		t.Fatal(err)
+	}
+	if err := (Store{}).Save(context.Background(), path, inv); err != nil {
+		t.Fatal(err)
+	}
+	if fi, err := os.Stat(path); err != nil || fi.Mode().Perm() != 0o600 {
+		t.Errorf("rewritten mode = %v (%v), want 0600", fi.Mode().Perm(), err)
 	}
 }
 
