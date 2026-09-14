@@ -385,7 +385,7 @@ func TestFleetUpInstallsTheRunnerService(t *testing.T) {
 	if len(runs) != 1 || runs[0].Name != string(fleet.StepRunner) || runs[0].Instance != controlNodeName {
 		t.Fatalf("Control Node scripts = %+v, want the runner step once", runs)
 	}
-	if !strings.Contains(out[strings.Index(out, "verification passed"):], "installing the Runner") {
+	if passed, installing := strings.Index(out, "verification passed"), strings.Index(out, "installing the Runner"); passed < 0 || installing < passed {
 		t.Errorf("want the Runner installed after verification passed:\n%s", out)
 	}
 	rendered := std.renderedFor(fleet.StepRunner)
