@@ -80,8 +80,8 @@ const flintlockTemplate = "flintlock.sh.tmpl"
 //= docs/requirements/06-fleet.md#host-services
 //# The Fleet Controller SHALL add guest firewall rules that allow
 //# traffic from the guest subnet to the bridge gateway address only on the
-//# Host Service ports and SHALL keep every other port on the gateway closed
-//# to guests.
+//# Host Service ports and the ports of the DHCP and DNS service bound to the
+//# bridge, and SHALL keep every other port on the gateway closed to guests.
 
 //= docs/requirements/09-security.md#guest-egress
 //# The Fleet Controller SHALL ensure that guests cannot reach the
@@ -233,8 +233,20 @@ const verifyActiveTemplate = "verify_active.sh.tmpl"
 // generated from the Inventory entries, by their names (FL-051, FL-055).
 const controlNodeTemplate = "control_node.sh.tmpl"
 
+//= docs/requirements/06-fleet.md#drain-and-teardown
+//# The Fleet Controller SHALL provide a teardown command that
+//# deletes the declared Pools through the Pool Manager, waits for their
+//# MicroVMs to be removed, stops and disables the installed services on every
+//# Host and removes the Inventory.
+
+//= docs/requirements/06-fleet.md#drain-and-teardown
+//# The teardown command SHALL NOT remove the thin pool or its
+//# backing device unless the purge flag is passed explicitly.
+
 // drainTemplate, teardownTemplate and userDataTemplate serve `fleet drain`,
-// `fleet teardown` and `fleet emit-userdata`.
+// `fleet teardown` and `fleet emit-userdata`. The teardown script stops and
+// disables every unit the Host steps install, the ones verify_active checks,
+// and removes the thin pool only when the purge option is "true".
 const (
 	drainTemplate    = "drain.sh.tmpl"
 	teardownTemplate = "teardown.sh.tmpl"

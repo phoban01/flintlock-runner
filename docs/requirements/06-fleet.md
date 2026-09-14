@@ -247,8 +247,8 @@ each Host for the Guest Transport.
   configuration.
 - **FL-108** The Fleet Controller SHALL add guest firewall rules that allow
   traffic from the guest subnet to the bridge gateway address only on the
-  Host Service ports and SHALL keep every other port on the gateway closed
-  to guests.
+  Host Service ports and the ports of the DHCP and DNS service bound to the
+  bridge, and SHALL keep every other port on the gateway closed to guests.
 - **FL-109** The verification command SHALL, from inside a verification
   MicroVM on each Host, build a trivial image with `buildctl`, fetch a
   module through the Go module proxy, pull an image through the registry

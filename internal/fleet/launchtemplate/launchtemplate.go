@@ -8,6 +8,8 @@
 package launchtemplate
 
 import (
+	"bytes"
+	"compress/gzip"
 	"context"
 	"errors"
 	"fmt"
@@ -206,6 +208,36 @@ func compose(region string, secrets []secret, body string) string {
 	b.WriteString(delim + "\n")
 	b.WriteString("bash \"$steps\" </dev/null\n")
 	return b.String()
+}
+
+// MaxUserDataBytes is EC2's limit on an instance's user-data, counted
+// before base64 encoding. A launch template whose user-data is longer is
+// rejected, and so is every instance an auto scaling group launches from
+// it.
+const MaxUserDataBytes = 16384
+
+// Compress returns user-data gzip-compressed, which cloud-init detects and
+// decompresses before running the script. The script embeds every Host
+// provisioning step and is several times EC2's limit uncompressed, so this
+// is the form a launch template carries. The output is deterministic, and
+// a result over MaxUserDataBytes is an error rather than a launch template
+// EC2 would refuse.
+func Compress(userData []byte) ([]byte, error) {
+	var b bytes.Buffer
+	zw, err := gzip.NewWriterLevel(&b, gzip.BestCompression)
+	if err != nil {
+		return nil, err
+	}
+	if _, err := zw.Write(userData); err != nil {
+		return nil, err
+	}
+	if err := zw.Close(); err != nil {
+		return nil, err
+	}
+	if b.Len() > MaxUserDataBytes {
+		return nil, fmt.Errorf("launchtemplate: the user-data is %d bytes gzip-compressed (%d uncompressed), over EC2's limit of %d", b.Len(), len(userData), MaxUserDataBytes)
+	}
+	return b.Bytes(), nil
 }
 
 func shellQuote(s string) string {

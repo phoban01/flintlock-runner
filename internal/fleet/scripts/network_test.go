@@ -198,8 +198,8 @@ func TestNetworkingRestrictsEgressToAllowList(t *testing.T) {
 //= type=test
 //# The Fleet Controller SHALL add guest firewall rules that allow
 //# traffic from the guest subnet to the bridge gateway address only on the
-//# Host Service ports and SHALL keep every other port on the gateway closed
-//# to guests.
+//# Host Service ports and the ports of the DHCP and DNS service bound to the
+//# bridge, and SHALL keep every other port on the gateway closed to guests.
 
 func TestFirewallOpensOnlyHostServicePortsOnGateway(t *testing.T) {
 	t.Parallel()
