@@ -25,6 +25,7 @@ import (
 	"github.com/phoban01/flintlock-runner/internal/config"
 	"github.com/phoban01/flintlock-runner/internal/config/runnercfg"
 	"github.com/phoban01/flintlock-runner/internal/executor"
+	"github.com/phoban01/flintlock-runner/internal/fleet/discovery"
 	"github.com/phoban01/flintlock-runner/internal/flintlock"
 	"github.com/phoban01/flintlock-runner/internal/flintlock/inventory"
 	"github.com/phoban01/flintlock-runner/internal/poolmgr"
@@ -74,11 +75,48 @@ func runRunner(c *cli.Context) error {
 		return cli.NewExitError(err.Error(), 1)
 	}
 
-	r, err := newRunner(ctx, cfg, log, func(s executor.Stopper) { takeOverStopSignals(ctx, s, log) })
+	//= docs/requirements/06-fleet.md#launch-template-mode
+	//# Where launch template mode is selected, the Runner SHALL refresh
+	//# its Inventory from tag discovery at the configured interval so that
+	//# self-provisioned Hosts join without a restart.
+	//
+	// NewRefresher returns nil unless launch template mode's refresh is
+	// on, and then builds nothing but a DescribeInstances client (SE-041).
+	// Every refresh goes through live, which merges the discovered Hosts
+	// into the configured Inventory and, once the Runner is built, applies
+	// the result as a SIGHUP reload does. The Runner starts with the first
+	// refresh's Hosts when it answers in time.
+	live := newLiveInventory(cfg, log)
+	refresher, err := discovery.NewRefresher(ctx, cfg.Fleet, live.refresh, discovery.WithLogger(log))
 	if err != nil {
 		return cli.NewExitError(err.Error(), 1)
 	}
+	refreshCtx, stopRefresh := context.WithCancel(ctx)
+	refreshDone := make(chan struct{})
+	if refresher == nil {
+		close(refreshDone)
+	} else {
+		go func() {
+			defer close(refreshDone)
+			_ = refresher.Run(refreshCtx)
+		}()
+		live.awaitFirst(ctx, firstRefreshWait)
+	}
+	stopRefreshing := func() {
+		stopRefresh()
+		<-refreshDone
+	}
+	built := *cfg
+	built.Inventory.Hosts = live.hosts()
+
+	r, err := newRunner(ctx, &built, log, func(s executor.Stopper) { takeOverStopSignals(ctx, s, log) })
+	if err != nil {
+		stopRefreshing()
+		return cli.NewExitError(err.Error(), 1)
+	}
 	defer r.close()
+	// The refresher stops before the Runner's connections close.
+	defer stopRefreshing()
 
 	//= docs/requirements/01-gitlab-protocol.md#authentication
 	//# The Runner SHALL authenticate to GitLab with a runner
@@ -122,13 +160,19 @@ func runRunner(c *cli.Context) error {
 		return err
 	}
 
-	// SIGHUP reloads the Profiles and the Inventory (CF-007). The run loop
-	// also sees SIGHUP and re-reads its own file, which has not changed.
+	// SIGHUP reloads the Profiles and the Inventory (CF-007), and so does
+	// every refresh that changes the Hosts: both reach the executor's view
+	// of the Inventory and the Scheduler through apply. The run loop also
+	// sees SIGHUP and re-reads its own file, which has not changed.
+	apply := func(ctx context.Context, profiles []config.Profile, hosts []config.HostEntry) error {
+		r.inventory.set(hosts)
+		return r.sched.Reload(ctx, profiles, hosts)
+	}
+	if err := live.attach(ctx, apply, built.Inventory.Hosts); err != nil {
+		log.Warn("inventory refresh: applying discovered hosts failed", "error", err)
+	}
 	reloader := config.NewReloader(cfg, path, config.WithLogger(log))
-	reloader.Subscribe(func(ctx context.Context, next *config.Config) error {
-		r.inventory.set(next.Inventory.Hosts)
-		return r.sched.Reload(ctx, next.Profiles, next.Inventory.Hosts)
-	})
+	reloader.Subscribe(live.reload)
 	go func() { _ = reloader.ServeSIGHUP(ctx) }()
 
 	app := cli.NewApp()
