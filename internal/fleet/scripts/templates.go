@@ -264,6 +264,19 @@ const (
 // reports one line per service, which ParseOutput reads.
 const guestVerifyTemplate = "guest_verify.sh.tmpl"
 
+//= docs/requirements/06-fleet.md#one-shot-operation
+//# Where the install-runner flag is passed, the up command SHALL
+//# install the Runner as a systemd service on the Control Node that uses the
+//# generated Runner configuration, and SHALL enable and start it and verify
+//# that it is active.
+
+// runnerTemplate installs `flintlock-runner run` as a systemd service on
+// the Control Node, started with the generated Runner configuration, as an
+// unprivileged user that may read the files the Runner reads; it enables
+// and starts the service and fails unless it stays active. With the remove
+// option it stops and disables the service instead.
+const runnerTemplate = "runner.sh.tmpl"
+
 //= docs/requirements/02-executor.md#guest-transport
 //= type=todo
 //= tracking-issue=8
