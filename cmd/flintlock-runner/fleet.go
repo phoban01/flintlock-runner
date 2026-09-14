@@ -11,7 +11,6 @@ import (
 	"runtime"
 	"sort"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/urfave/cli"
@@ -20,93 +19,18 @@ import (
 	"github.com/phoban01/flintlock-runner/internal/config"
 	"github.com/phoban01/flintlock-runner/internal/fleet"
 	"github.com/phoban01/flintlock-runner/internal/fleet/ca"
+	"github.com/phoban01/flintlock-runner/internal/fleet/discovery"
 	"github.com/phoban01/flintlock-runner/internal/fleet/drain"
 	"github.com/phoban01/flintlock-runner/internal/fleet/inventory"
+	"github.com/phoban01/flintlock-runner/internal/fleet/launchtemplate"
+	"github.com/phoban01/flintlock-runner/internal/fleet/remote"
 	"github.com/phoban01/flintlock-runner/internal/fleet/verify"
-	"github.com/phoban01/flintlock-runner/internal/flintlock"
 	"github.com/phoban01/flintlock-runner/internal/poolmgr"
-	"github.com/phoban01/flintlock-runner/internal/transport"
 )
 
 // exitFleetFailure is the exit status of a fleet subcommand that ran and
 // found failures (FL-013, FL-071).
 const exitFleetFailure = 1
-
-// fleetSeams are the constructors of every dependency the fleet subcommands
-// take. The concrete Discovery, Remote, Scripts, Provisioner, EC2 and
-// Control Node installer are built by the access and provisioning work
-// packages; until they land their constructors report which package brings
-// them. Tests replace every seam with a fake.
-type fleetSeams struct {
-	// Discovery finds candidate instances (FL-001, FL-002, TD-044).
-	Discovery func(cfg *config.Config) (fleet.Discovery, error)
-	// Remote runs scripts on instances (FL-010, FL-011); out receives the
-	// streamed output.
-	Remote func(cfg *config.Config, out io.Writer) (fleet.Remote, error)
-	// Scripts renders the provisioning, drain and teardown scripts.
-	Scripts func(cfg *config.Config) (fleet.Scripts, error)
-	// Provisioner provisions one instance end to end with deps.
-	Provisioner func(cfg *config.Config, deps fleet.Deps) (fleet.Provisioner, error)
-	// EC2 is only needed by teardown --terminate.
-	EC2 func(cfg *config.Config) (fleet.EC2, error)
-	// Control installs and reloads the Pool Manager daemon (FL-051,
-	// FL-055). A nil ControlNode skips the reload.
-	Control func(cfg *config.Config, deps fleet.Deps) (fleet.ControlNode, error)
-
-	// PoolManager, Hosts and Transports are the Runner's own clients.
-	PoolManager func(cfg *config.Config) (poolmgr.Client, error)
-	Hosts       func() flintlock.Dialer
-	Transports  func() transport.Factory
-	// Leases counts leased MicroVMs on a drained Host.
-	Leases func(pm poolmgr.Client) drain.LeaseReporter
-	// Now is the clock for the Inventory's generated_at.
-	Now func() time.Time
-}
-
-// errNotWired is what a seam returns until its work package lands.
-func errNotWired(what, workPackage string) error {
-	return fmt.Errorf("%w: the %s lands with the %q work package (docs/PLAN.md)", ErrNotImplemented, what, workPackage)
-}
-
-// productionSeams are the seams of the released binary.
-//
-// Wiring left for the lead when wp/fleet-access and wp/fleet-provision
-// merge: Discovery, Remote and EC2 come from internal/fleet/discovery,
-// internal/fleet/remote and internal/fleet/awsclient; Scripts, Provisioner
-// and Control from internal/fleet/scripts and internal/fleet/provision.
-func productionSeams() fleetSeams {
-	return fleetSeams{
-		Discovery: func(*config.Config) (fleet.Discovery, error) {
-			return nil, errNotWired("instance discovery", "fleet-access")
-		},
-		Remote: func(*config.Config, io.Writer) (fleet.Remote, error) {
-			return nil, errNotWired("remote execution", "fleet-access")
-		},
-		Scripts: func(*config.Config) (fleet.Scripts, error) {
-			return nil, errNotWired("provisioning scripts", "fleet-provision")
-		},
-		Provisioner: func(*config.Config, fleet.Deps) (fleet.Provisioner, error) {
-			return nil, errNotWired("host provisioner", "fleet-provision")
-		},
-		EC2: func(*config.Config) (fleet.EC2, error) {
-			return nil, errNotWired("EC2 client", "fleet-access")
-		},
-		Control: func(*config.Config, fleet.Deps) (fleet.ControlNode, error) {
-			return nil, nil
-		},
-		PoolManager: func(cfg *config.Config) (poolmgr.Client, error) {
-			return poolmgr.NewClient(poolmgr.ClientConfig{
-				Endpoint: cfg.PoolManager.Endpoint,
-				TLS:      cfg.PoolManager.TLS,
-				Deadline: cfg.PoolManager.Deadline,
-			})
-		},
-		Hosts:      func() flintlock.Dialer { return flintlock.NewDialer() },
-		Transports: func() transport.Factory { return transport.NewFactory() },
-		Leases:     func(pm poolmgr.Client) drain.LeaseReporter { return drain.PoolLeases{Pools: pm} },
-		Now:        time.Now,
-	}
-}
 
 // fleetCommands registers the Fleet Controller subcommands (06-fleet.md).
 func fleetCommands(s fleetSeams) []cli.Command {
@@ -145,20 +69,20 @@ func fleetCommands(s fleetSeams) []cli.Command {
 			Action: func(c *cli.Context) error { return fleetTeardown(c, s) },
 		},
 		{
-			Name:  "emit-userdata",
-			Usage: "print the launch-template user-data script (FL-090)",
-			Action: func(*cli.Context) error {
-				return notImplemented("fleet emit-userdata", "fleet-provision")
+			Name: "emit-userdata",
+			Usage: "write the launch-template user-data to standard output, gzip-compressed as cloud-init " +
+				"accepts it and within EC2's 16 KB limit (FL-090)",
+			Flags: []cli.Flag{
+				cli.BoolFlag{Name: "plain", Usage: "write the uncompressed script instead, for inspection"},
 			},
+			Action: func(c *cli.Context) error { return fleetEmitUserData(c, s) },
 		},
 	}
 }
 
-// seamErr turns a seam's error into the command's exit error.
+// seamErr turns the error of building a dependency into the command's exit
+// error.
 func seamErr(err error) error {
-	if errors.Is(err, ErrNotImplemented) {
-		return cli.NewExitError(err.Error(), exitNotImplemented)
-	}
 	return cli.NewExitError(err.Error(), exitFleetFailure)
 }
 
@@ -296,19 +220,14 @@ func certificateAuthority(cfg *config.Config) ca.Authority {
 	return ca.Authority{Supplied: cfg.Fleet.Flintlockd.TLS, Overrides: cfg.Fleet.EndpointOverrides}
 }
 
-// isMetal reports whether an instance can run KVM. Static hosts are
-// whatever the operator listed. This is the minimum FL-003 filter the
-// provisioning flow needs; the discovery package may replace it.
-func isMetal(inst fleet.Instance) bool {
-	return inst.Type == "static" || inst.Type == "" || strings.HasSuffix(inst.Type, ".metal")
-}
-
 // fleetProvision is `fleet provision`: discover, provision only the new
-// instances, merge them into the Inventory, drop the vanished ones, and
-// write the Inventory and the Runner configuration.
+// instances, merge them into the Inventory, drop the vanished ones, write
+// the Inventory and the Runner configuration, and install or reload the
+// Pool Manager daemon with the new host list.
 func fleetProvision(c *cli.Context, s fleetSeams) error {
 	ctx := context.Background()
-	out := c.App.Writer
+	// Every instance's output streams here at once (FL-014).
+	out := remote.SyncWriter(c.App.Writer)
 	cfg, err := loadFleetConfig(c, nil, true)
 	if err != nil {
 		return err
@@ -320,7 +239,9 @@ func fleetProvision(c *cli.Context, s fleetSeams) error {
 		return cli.NewExitError(err.Error(), exitFleetFailure)
 	}
 
-	disc, err := s.Discovery(cfg)
+	disc, err := s.discovery(ctx, cfg, func(u discovery.Unsupported) {
+		fmt.Fprintf(out, "excluded %s: %s\n", u.Instance.ID, u.Reason)
+	})
 	if err != nil {
 		return seamErr(err)
 	}
@@ -338,22 +259,19 @@ func fleetProvision(c *cli.Context, s fleetSeams) error {
 	for _, h := range plan.Removed {
 		fmt.Fprintf(out, "removed %s (instance %s) from the Inventory: the instance no longer exists\n", h.Name, inventory.InstanceID(&h))
 	}
-	var candidates []fleet.Instance
-	for _, inst := range plan.New {
-		if !isMetal(inst) {
-			fmt.Fprintf(out, "excluded %s: instance type %s is not bare metal, so KVM is unavailable\n", inst.ID, inst.Type)
-			continue
-		}
-		candidates = append(candidates, inst)
-	}
 	for _, inst := range plan.Known {
 		fmt.Fprintf(out, "%s is already in the Inventory; not provisioned again\n", inst.ID)
 	}
 
+	scr, err := s.scripts(cfg)
+	if err != nil {
+		return seamErr(err)
+	}
+	authority := certificateAuthority(cfg)
 	var failures []fleet.Failure
 	var added []config.HostEntry
-	if len(candidates) > 0 {
-		results, err := provisionNew(ctx, c, s, cfg, candidates)
+	if len(plan.New) > 0 {
+		results, err := provisionNew(ctx, s, cfg, out, scr, authority, peerInventory(cfg, current, plan), plan.New)
 		if err != nil {
 			return err
 		}
@@ -377,62 +295,91 @@ func fleetProvision(c *cli.Context, s fleetSeams) error {
 		return cli.NewExitError(err.Error(), exitFleetFailure)
 	}
 	fmt.Fprintf(out, "wrote the Inventory %s with %d Host(s)\n", invPath, len(merged.Hosts))
-	if err := writeRunnerConfig(ctx, c, cfg, merged); err != nil {
+	if err := writeRunnerConfig(ctx, c, out, cfg, merged); err != nil {
 		failures = append(failures, fleet.Failure{Host: "runner configuration", Err: err})
 	}
-	if err := reloadPoolManager(ctx, s, cfg, merged); err != nil {
-		failures = append(failures, fleet.Failure{Host: "control node", Step: fleet.StepControlNode, Err: err})
+	if len(merged.Hosts) > 0 || len(current.Hosts) > 0 {
+		if err := applyPoolManager(ctx, s, cfg, out, scr, authority, len(current.Hosts) == 0, merged); err != nil {
+			failures = append(failures, fleet.Failure{Host: controlNodeName, Step: fleet.StepControlNode, Err: err})
+		}
 	}
+	//= docs/requirements/06-fleet.md#remote-execution
+	//# If provisioning fails on one instance, then the Fleet Controller
+	//# SHALL continue provisioning the others and SHALL exit with a non-zero
+	//# status that summarises every failure.
+	//
+	// Every instance ran to its end in provisionNew whatever the others
+	// did, the ones that succeeded are in the Inventory, and every failure
+	// is one line of the exit message.
 	if len(failures) > 0 {
 		return cli.NewExitError(summarise("fleet provision", failures), exitFleetFailure)
 	}
 	return nil
 }
 
+// peerInventory is the Inventory the new instances' guest firewalls take
+// their peers from (FL-046): the Hosts that stay, and the instances being
+// provisioned alongside, at their private addresses.
+func peerInventory(cfg *config.Config, current *fleet.Inventory, plan inventory.Plan) fleet.Inventory {
+	peers := inventory.Merge(current, plan, nil, time.Time{})
+	for _, inst := range plan.New {
+		peers.Hosts = append(peers.Hosts, config.HostEntry{Name: inst.ID, Endpoint: discovery.Endpoint(fleet.Instance{ID: inst.ID, PrivateIP: inst.PrivateIP}, cfg.Fleet)})
+	}
+	return *peers
+}
+
 // provisionNew runs the Provisioner over instances with the configured
-// parallelism, collecting every result in the order of instances.
-func provisionNew(ctx context.Context, c *cli.Context, s fleetSeams, cfg *config.Config, instances []fleet.Instance) ([]fleet.HostResult, error) {
-	authority := certificateAuthority(cfg)
+// parallelism (FL-012) and returns every result in the order of instances.
+// One instance failing does not stop the others (FL-013).
+func provisionNew(ctx context.Context, s fleetSeams, cfg *config.Config, out io.Writer, scr fleet.Scripts, authority ca.Authority, peers fleet.Inventory, instances []fleet.Instance) ([]fleet.HostResult, error) {
+	var bundle *fleet.CertBundle
 	if !cfg.Fleet.Flintlockd.Insecure {
-		if _, err := authority.Ensure(ctx, tlsDir(cfg), instances); err != nil {
+		var err error
+		if bundle, err = authority.Ensure(ctx, tlsDir(cfg), instances); err != nil {
 			return nil, cli.NewExitError(fmt.Sprintf("fleet provision: TLS material: %v", err), exitFleetFailure)
 		}
 	}
-	remote, err := s.Remote(cfg, c.App.Writer)
+	rem, err := s.remote(ctx, cfg)
 	if err != nil {
 		return nil, seamErr(err)
 	}
-	scripts, err := s.Scripts(cfg)
+	params, err := s.parameters(ctx, cfg)
 	if err != nil {
 		return nil, seamErr(err)
 	}
-	prov, err := s.Provisioner(cfg, fleet.Deps{
-		Remote:    remote,
-		Scripts:   scripts,
-		Inventory: inventory.Store{},
-		Certs:     authority,
-		Out:       c.App.Writer,
+	prov, err := s.provisioner(cfg, fleet.Deps{
+		Remote:     rem,
+		Scripts:    scr,
+		Parameters: params,
+		Inventory:  inventory.Store{},
+		Certs:      authority,
+		Out:        out,
+	}, bundle, func() fleet.Inventory { return peers })
+	if err != nil {
+		return nil, seamErr(err)
+	}
+	results, err := remote.Fan(ctx, instances, cfg.Fleet.Parallelism, func(ctx context.Context, inst fleet.Instance) (fleet.HostResult, error) {
+		res := prov.Provision(ctx, inst)
+		if res.Instance.ID == "" {
+			res.Instance = inst
+		}
+		if res.Err == nil && res.Entry == nil {
+			res.Err = errors.New("the provisioner returned no Inventory entry")
+		}
+		return res, res.Err
 	})
-	if err != nil {
-		return nil, seamErr(err)
-	}
-	results := make([]fleet.HostResult, len(instances))
-	limit := max(cfg.Fleet.Parallelism, 1)
-	sem := make(chan struct{}, limit)
-	var wg sync.WaitGroup
-	for i, inst := range instances {
-		wg.Add(1)
-		sem <- struct{}{}
-		go func() {
-			defer wg.Done()
-			defer func() { <-sem }()
-			results[i] = prov.Provision(ctx, inst)
-			if results[i].Instance.ID == "" {
-				results[i].Instance = inst
+	// An instance Fan never started, because ctx ended, has no result of
+	// its own; its failure is Fan's.
+	var failed remote.Failures
+	if errors.As(err, &failed) {
+		for _, f := range failed {
+			for i := range results {
+				if results[i].Instance.ID == "" && instances[i].ID == f.Instance.ID {
+					results[i] = fleet.HostResult{Instance: f.Instance, Err: f.Err}
+				}
 			}
-		}()
+		}
 	}
-	wg.Wait()
 	return results, nil
 }
 
@@ -463,7 +410,7 @@ func completeEntry(cfg *config.Config, res fleet.HostResult) (config.HostEntry, 
 // writeRunnerConfig writes the Runner configuration (FL-062). It is
 // generated from the configuration as written, without environment
 // overrides, and validated against the merged Inventory.
-func writeRunnerConfig(ctx context.Context, c *cli.Context, cfg *config.Config, merged *fleet.Inventory) error {
+func writeRunnerConfig(ctx context.Context, c *cli.Context, out io.Writer, cfg *config.Config, merged *fleet.Inventory) error {
 	path := cfg.Fleet.RunnerConfigPath
 	if len(merged.Hosts) == 0 {
 		return errors.New("no Host is provisioned yet, so there is no Runner configuration to write")
@@ -476,13 +423,13 @@ func writeRunnerConfig(ctx context.Context, c *cli.Context, cfg *config.Config, 
 		// The input is the Runner configuration and already points at the
 		// Inventory: rewriting it would only expand its defaults and drop
 		// its comments.
-		fmt.Fprintf(c.App.Writer, "the Runner configuration %s already references the Inventory\n", path)
+		fmt.Fprintf(out, "the Runner configuration %s already references the Inventory\n", path)
 		return nil
 	}
 	if err := (inventory.Store{}).SaveRunnerConfig(ctx, path, inventory.RunnerConfig(input, fleetInventoryPath(cfg))); err != nil {
 		return err
 	}
-	fmt.Fprintf(c.App.Writer, "wrote the Runner configuration %s\n", path)
+	fmt.Fprintf(out, "wrote the Runner configuration %s\n", path)
 	return nil
 }
 
@@ -511,17 +458,36 @@ func inputReferences(inputPath, runnerPath, inventoryPath string) bool {
 	return filepath.Clean(file) == filepath.Clean(inventoryPath)
 }
 
-// reloadPoolManager regenerates the Pool Manager's host list when a Control
-// Node installer is wired.
-func reloadPoolManager(ctx context.Context, s fleetSeams, cfg *config.Config, inv *fleet.Inventory) error {
-	if s.Control == nil {
-		return nil
-	}
-	ctl, err := s.Control(cfg, fleet.Deps{Inventory: inventory.Store{}})
-	if err != nil || ctl == nil {
+// applyPoolManager installs the Pool Manager daemon on the Control Node
+// with a host list generated from inv on the first run (FL-051), and
+// regenerates the host list and reloads the daemon on every later one
+// (FL-055); the script restarts the daemon only when the list changed.
+func applyPoolManager(ctx context.Context, s fleetSeams, cfg *config.Config, out io.Writer, scr fleet.Scripts, authority ca.Authority, first bool, inv *fleet.Inventory) error {
+	pm, err := s.PoolManager(cfg)
+	if err != nil {
 		return err
 	}
-	return ctl.ReloadPoolManager(ctx, inv)
+	defer func() { _ = pm.Close() }()
+	ctl, err := s.control(ctx, cfg, fleet.Deps{
+		Scripts:     scr,
+		Inventory:   inventory.Store{},
+		Certs:       authority,
+		PoolManager: pm,
+		Out:         out,
+	})
+	if err != nil {
+		return err
+	}
+	if first {
+		err = ctl.InstallPoolManager(ctx, inv)
+	} else {
+		err = ctl.ReloadPoolManager(ctx, inv)
+	}
+	if err != nil {
+		return err
+	}
+	fmt.Fprintf(out, "the Pool Manager daemon lists %d Host(s)\n", len(inv.Hosts))
+	return nil
 }
 
 // hostFailure is the failure of one provisioning result, naming the step
@@ -666,18 +632,18 @@ func fleetDrain(c *cli.Context, s fleetSeams) error {
 
 	dcfg := drain.Config{Pools: pm, Leases: s.Leases(pm), Out: c.App.Writer}
 	if c.Bool("stop") {
-		remote, err := s.Remote(cfg, c.App.Writer)
+		rem, err := s.remote(ctx, cfg)
 		if err != nil {
 			return seamErr(err)
 		}
-		scripts, err := s.Scripts(cfg)
+		scr, err := s.scripts(cfg)
 		if err != nil {
 			return seamErr(err)
 		}
 		// Stop runs only once the Drainer has seen no leased MicroVM on the
 		// Host, and only then is the script told it may stop flintlockd.
 		dcfg.Stop = func(ctx context.Context, _ string) error {
-			return runStep(ctx, remote, scripts, cfg, inv, entry, fleet.StepDrain,
+			return runStep(ctx, rem, scr, cfg, inv, entry, fleet.StepDrain,
 				map[string]string{drain.OptionStopFlintlockd: "true"}, c.App.Writer)
 		}
 	}
@@ -727,17 +693,17 @@ func fleetTeardown(c *cli.Context, s fleetSeams) error {
 		return seamErr(err)
 	}
 	defer func() { _ = pm.Close() }()
-	remote, err := s.Remote(cfg, c.App.Writer)
+	rem, err := s.remote(ctx, cfg)
 	if err != nil {
 		return seamErr(err)
 	}
-	scripts, err := s.Scripts(cfg)
+	scr, err := s.scripts(cfg)
 	if err != nil {
 		return seamErr(err)
 	}
 	var ec2 fleet.EC2
 	if opts.Terminate {
-		if ec2, err = s.EC2(cfg); err != nil {
+		if ec2, err = s.ec2(ctx, cfg); err != nil {
 			return seamErr(err)
 		}
 	}
@@ -745,8 +711,8 @@ func fleetTeardown(c *cli.Context, s fleetSeams) error {
 		Pools:         pm,
 		Profiles:      cfg.Profiles,
 		Hosts:         s.Hosts(),
-		Scripts:       scripts,
-		Remote:        remote,
+		Scripts:       scr,
+		Remote:        rem,
 		Render:        fleet.RenderInput{Fleet: *cfg.Fleet, HostServices: cfg.HostServices, Profiles: cfg.Profiles},
 		EC2:           ec2,
 		InventoryPath: fleetInventoryPath(cfg),
@@ -760,5 +726,39 @@ func fleetTeardown(c *cli.Context, s fleetSeams) error {
 		return cli.NewExitError(err.Error(), exitFleetFailure)
 	}
 	fmt.Fprintln(c.App.Writer, "teardown complete")
+	return nil
+}
+
+// fleetEmitUserData is `fleet emit-userdata` (FL-090, FL-091): the
+// launch-template user-data, gzip-compressed so that it fits EC2's limit,
+// or with --plain the script itself.
+func fleetEmitUserData(c *cli.Context, s fleetSeams) error {
+	ctx := context.Background()
+	cfg, err := loadFleetConfig(c, nil, true)
+	if err != nil {
+		return err
+	}
+	scr, err := s.scripts(cfg)
+	if err != nil {
+		return seamErr(err)
+	}
+	// With parameters the emitter checks that every one exists and that
+	// no value read from them ends up in the user-data.
+	params, err := s.parameters(ctx, cfg)
+	if err != nil {
+		return seamErr(err)
+	}
+	userData, err := launchtemplate.NewEmitter(cfg, scr, params).Emit(ctx)
+	if err != nil {
+		return cli.NewExitError(fmt.Sprintf("fleet emit-userdata: %v", err), exitFleetFailure)
+	}
+	if !c.Bool("plain") {
+		if userData, err = launchtemplate.Compress(userData); err != nil {
+			return cli.NewExitError(fmt.Sprintf("fleet emit-userdata: %v", err), exitFleetFailure)
+		}
+	}
+	if _, err := c.App.Writer.Write(userData); err != nil {
+		return cli.NewExitError(fmt.Sprintf("fleet emit-userdata: %v", err), exitFleetFailure)
+	}
 	return nil
 }

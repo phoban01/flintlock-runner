@@ -4,13 +4,13 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"runtime"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -18,6 +18,7 @@ import (
 
 	"github.com/phoban01/flintlock-runner/internal/config"
 	"github.com/phoban01/flintlock-runner/internal/fleet"
+	"github.com/phoban01/flintlock-runner/internal/fleet/discovery"
 	"github.com/phoban01/flintlock-runner/internal/fleet/drain"
 	"github.com/phoban01/flintlock-runner/internal/fleet/inventory"
 	"github.com/phoban01/flintlock-runner/internal/fleet/opstest"
@@ -36,7 +37,37 @@ type fleetFixture struct {
 	remote      *opstest.Remote
 	scripts     *opstest.Scripts
 	ec2         *opstest.EC2
+	control     recordingControl
 	stack       *opstest.Stack
+}
+
+// recordingControl is a fleet.ControlNode that records the host lists it
+// is given.
+type recordingControl struct {
+	mu       sync.Mutex
+	installs [][]string
+	reloads  [][]string
+}
+
+func (r *recordingControl) InstallPoolManager(_ context.Context, inv *fleet.Inventory) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.installs = append(r.installs, hostNames(inv.Hosts))
+	return nil
+}
+
+func (r *recordingControl) ReloadPoolManager(_ context.Context, inv *fleet.Inventory) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.reloads = append(r.reloads, hostNames(inv.Hosts))
+	return nil
+}
+
+// calls returns the host lists of every install and reload so far.
+func (r *recordingControl) calls() (installs, reloads [][]string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return slices.Clone(r.installs), slices.Clone(r.reloads)
 }
 
 // fleetConfigYAML renders a fleet input. pmEndpoint is the Pool Manager;
@@ -121,11 +152,19 @@ func newFleetFixture(t *testing.T, pmEndpoint string, insecure bool) *fleetFixtu
 
 func (f *fleetFixture) seams() fleetSeams {
 	s := productionSeams()
-	s.Discovery = func(*config.Config) (fleet.Discovery, error) { return f.discovery, nil }
-	s.Remote = func(*config.Config, io.Writer) (fleet.Remote, error) { return f.remote, nil }
+	// Nothing here reaches AWS or runs a script on this machine.
+	s.AWS = nil
+	s.ControlRemote = &opstest.Remote{}
+	s.Discovery = func(context.Context, *config.Config, func(discovery.Unsupported)) (fleet.Discovery, error) {
+		return f.discovery, nil
+	}
+	s.Remote = func(context.Context, *config.Config) (fleet.Remote, error) { return f.remote, nil }
 	s.Scripts = func(*config.Config) (fleet.Scripts, error) { return f.scripts, nil }
-	s.Provisioner = func(*config.Config, fleet.Deps) (fleet.Provisioner, error) { return f.provisioner, nil }
-	s.EC2 = func(*config.Config) (fleet.EC2, error) { return f.ec2, nil }
+	s.Provisioner = func(*config.Config, fleet.Deps, *fleet.CertBundle, func() fleet.Inventory) (fleet.Provisioner, error) {
+		return f.provisioner, nil
+	}
+	s.EC2 = func(context.Context, *config.Config) (fleet.EC2, error) { return f.ec2, nil }
+	s.Control = func(context.Context, *config.Config, fleet.Deps) (fleet.ControlNode, error) { return &f.control, nil }
 	if f.stack != nil {
 		s.Leases = func(poolmgr.Client) drain.LeaseReporter { return drain.InspectorLeases{Inspector: f.stack.PoolManager} }
 	}
@@ -188,13 +227,13 @@ func TestFleetProvisionMergesNewAndRemovesVanishedInstances(t *testing.T) {
 	t.Parallel()
 	f := newFleetFixture(t, "127.0.0.1:9440", false)
 
-	f.discovery.SetInstances(metal("i-1", "10.0.1.1"), metal("i-2", "10.0.1.2"), fleet.Instance{ID: "i-small", Type: "c7g.large"})
+	f.discovery.SetInstances(metal("i-1", "10.0.1.1"), metal("i-2", "10.0.1.2"))
 	out, err := f.run(t, "provision")
 	if err != nil {
 		t.Fatalf("first provision: %v\n%s", err, out)
 	}
 	if got := f.provisioner.Seen(); !slices.Equal(sortedCopy(got), []string{"i-1", "i-2"}) {
-		t.Errorf("first run provisioned %v, want i-1 and i-2 and not the non-metal instance", got)
+		t.Errorf("first run provisioned %v, want i-1 and i-2", got)
 	}
 	inv, err := config.LoadInventoryFile(f.invPath)
 	if err != nil {
@@ -245,6 +284,15 @@ func TestFleetProvisionMergesNewAndRemovesVanishedInstances(t *testing.T) {
 	if inv.Hosts[0].Endpoint != first.Endpoint || inv.Hosts[0].VCPU != first.VCPU {
 		t.Errorf("the existing entry changed: %+v", inv.Hosts[0])
 	}
+	// The first run installed the Pool Manager daemon with the Inventory's
+	// hosts; the second regenerated the host list and reloaded it.
+	installs, reloads := f.control.calls()
+	if len(installs) != 1 || !slices.Equal(installs[0], []string{"i-1", "i-2"}) {
+		t.Errorf("Pool Manager installs = %v, want one with [i-1 i-2]", installs)
+	}
+	if len(reloads) != 1 || !slices.Equal(reloads[0], []string{"i-1", "i-3"}) {
+		t.Errorf("Pool Manager reloads = %v, want one with the new host list [i-1 i-3]", reloads)
+	}
 }
 
 func TestFleetProvisionReportsFailuresAndKeepsTheRest(t *testing.T) {
@@ -285,17 +333,6 @@ func TestFleetProvisionLeavesInventoryWhenDiscoveryFails(t *testing.T) {
 	}
 	if len(inv.Hosts) != 1 {
 		t.Errorf("a failed discovery removed Hosts: %v", hostNames(inv.Hosts))
-	}
-}
-
-func TestFleetSeamsNameTheirWorkPackage(t *testing.T) {
-	t.Parallel()
-	f := newFleetFixture(t, "127.0.0.1:9440", true)
-	app := newApp()
-	app.Writer, app.ErrWriter = io.Discard, io.Discard
-	err := app.Run([]string{"flintlock-runner", "--config", f.configPath, "fleet", "provision"})
-	if exitCode(err) != exitNotImplemented || !strings.Contains(err.Error(), "fleet-access") {
-		t.Errorf("provision without the access work package = %v, want exit %d naming it", err, exitNotImplemented)
 	}
 }
 
