@@ -92,5 +92,3 @@ tar -xzf flintlock-runner_0.1.0-rc.1_linux_amd64.tar.gz
   natural next step and needs only an `id-token: write` permission and a
   `signs` section in `.goreleaser.yaml`.
 - There is no container image.
-- The repository has no licence file. Until one is added, anyone downloading a
-  release has no licence to use it.

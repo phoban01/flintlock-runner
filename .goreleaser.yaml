@@ -40,6 +40,7 @@ archives:
     name_template: "flintlock-runner_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
     formats: [tar.gz]
     files:
+      - LICENSE
       - README.md
       - docs/architecture.md
   # The stand-ins: the fake Pool Manager, which an early fleet can run
@@ -49,6 +50,7 @@ archives:
     name_template: "flintlock-devtools_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
     formats: [tar.gz]
     files:
+      - LICENSE
       - README.md
 
 checksum:

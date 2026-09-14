@@ -81,3 +81,7 @@ internal/config/        YAML schema, validation, RunnerConfig translation
 internal/testing/       fakegitlab, fakes3 and harness (TD-050..TD-054); the harness exports the hardware-tier env var names
 hack/                   CI helper scripts
 ```
+
+## License
+
+Apache License 2.0, the same as [battery](https://github.com/liquidmetal-dev/battery). See [LICENSE](LICENSE).
