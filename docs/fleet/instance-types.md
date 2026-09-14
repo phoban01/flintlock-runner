@@ -24,6 +24,10 @@ it as unsupported because KVM is unavailable, with the reason detect gave
 i-0123456789abcdef0 (c8i.2xlarge): unsupported because KVM is unavailable: /dev/kvm does not exist; a virtualized instance type needs nested virtualization enabled
 ```
 
+In launch template mode the first-boot user-data makes the same check
+before it writes or runs any step, and stops with the same message in the
+instance's cloud-init log.
+
 The same step measures the Host's capacity: its online CPUs
 (`getconf _NPROCESSORS_ONLN`) and `MemTotal` from `/proc/meminfo`. The
 Inventory records these minus `fleet.host_reserve` (FL-061). `MemTotal` is
