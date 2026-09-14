@@ -232,6 +232,9 @@ func fleetProvision(c *cli.Context, s fleetSeams) error {
 	if err != nil {
 		return err
 	}
+	if err := checkSecretsOverSSM(cfg.Fleet); err != nil {
+		return cli.NewExitError(err.Error(), exitInvalidConfig)
+	}
 	store := inventory.Store{}
 	invPath := fleetInventoryPath(cfg)
 	current, err := store.Load(ctx, invPath)
@@ -343,8 +346,13 @@ func provisionNew(ctx context.Context, s fleetSeams, cfg *config.Config, out io.
 	if err != nil {
 		return nil, seamErr(err)
 	}
-	params, err := s.parameters(ctx, cfg)
-	if err != nil {
+	var params fleet.Parameters
+	if overSSM(cfg.Fleet) {
+		// Run Command has no standard input: the scripts read the token,
+		// the TLS material and the Host Service credentials from their
+		// Systems Manager parameters on the Host instead (SE-015).
+		rem = parameterSecrets{rem}
+	} else if params, err = s.parameters(ctx, cfg); err != nil {
 		return nil, seamErr(err)
 	}
 	prov, err := s.provisioner(cfg, fleet.Deps{
@@ -458,6 +466,47 @@ func inputReferences(inputPath, runnerPath, inventoryPath string) bool {
 	return filepath.Clean(file) == filepath.Clean(inventoryPath)
 }
 
+// overSSM reports whether scripts reach the Hosts through Systems Manager
+// Run Command, the default remote mode (FL-010).
+func overSSM(f *config.Fleet) bool { return f.Remote.Mode != config.RemoteSSH }
+
+// checkSecretsOverSSM refuses a fleet provisioned over Systems Manager
+// whose Hosts could not get their secrets. Run Command has no standard
+// input, so the Hosts read the flintlockd token and TLS material from the
+// Systems Manager parameters named in fleet.launch_template.parameters
+// (SE-015), and every Host gets the same certificate from them: the fleet
+// has to supply that material in fleet.flintlockd.tls too, so that the
+// Inventory and the Pool Manager trust the CA the Hosts serve with. A CA
+// generated on the Control Node could only reach the Hosts over SSH.
+func checkSecretsOverSSM(f *config.Fleet) error {
+	if !overSSM(f) {
+		return nil
+	}
+	if f.LaunchTemplate == nil || f.LaunchTemplate.Parameters.HostToken == "" {
+		return errors.New("fleet provision: over Systems Manager the Hosts read the flintlockd token and TLS material " +
+			"from Systems Manager parameters; name them in fleet.launch_template.parameters, or provision over SSH")
+	}
+	tls := f.Flintlockd.TLS
+	if !f.Flintlockd.Insecure && (tls.CAFile == "" || tls.CertFile == "" || tls.KeyFile == "") {
+		return errors.New("fleet provision: over Systems Manager every Host serves the certificate in the " +
+			"fleet.launch_template.parameters TLS parameters; set fleet.flintlockd.tls to the same CA, certificate " +
+			"and key so that the Runner and the Pool Manager trust it, or provision over SSH to generate per-Host certificates")
+	}
+	return nil
+}
+
+// parameterSecrets is a Remote over Systems Manager for the Provisioner,
+// which hands every step its secrets on standard input. Run Command has
+// none, so the bundle is left behind and the scripts read each secret from
+// the Systems Manager parameter named for it on the Host (SE-015).
+type parameterSecrets struct{ fleet.Remote }
+
+// Run implements fleet.Remote.
+func (r parameterSecrets) Run(ctx context.Context, inst fleet.Instance, s fleet.Script, out io.Writer) (*fleet.RunResult, error) {
+	s.Stdin = nil
+	return r.Remote.Run(ctx, inst, s, out)
+}
+
 // applyPoolManager installs the Pool Manager daemon on the Control Node
 // with a host list generated from inv on the first run (FL-051), and
 // regenerates the host list and reloads the daemon on every later one
@@ -496,10 +545,9 @@ func hostFailure(res fleet.HostResult) fleet.Failure {
 	f := fleet.Failure{Host: res.Instance.ID, Err: res.Err}
 	for _, st := range res.Steps {
 		if st.Err != nil {
-			f.Step = st.Step
-			if f.Err == nil {
-				f.Err = st.Err
-			}
+			// The step's own error: the summary names the Host and the
+			// step already, which the Provisioner's error repeats.
+			f.Step, f.Err = st.Step, st.Err
 		}
 	}
 	if f.Err == nil {
