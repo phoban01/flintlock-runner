@@ -15,8 +15,6 @@ import (
 // StateRunning is the EC2 instance state DescribeFilter defaults to (FL-001).
 const StateRunning = "running"
 
-var _ fleet.EC2 = (*EC2)(nil)
-
 // EC2 implements fleet.EC2 with the SDK. It calls only DescribeInstances and
 // TerminateInstances (SE-040).
 type EC2 struct {

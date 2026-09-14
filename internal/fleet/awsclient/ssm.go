@@ -25,11 +25,6 @@ const StatusPending = "Pending"
 // maxComment is the SendCommand Comment limit.
 const maxComment = 100
 
-var (
-	_ fleet.SSM        = (*SSM)(nil)
-	_ fleet.Parameters = (*Parameters)(nil)
-)
-
 // SSM implements fleet.SSM with the SDK. It calls only SendCommand,
 // GetCommandInvocation and ListCommandInvocations (SE-040).
 type SSM struct {

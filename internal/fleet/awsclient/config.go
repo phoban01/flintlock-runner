@@ -15,6 +15,21 @@ import (
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	awsconfig "github.com/aws/aws-sdk-go-v2/config"
+
+	"github.com/phoban01/flintlock-runner/internal/fleet"
+)
+
+//= docs/requirements/10-test-doubles.md#fake-aws
+//# The Fleet Controller SHALL access EC2 and Systems Manager
+//# through narrow interfaces of its own so that fakes can stand in for the
+//# AWS SDK.
+
+// The SDK clients are reached only through the fleet interfaces; awsfake
+// implements the same ones.
+var (
+	_ fleet.EC2        = (*EC2)(nil)
+	_ fleet.SSM        = (*SSM)(nil)
+	_ fleet.Parameters = (*Parameters)(nil)
 )
 
 //= docs/requirements/06-fleet.md#discovery
