@@ -24,14 +24,14 @@ func processGroupAlive(pgid int) bool {
 }
 
 // fakeRunner writes an executable bash script that stands in for
-// flintlock-runner and returns its path.
+// flr and returns its path.
 func fakeRunner(t *testing.T, body string) string {
 	t.Helper()
 	bash, err := lookBash()
 	if err != nil {
 		t.Skip(err)
 	}
-	path := filepath.Join(t.TempDir(), "flintlock-runner")
+	path := filepath.Join(t.TempDir(), "flr")
 	script := "#!" + bash + "\n" + body + "\n"
 	if err := os.WriteFile(path, []byte(script), 0o755); err != nil {
 		t.Fatal(err)

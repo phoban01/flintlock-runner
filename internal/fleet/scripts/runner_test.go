@@ -13,7 +13,7 @@ func runnerInput() fleet.RenderInput {
 	in := fullInput()
 	in.Options = map[string]string{
 		OptionRunnerConfig:      "/etc/flintlock-runner/config.yaml",
-		OptionRunnerBinary:      "/home/ops/flintlock-runner",
+		OptionRunnerBinary:      "/home/ops/flr",
 		OptionRunnerStateDir:    "/var/lib/flintlock-runner",
 		OptionRunnerReads:       "/etc/flintlock-runner/config.yaml\n/etc/flintlock-runner/inventory.yaml\n/etc/flintlock-runner/tls/ca.pem",
 		OptionRunnerStopTimeout: "1m30s",
@@ -37,8 +37,8 @@ func TestRunnerStepInstallsEnablesAndChecksTheService(t *testing.T) {
 	t.Parallel()
 	sc := render(t, fleet.StepRunner, runnerInput())
 	mustContain(t, sc,
-		"install -D -m 0755 '/home/ops/flintlock-runner' \"$bin\"",
-		"bin='/usr/local/bin/flintlock-runner'",
+		"install -D -m 0755 '/home/ops/flr' \"$bin\"",
+		"bin='/usr/local/bin/flr'",
 		"config='/etc/flintlock-runner/config.yaml'",
 		`ensure_user "$user" "$state"`,
 		"User=$user\nGroup=$user\n",

@@ -1,7 +1,7 @@
 # A complete flintlock-runner configuration. Every section and every optional
 # field is set, so this file doubles as the reference for the schema in
 # docs/requirements/07-configuration.md. testdata/full.show.golden is what
-# `flintlock-runner config show` prints for it. Secrets can also come from
+# `flr config show` prints for it. Secrets can also come from
 # the environment (FLINTLOCK_RUNNER_GITLAB_TOKEN, FLINTLOCK_RUNNER_HOST_TOKEN,
 # FLINTLOCK_RUNNER_HOST_TOKEN_<NAME>, FLINTLOCK_RUNNER_FLEET_HOST_TOKEN), which
 # wins over the file.

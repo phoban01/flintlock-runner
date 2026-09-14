@@ -100,7 +100,7 @@ func redactValue(v reflect.Value) {
 
 // Show writes the effective configuration, that is c after environment
 // overrides, Inventory resolution and defaults, as YAML with every secret
-// redacted. It is the body of `flintlock-runner config show`. The Inventory
+// redacted. It is the body of `flr config show`. The Inventory
 // is printed inline; when it came from a file, `inventory.file` is kept as
 // provenance, so the output documents the running state rather than being
 // a drop-in replacement for the source file.

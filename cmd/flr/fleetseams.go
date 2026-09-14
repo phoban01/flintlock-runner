@@ -68,7 +68,7 @@ type fleetSeams struct {
 	Leases func(pm poolmgr.Client) drain.LeaseReporter
 	// Now is the clock for the Inventory's generated_at.
 	Now func() time.Time
-	// Executable is the flintlock-runner binary fleet up --install-runner
+	// Executable is the flr binary fleet up --install-runner
 	// installs as the Runner's service.
 	Executable func() (string, error)
 	// RunnerInstalled reports whether the Runner's systemd unit is

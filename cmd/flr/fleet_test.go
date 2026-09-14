@@ -184,7 +184,7 @@ func (f *fleetFixture) run(t *testing.T, args ...string) (string, error) {
 	var out syncBuffer
 	app.Writer = &out
 	app.ErrWriter = &out
-	err := app.Run(append([]string{"flintlock-runner", "--config", f.configPath, "fleet"}, args...))
+	err := app.Run(append([]string{"flr", "--config", f.configPath, "fleet"}, args...))
 	return out.String(), err
 }
 

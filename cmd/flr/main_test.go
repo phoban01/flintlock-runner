@@ -133,7 +133,7 @@ func TestConfigShow(t *testing.T) {
 	app := newApp()
 	app.Writer = &out
 	app.ErrWriter = &errOut
-	if err := app.Run([]string{"flintlock-runner", "--config", path, "config", "show"}); err != nil {
+	if err := app.Run([]string{"flr", "--config", path, "config", "show"}); err != nil {
 		t.Fatalf("config show: %v", err)
 	}
 
@@ -166,7 +166,7 @@ func TestConfigShowWithTheDefaultErrorWriter(t *testing.T) {
 	var out bytes.Buffer
 	app := newApp()
 	app.Writer = &out
-	if err := app.Run([]string{"flintlock-runner", "--config", path, "config", "show"}); err != nil {
+	if err := app.Run([]string{"flr", "--config", path, "config", "show"}); err != nil {
 		t.Fatalf("config show: %v", err)
 	}
 	if !strings.Contains(out.String(), "namespace: metal-runner") {
@@ -191,7 +191,7 @@ func TestConfigShowRejectsAnInvalidFile(t *testing.T) {
 	app := newApp()
 	app.Writer = &out
 	app.ErrWriter = &errOut
-	err := app.Run([]string{"flintlock-runner", "--config", path, "config", "show"})
+	err := app.Run([]string{"flr", "--config", path, "config", "show"})
 	if err == nil {
 		t.Fatalf("config show accepted an invalid configuration and printed:\n%s", out.String())
 	}

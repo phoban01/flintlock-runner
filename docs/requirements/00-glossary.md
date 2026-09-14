@@ -5,7 +5,7 @@ directory. It contains no requirements.
 
 ## System names {#system-names}
 
-- **Runner** — the `flintlock-runner` process as a whole: the GitLab-facing
+- **Runner** — the `flr` process as a whole: the GitLab-facing
   loop, the Executor, the Scheduler and their supporting clients. Built from
   the gitlab-runner Go packages (`common`, `network`, `shells`, `executors`).
 - **Executor** — the component implementing the `common.ExecutorProvider` and
@@ -21,7 +21,7 @@ directory. It contains no requirements.
   inside a MicroVM and streams its input and output. The default transport is
   the flintlock `MicroVMExec.ExecCommand` streaming RPC served by the Host
   that runs the MicroVM; an alternative transport is SSH.
-- **Fleet Controller** — the `flintlock-runner fleet` subcommands that
+- **Fleet Controller** — the `flr fleet` subcommands that
   discover, provision, verify and tear down Hosts on EC2, install the Pool
   Manager and Host Services, and generate the Runner configuration from the
   resulting inventory.
