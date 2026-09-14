@@ -67,13 +67,20 @@ func Fan[T any](ctx context.Context, insts []fleet.Instance, parallelism int, fn
 	sem := make(chan struct{}, parallelism)
 	var wg sync.WaitGroup
 	for i, inst := range insts {
-		if err := ctx.Err(); err != nil {
-			errs[i] = err
-			continue
+		acquired := false
+		if ctx.Err() == nil {
+			select {
+			case sem <- struct{}{}:
+				acquired = true
+			case <-ctx.Done():
+			}
 		}
-		select {
-		case sem <- struct{}{}:
-		case <-ctx.Done():
+		if acquired && ctx.Err() != nil {
+			// A slot and the end of ctx can be ready together; ctx wins.
+			<-sem
+			acquired = false
+		}
+		if !acquired {
 			errs[i] = ctx.Err()
 			continue
 		}
