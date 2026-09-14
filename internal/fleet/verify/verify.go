@@ -214,9 +214,17 @@ func (r *run) checkPools(ctx context.Context) []*poolmgr.Pool {
 				listed[p.Spec.Ref] = p
 			}
 		}
-		if iterErr != nil && !first && wctx.Err() != nil {
-			// Cut off by the timeout: the previous answer stands.
-			break
+		if iterErr != nil && !first {
+			// A later listing that fails leaves the previous answer standing.
+			// The timeout is the usual cause, and wctx.Err() cannot be relied
+			// on to say so: gRPC enforces the deadline with a timer of its own
+			// and can fail the call a moment before the context reports that
+			// it has expired, which used to replace a good answer with the
+			// error. A Pool Manager that is briefly unreachable is the same.
+			if !sleep(wctx, r.v.cfg.PollInterval) {
+				break
+			}
+			continue
 		}
 		lastErr = iterErr
 		done := lastErr == nil
