@@ -1,22 +1,14 @@
 {{template "prelude" .}}
 
-# FL-117: whether this Host can run MicroVMs is a property of the running
-# Host, not of its instance type: a bare-metal instance has KVM and so does a
-# virtualized one with nested virtualization enabled. flintlockd runs as root
-# and hands /dev/kvm to every MicroVM, so the Host is usable when /dev/kvm is
-# a character device that root can open for reading and writing. That open
-# fails when the node exists but no KVM driver is bound to it. The check
-# changes nothing and needs no package, so it works on a stock Ubuntu or
-# Amazon Linux Host; the Provisioner stops a Host that fails it before any
-# other step runs.
-if [ ! -e /dev/kvm ]; then
-  echo '::kvm:: unavailable /dev/kvm does not exist'
-elif [ ! -c /dev/kvm ]; then
-  echo '::kvm:: unavailable /dev/kvm is not a character device'
-elif ! { : <>/dev/kvm; } 2>/dev/null; then
-  echo '::kvm:: unavailable /dev/kvm cannot be opened for reading and writing'
-else
+{{template "kvm_status" .}}
+
+# FL-117: report whether /dev/kvm is usable; the Provisioner stops a Host
+# without it before any other step runs.
+kvm=$(kvm_status)
+if [ "$kvm" = ok ]; then
   echo '::kvm:: ok'
+else
+  printf '::kvm:: unavailable %s\n' "$kvm"
 fi
 
 # FL-061: the Host's own vCPU and memory, from which the Fleet Controller

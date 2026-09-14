@@ -268,19 +268,20 @@ func TestDetectReportsInstalledVersions(t *testing.T) {
 func TestDetectChecksKVMIsUsable(t *testing.T) {
 	t.Parallel()
 	s := render(t, fleet.StepDetect, fullInput())
-	check := section(t, s, "if [ ! -e /dev/kvm ]; then", "\nfi\n")
+	check := section(t, s, "kvm_status() {", "\n}\n")
 	mustContain(t, check,
-		"echo '::kvm:: unavailable /dev/kvm does not exist'",
-		"elif [ ! -c /dev/kvm ]; then\n  echo '::kvm:: unavailable /dev/kvm is not a character device'",
+		"if [ ! -e /dev/kvm ]; then\n    echo '/dev/kvm does not exist'",
+		"elif [ ! -c /dev/kvm ]; then\n    echo '/dev/kvm is not a character device'",
 		// Root, which flintlockd runs as, has to be able to open it for
 		// reading and writing: a node with no KVM driver behind it fails.
-		"elif ! { : <>/dev/kvm; } 2>/dev/null; then\n  echo '::kvm:: unavailable /dev/kvm cannot be opened for reading and writing'",
-		"else\n  echo '::kvm:: ok'",
+		"elif ! { : <>/dev/kvm; } 2>/dev/null; then\n    echo '/dev/kvm cannot be opened for reading and writing'",
+		"else\n    echo ok\n",
 	)
-	// The check installs nothing and comes before everything else detect
-	// does.
-	mustNotContain(t, check, "ensure_packages", "apt-get", "modprobe")
-	if strings.Index(s, "if [ ! -e /dev/kvm ]") > strings.Index(s, "\ninstalled_versions\n") {
+	// The check installs nothing.
+	mustNotContain(t, check, "ensure_packages", "apt-get", "modprobe", "changed ")
+	// detect reports the verdict, before everything else it does.
+	mustContain(t, s, "kvm=$(kvm_status)\nif [ \"$kvm\" = ok ]; then\n  echo '::kvm:: ok'\nelse\n  printf '::kvm:: unavailable %s\\n' \"$kvm\"\nfi\n")
+	if strings.Index(s, "kvm=$(kvm_status)") > strings.Index(s, "\ninstalled_versions\n") {
 		t.Error("the KVM check runs after the version detection")
 	}
 

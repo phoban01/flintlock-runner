@@ -1,0 +1,22 @@
+{{- define "kvm_status" -}}
+# kvm_status prints "ok" when this Host has a usable /dev/kvm and the reason
+# when it has not (FL-117). Whether a Host can run MicroVMs is a property of
+# the running Host, not of its instance type: a bare-metal instance has KVM
+# and so does a virtualized one with nested virtualization enabled.
+# flintlockd runs as root and hands /dev/kvm to every MicroVM, so the device
+# has to be a character device that root can open for reading and writing;
+# the open fails when the node exists but no KVM driver is behind it. The
+# check changes nothing and needs no package, so it works on a stock Ubuntu
+# or Amazon Linux Host.
+kvm_status() {
+  if [ ! -e /dev/kvm ]; then
+    echo '/dev/kvm does not exist'
+  elif [ ! -c /dev/kvm ]; then
+    echo '/dev/kvm is not a character device'
+  elif ! { : <>/dev/kvm; } 2>/dev/null; then
+    echo '/dev/kvm cannot be opened for reading and writing'
+  else
+    echo ok
+  fi
+}
+{{- end -}}

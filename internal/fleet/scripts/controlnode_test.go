@@ -144,6 +144,17 @@ func TestUserDataEmbedsHostStepsWithoutSecrets(t *testing.T) {
 	mustNotContain(t, s, string(in.Fleet.Flintlockd.Token))
 }
 
+// TestUserDataStopsWithoutKVM checks that a self-provisioning instance
+// without a usable /dev/kvm stops before it writes or runs any step, as
+// the Provisioner stops one after detect (FL-117).
+func TestUserDataStopsWithoutKVM(t *testing.T) {
+	t.Parallel()
+	s := render(t, fleet.StepUserData, fullInput())
+	guard := `[ "$kvm" = ok ] || die "unsupported because KVM is unavailable: $kvm; a virtualized instance type needs nested virtualization enabled"`
+	mustContain(t, s, "kvm_status() {", "kvm=$(kvm_status)\n"+guard)
+	before(t, s, guard, `cat >"$steps_dir/`)
+}
+
 func TestDrainAndTeardownGuards(t *testing.T) {
 	t.Parallel()
 	d := render(t, fleet.StepDrain, fullInput())
