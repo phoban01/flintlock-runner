@@ -123,6 +123,73 @@ func TestInventoryHostTheRegistryNeverDialledIsProbedAndGoesUnhealthy(t *testing
 	}
 }
 
+// TestProbeOfAHostAReloadRemovedIsDropped covers a probe that was in flight
+// when a Reload took its Host out of the Inventory. Recording its result used
+// to put the Host back into the health table, where probeAll kept probing it
+// and Snapshot kept reporting it although no Inventory named it any more.
+func TestProbeOfAHostAReloadRemovedIsDropped(t *testing.T) {
+	t.Parallel()
+	ctx := testContext(t)
+
+	slow := &blockingInfoHost{
+		countingHost: newCountingHost("host-2"),
+		entered:      make(chan struct{}),
+		release:      make(chan struct{}),
+	}
+	e := newEnv(t, envConfig{
+		inventory: []config.HostEntry{testHostEntry("host-1"), testHostEntry("host-2")},
+		hosts:     map[string]flintlock.HostClient{"host-2": slow},
+	})
+	e.startBare(ctx)
+
+	probed := make(chan struct{})
+	go func() {
+		defer close(probed)
+		e.sched.probeAll(ctx)
+	}()
+	select {
+	case <-slow.entered:
+	case <-ctx.Done():
+		t.Fatal("host-2 was never probed")
+	}
+	if err := e.sched.Reload(ctx, []config.Profile{testProfile("default", 1)},
+		[]config.HostEntry{testHostEntry("host-1")}); err != nil {
+		t.Fatalf("Reload: %v", err)
+	}
+	close(slow.release)
+	select {
+	case <-probed:
+	case <-ctx.Done():
+		t.Fatal("the probe round did not finish")
+	}
+
+	got := e.sched.Snapshot().Hosts
+	if len(got) != 1 || got[0].Name != "host-1" {
+		t.Fatalf("host health after the reload = %+v, want host-1 alone", got)
+	}
+}
+
+// blockingInfoHost is a Host whose ServerInfo waits for release, closing
+// entered when the first call arrives.
+type blockingInfoHost struct {
+	*countingHost
+	entered chan struct{}
+	release chan struct{}
+	once    sync.Once
+}
+
+func (b *blockingInfoHost) ServerInfo(ctx context.Context) (*flintlock.HostInfo, error) {
+	b.once.Do(func() { close(b.entered) })
+	// Either way out, the probe has a result to record, which is all the
+	// test needs.
+	select {
+	case <-b.release:
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
+	return b.countingHost.ServerInfo(ctx)
+}
+
 func TestProbeFallsBackToListMicroVMsWhenServerInfoIsUnimplemented(t *testing.T) {
 	t.Parallel()
 	ctx := testContext(t)
