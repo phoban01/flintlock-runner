@@ -195,19 +195,30 @@ func (r *run) checkPools(ctx context.Context) []*poolmgr.Pool {
 	wctx, cancel := context.WithTimeout(ctx, r.v.cfg.Timeout)
 	defer cancel()
 	var lastErr error
-	for {
-		lastErr = nil
+	for first := true; ; first = false {
+		var iterErr error
 		listed := map[poolmgr.PoolRef]*poolmgr.Pool{}
 		for _, ns := range namespaces(profiles) {
-			pools, err := r.v.cfg.PoolManager.ListPools(wctx, ns)
+			// The first listing runs on ctx so that a short timeout still
+			// gets one complete answer; later ones stop at the timeout.
+			lctx := wctx
+			if first {
+				lctx = ctx
+			}
+			pools, err := r.v.cfg.PoolManager.ListPools(lctx, ns)
 			if err != nil {
-				lastErr = err
+				iterErr = err
 				continue
 			}
 			for _, p := range pools {
 				listed[p.Spec.Ref] = p
 			}
 		}
+		if iterErr != nil && !first && wctx.Err() != nil {
+			// Cut off by the timeout: the previous answer stands.
+			break
+		}
+		lastErr = iterErr
 		done := lastErr == nil
 		for i := range profiles {
 			out[i] = listed[refOf(&profiles[i])]
@@ -284,7 +295,10 @@ func (r *run) exercise(ctx context.Context, p *config.Profile, pool *poolmgr.Poo
 			lastBeat = now
 		}
 		start := r.v.cfg.Clock.Now()
-		claim, err := r.v.cfg.PoolManager.ClaimVM(wctx, ref)
+		// The claim runs on ctx, not wctx: a claim cut off by the timeout
+		// after the Pool Manager granted it would leave a lease nobody
+		// releases. The client's call deadline bounds it instead.
+		claim, err := r.v.cfg.PoolManager.ClaimVM(ctx, ref)
 		if err != nil {
 			if !errors.Is(err, poolmgr.ErrExhausted) {
 				anyErr = fmt.Errorf("ClaimVM: %w", err)

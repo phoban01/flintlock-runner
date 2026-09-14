@@ -43,6 +43,8 @@ type Options struct {
 	PoolSize int
 	// Placement is the fake Pool Manager's placement strategy.
 	Placement poolmgr.PlacementStrategy
+	// OmitHostOnClaim leaves the host field of claims unset (TD-008).
+	OmitHostOnClaim bool
 }
 
 // Stack is a running set of fakes.
@@ -68,15 +70,27 @@ func Start(t testing.TB, opts Options) *Stack {
 	if opts.PoolSize == 0 {
 		opts.PoolSize = opts.Hosts
 	}
+	// The Pool Manager stops first, deleting its MicroVMs while it can still
+	// reach the Hosts; then its Host connections close; then the Hosts stop.
+	hostCtx, hostCancel := context.WithCancel(context.Background())
 	ctx, cancel := context.WithCancel(context.Background())
 	s := &Stack{}
-	var done []chan error
+	var hostDone []chan error
+	var pmDone chan error
+	var pmHosts *pmfake.Hosts
 	t.Cleanup(func() {
 		if s.Client != nil {
 			_ = s.Client.Close()
 		}
 		cancel()
-		for _, d := range done {
+		if pmDone != nil {
+			<-pmDone
+		}
+		if pmHosts != nil {
+			_ = pmHosts.Close()
+		}
+		hostCancel()
+		for _, d := range hostDone {
 			<-d
 		}
 	})
@@ -93,8 +107,8 @@ func Start(t testing.TB, opts Options) *Stack {
 			Token:       Token,
 		})
 		d := make(chan error, 1)
-		done = append(done, d)
-		go func() { d <- h.Serve(ctx) }()
+		hostDone = append(hostDone, d)
+		go func() { d <- h.Serve(hostCtx) }()
 		waitReady(t, name, h.Ready(), d)
 		s.Hosts = append(s.Hosts, h)
 		s.Inventory = append(s.Inventory, config.HostEntry{
@@ -117,18 +131,18 @@ func Start(t testing.TB, opts Options) *Stack {
 	if err != nil {
 		t.Fatalf("opstest: dialing hosts: %v", err)
 	}
-	t.Cleanup(func() { _ = hosts.Close() })
+	pmHosts = hosts
 	pm := pmfake.New(poolmgr.FakeConfig{
 		Listen:            "127.0.0.1:0",
 		Hosts:             hosts,
 		Placement:         opts.Placement,
+		OmitHostOnClaim:   opts.OmitHostOnClaim,
 		ReconcileInterval: 100 * time.Millisecond,
 		ReadyTimeout:      10 * time.Second,
 	})
-	d := make(chan error, 1)
-	done = append(done, d)
-	go func() { d <- pm.Serve(ctx) }()
-	waitReady(t, "pool manager", pm.Ready(), d)
+	pmDone = make(chan error, 1)
+	go func() { pmDone <- pm.Serve(ctx) }()
+	waitReady(t, "pool manager", pm.Ready(), pmDone)
 	s.PoolManager = pm
 
 	client, err := poolmgr.NewClient(poolmgr.ClientConfig{Endpoint: pm.Addr(), TLS: config.ClientTLS{Insecure: true}})
