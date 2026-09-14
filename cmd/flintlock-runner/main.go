@@ -13,8 +13,8 @@
 //	fleet teardown      delete Pools, stop services, remove the Inventory
 //	fleet emit-userdata print the launch-template user-data script
 //
-// Phase 0 registers every subcommand; each one exits with ErrNotImplemented
-// until its work package lands (docs/PLAN.md).
+// A subcommand, or a dependency of one, whose work package has not landed
+// exits with ErrNotImplemented naming that package (docs/PLAN.md).
 package main
 
 import (
@@ -96,32 +96,10 @@ func newApp() *cli.App {
 		{
 			Name:        "fleet",
 			Usage:       "provision and operate the Host fleet",
-			Subcommands: fleetCommands(),
+			Subcommands: fleetCommands(productionSeams()),
 		},
 	}
 	return app
-}
-
-// fleetCommands registers the Fleet Controller subcommands (06-fleet.md).
-func fleetCommands() []cli.Command {
-	var cmds []cli.Command
-	for _, c := range []struct{ name, usage string }{
-		{"provision", "discover instances, provision them as Hosts and write the Inventory"},
-		{"verify", "check every Host, Pool and Host Service (FL-070)"},
-		{"drain", "remove a Host from every Pool and wait for its Leases (FL-080)"},
-		{"teardown", "delete Pools, stop services and remove the Inventory (FL-081)"},
-		{"emit-userdata", "print the launch-template user-data script (FL-090)"},
-	} {
-		name := c.name
-		cmds = append(cmds, cli.Command{
-			Name:  name,
-			Usage: c.usage,
-			Action: func(*cli.Context) error {
-				return notImplemented("fleet "+name, "fleet")
-			},
-		})
-	}
-	return cmds
 }
 
 // exitInvalidConfig is the exit status when the configuration file cannot be

@@ -1,0 +1,79 @@
+# GoReleaser configuration for flintlock-runner. The release workflow
+# (.github/workflows/release.yml) runs it on a tag; docs/RELEASING.md says how
+# to cut a release candidate and a release.
+version: 2
+project_name: flintlock-runner
+
+before:
+  hooks:
+    # A release is built from exactly what the tag points at: fail rather
+    # than let go mod tidy change the module graph under the build.
+    - go mod tidy -diff
+
+builds:
+  - &build
+    id: flintlock-runner
+    main: ./cmd/flintlock-runner
+    binary: flintlock-runner
+    env:
+      - CGO_ENABLED=0
+    goos: [linux]
+    goarch: [amd64, arm64]
+    flags: [-trimpath]
+    ldflags:
+      - -s -w -X main.version={{ .Version }}
+    # Reproducible: the binary's timestamp is the commit's, not the build's.
+    mod_timestamp: "{{ .CommitTimestamp }}"
+  - <<: *build
+    id: fake-poolmgr
+    main: ./cmd/fake-poolmgr
+    binary: fake-poolmgr
+  - <<: *build
+    id: flintlock-devstack
+    main: ./cmd/flintlock-devstack
+    binary: flintlock-devstack
+
+archives:
+  # The Runner on its own, which is what a Control Node installs.
+  - id: runner
+    ids: [flintlock-runner]
+    name_template: "flintlock-runner_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+    formats: [tar.gz]
+    files:
+      - LICENSE
+      - README.md
+      - docs/architecture.md
+  # The stand-ins: the fake Pool Manager, which an early fleet can run
+  # without battery (TD-009), and the local demo stack.
+  - id: devtools
+    ids: [fake-poolmgr, flintlock-devstack]
+    name_template: "flintlock-devtools_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+    formats: [tar.gz]
+    files:
+      - LICENSE
+      - README.md
+
+checksum:
+  name_template: checksums.txt
+  algorithm: sha256
+
+changelog:
+  # GitHub's own notes: every merged pull request since the previous tag.
+  use: github-native
+
+release:
+  github:
+    owner: phoban01
+    name: flintlock-runner
+  # v1.2.3-rc.1 is published as a pre-release, v1.2.3 as a release.
+  prerelease: auto
+  # The requirements report of the tagged commit ships with the binaries, so
+  # anyone can see which requirements that build implements and tests.
+  extra_files:
+    - glob: .duvet/reports/report.html
+      name_template: requirements-report.html
+    - glob: .duvet/reports/report.json
+      name_template: requirements-report.json
+  footer: |
+    `requirements-report.html` shows every requirement in `docs/requirements/`
+    and whether this build implements and tests it.
