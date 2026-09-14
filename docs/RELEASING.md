@@ -8,18 +8,33 @@ not follow this procedure.
 
 ## What a release contains
 
-For `linux/amd64` and `linux/arm64`:
+For `linux/amd64`, `linux/arm64`, `darwin/amd64` and `darwin/arm64`:
 
 | Archive | Contents |
 |---|---|
-| `flintlock-runner_<version>_linux_<arch>.tar.gz` | the Runner, which a Control Node installs |
-| `flintlock-devtools_<version>_linux_<arch>.tar.gz` | `fake-poolmgr`, the stand-in Pool Manager an early fleet can run without battery (TD-009), and `flintlock-devstack`, the local demo stack |
+| `flintlock-runner_<version>_<os>_<arch>.tar.gz` | the Runner, which a Control Node installs, and the `fleet` commands |
+| `flintlock-devtools_<version>_<os>_<arch>.tar.gz` | `fake-poolmgr`, the stand-in Pool Manager an early fleet can run without battery (TD-009), and `flintlock-devstack`, the local demo stack |
 | `checksums.txt` | SHA-256 of every archive |
 | `requirements-report.html`, `requirements-report.json` | the duvet report for the tagged commit: every requirement in `docs/requirements/` and whether this build implements and tests it |
 
 Binaries are static (`CGO_ENABLED=0`), built with `-trimpath`, stamped with
 the version (`flintlock-runner --version`), and carry the commit's timestamp
 rather than the build's, so the same tag builds the same bytes.
+
+### On macOS
+
+The darwin builds are for operating a fleet from a Mac: `config show` and
+the `fleet` commands that reach Hosts over SSH or Systems Manager. Two things
+still need Linux. `fleet provision` installs the Pool Manager daemon on the
+machine it runs on, as a systemd service, so run it on the Control Node.
+And the Hosts themselves need Linux with KVM. The unit tests run on macOS on
+every pull request that changes the packaging; the end-to-end harness runs
+on Linux only.
+
+The binaries are not signed or notarized. A file downloaded with a browser
+carries the quarantine attribute, which Gatekeeper refuses to run; clear it
+with `xattr -d com.apple.quarantine flintlock-runner`. A file fetched with
+`curl` is not quarantined.
 
 ## Cutting a release candidate
 
