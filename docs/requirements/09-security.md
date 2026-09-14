@@ -92,6 +92,6 @@ The Runner, the Hosts and the Control Node are trusted.
 
 The shared layer cache in SE-054 and the shared private module cache in
 SE-056 are the same trust boundary as a shared runner host with a Docker
-socket, narrowed to one bare-metal host; teams that need per-job isolation
+socket, narrowed to one host; teams that need per-job isolation
 run `buildkitd` inside their job image or set `GOPRIVATE` themselves, and
 lose the warm cache for that job.

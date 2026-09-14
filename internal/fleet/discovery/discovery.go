@@ -10,7 +10,6 @@ import (
 	"net"
 	"slices"
 	"strconv"
-	"strings"
 
 	"github.com/phoban01/flintlock-runner/internal/config"
 	"github.com/phoban01/flintlock-runner/internal/fleet"
@@ -22,9 +21,6 @@ const TypeStatic = "static"
 
 // stateRunning is the only instance state provisioned (FL-001).
 const stateRunning = "running"
-
-// metalSuffix is what a bare-metal EC2 instance type ends in (FL-003).
-const metalSuffix = ".metal"
 
 var (
 	_ fleet.Discovery = (*EC2)(nil)
@@ -124,7 +120,7 @@ func (s *Static) Discover(context.Context) ([]fleet.Instance, error) {
 }
 
 // Unsupported is a discovered instance the Fleet Controller will not
-// provision, with the reason (FL-003).
+// provision, with the reason.
 type Unsupported struct {
 	Instance fleet.Instance
 	Reason   string
@@ -135,33 +131,30 @@ func (u Unsupported) Error() string {
 }
 
 //= docs/requirements/06-fleet.md#discovery
-//# If a discovered instance's type does not end in `.metal`, then
-//# the Fleet Controller SHALL exclude it and report it as unsupported because
-//# KVM is unavailable.
+//# The Fleet Controller SHALL NOT exclude a discovered instance
+//# from provisioning because of its instance type.
 
 // Supported splits insts into those that can be provisioned and those that
-// cannot. An EC2 instance whose type does not end in ".metal" has no KVM; one
-// whose architecture is neither amd64 nor arm64 has no binaries. A static
-// machine has no instance type, so only its architecture is checked; KVM on
-// it is the operator's assertion.
+// cannot: an instance whose architecture is neither amd64 nor arm64 has no
+// binaries. The instance type is not looked at. KVM comes with bare-metal
+// types and, where nested virtualization is enabled, with some virtualized
+// ones, so the type name does not say whether an instance has it; the
+// Provisioner checks /dev/kvm on the Host instead (FL-117).
 func Supported(insts []fleet.Instance) ([]fleet.Instance, []Unsupported) {
 	var ok []fleet.Instance
 	var bad []Unsupported
 	for _, in := range insts {
-		switch {
-		case in.Type != TypeStatic && !strings.HasSuffix(in.Type, metalSuffix):
-			bad = append(bad, Unsupported{Instance: in, Reason: "instance type is not " + metalSuffix + ", so KVM is unavailable"})
-		case in.Arch != config.ArchAMD64 && in.Arch != config.ArchARM64:
+		if in.Arch != config.ArchAMD64 && in.Arch != config.ArchARM64 {
 			bad = append(bad, Unsupported{Instance: in, Reason: fmt.Sprintf("architecture %q is not amd64 or arm64", in.Arch)})
-		default:
-			ok = append(ok, in)
+			continue
 		}
+		ok = append(ok, in)
 	}
 	return ok, bad
 }
 
 // Filtered wraps a Discovery so that Discover returns only supported
-// instances and reports every other one to Report (FL-003).
+// instances and reports every other one to Report.
 type Filtered struct {
 	Discovery fleet.Discovery
 	// Report is called once per unsupported instance per Discover.
@@ -198,7 +191,7 @@ func WithUnsupported(fn func(Unsupported)) Option {
 
 // New returns the Discovery for f: the static list when it is configured,
 // then explicit instance ids, then the tag, as config.Discovery documents.
-// The result reports and drops unsupported instances (FL-003). client may be
+// The result reports and drops unsupported instances. client may be
 // nil for the static list, which never calls AWS.
 func New(f *config.Fleet, client fleet.EC2, opts ...Option) (fleet.Discovery, error) {
 	if f == nil {

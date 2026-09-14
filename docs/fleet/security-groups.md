@@ -7,8 +7,9 @@ group action. The operator puts the rules below in place before running
 unreachable after provisioning, the Fleet Controller names the rule from this
 table that is missing (FL-047).
 
-Two security groups are assumed: one shared by every Host (the EC2 metal
-instances) and one on the Control Node (the machine running the Runner, the
+Two security groups are assumed: one shared by every Host (the EC2 instances
+the Fleet Controller provisions; see `instance-types.md`) and one on the
+Control Node (the machine running the Runner, the
 Pool Manager daemon and the Fleet Controller). Where the Control Node is
 outside the VPC, replace "Control Node security group" with its address.
 
@@ -37,8 +38,6 @@ Nothing else needs to be open. In particular:
   and the HTTP cache) bind to the guest bridge gateway address only and need
   no security group rule; they are closed to other Hosts by the Host
   firewall, not by the security group (FL-101, SE-051).
-- The Pool Manager host agent reaches each MicroVM through its vsock path and
-  opens no network port.
 - The Pool Manager daemon listens on the Control Node for the Runner on the
   same machine; nothing outside the Control Node connects to it.
 - Guests have no inbound path: the Guest Transport runs over vsock through

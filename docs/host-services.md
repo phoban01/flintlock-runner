@@ -41,7 +41,7 @@ bounded to source that the fleet's credential can reach.
 ## Opting out
 
 This is the same trust boundary as a shared runner host with a Docker
-socket, narrowed to one bare-metal Host. A team that needs per-Job
+socket, narrowed to one Host. A team that needs per-Job
 isolation can:
 
 - run `buildkitd` inside its own Job image, or set `BUILDKIT_HOST` to an

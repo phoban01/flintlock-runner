@@ -29,7 +29,9 @@ const (
 	ContainerdNamespace = "flintlock"
 	// ContainerdSocket is where the provisioned containerd listens.
 	ContainerdSocket = "/run/containerd/containerd.sock"
-	// PoolAgentPort is the port the Pool Manager host agent listens on.
+	// PoolAgentPort is the Pool Manager host agent port that FL-045 closes
+	// to guests. battery no longer ships a host agent and nothing installs
+	// one (FL-050 is withdrawn), but the port stays closed as FL-045 says.
 	PoolAgentPort = 9091
 	// MetricsPort is flintlock's HTTP endpoint, which serves metrics.
 	MetricsPort = 8090
@@ -158,7 +160,6 @@ type data struct {
 	Steps   []renderedStep
 
 	// The host layout constants, for the templates.
-	PoolAgentPort       int
 	ContainerdSocket    string
 	ContainerdNamespace string
 	TLSDir              string
@@ -253,7 +254,6 @@ func newData(step fleet.Step, in fleet.RenderInput, atBoot bool) (*data, error) 
 		Bridge:   Bridge,
 		Options:  in.Options,
 
-		PoolAgentPort:       PoolAgentPort,
 		ContainerdSocket:    ContainerdSocket,
 		ContainerdNamespace: ContainerdNamespace,
 		TLSDir:              TLSDir,

@@ -141,9 +141,9 @@ func TestDescribeInstancesReadsArchitectureAttribute(t *testing.T) {
 		t.Fatal(err)
 	}
 	want := []fleet.Instance{
-		{ID: "i-arm", Type: "m7g.metal", Arch: config.ArchARM64, PrivateIP: "10.0.1.10", State: "running", Tags: map[string]string{"flintlock-runner": "ci"}, VCPU: 64, MemoryMB: 256 * 1024},
-		{ID: "i-x86", Type: "c5.metal", Arch: config.ArchAMD64, PrivateIP: "10.0.1.11", State: "running", VCPU: 96, MemoryMB: 192 * 1024},
-		{ID: "i-386", Type: "c5.metal", Arch: "", PrivateIP: "10.0.1.12", State: "running", MemoryMB: 192 * 1024},
+		{ID: "i-arm", Type: "m7g.metal", Arch: config.ArchARM64, PrivateIP: "10.0.1.10", State: "running", Tags: map[string]string{"flintlock-runner": "ci"}, VCPU: 64},
+		{ID: "i-x86", Type: "c5.metal", Arch: config.ArchAMD64, PrivateIP: "10.0.1.11", State: "running", VCPU: 96},
+		{ID: "i-386", Type: "c5.metal", Arch: "", PrivateIP: "10.0.1.12", State: "running"},
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Errorf("instances:\n got %+v\nwant %+v", got, want)

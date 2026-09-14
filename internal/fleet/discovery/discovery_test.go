@@ -89,15 +89,19 @@ func TestInstanceIDsReplaceTagDiscovery(t *testing.T) {
 
 //= docs/requirements/06-fleet.md#discovery
 //= type=test
-//# If a discovered instance's type does not end in `.metal`, then
-//# the Fleet Controller SHALL exclude it and report it as unsupported because
-//# KVM is unavailable.
+//# The Fleet Controller SHALL NOT exclude a discovered instance
+//# from provisioning because of its instance type.
 
-func TestNonMetalInstancesAreExcludedAndReported(t *testing.T) {
+func TestNoInstanceIsExcludedForItsType(t *testing.T) {
 	t.Parallel()
+	nested := fleet.Instance{ID: "i-nested", Type: "c8i.2xlarge", Arch: config.ArchAMD64, Tags: ciTag}
 	virt := fleet.Instance{ID: "i-virt", Type: "m7g.16xlarge", Arch: config.ArchARM64, Tags: ciTag}
 	metalish := fleet.Instance{ID: "i-metalish", Type: "m7i.metal-24xl", Arch: config.ArchAMD64, Tags: ciTag}
-	ec2 := awsfake.NewEC2(metal("i-1", ciTag), virt, metalish)
+	untyped := fleet.Instance{ID: "i-untyped", Arch: config.ArchARM64, Tags: ciTag}
+	// An unknown architecture is still excluded: that is about binaries,
+	// not the type.
+	i386 := fleet.Instance{ID: "i-x386", Type: "c5.metal", Tags: ciTag}
+	ec2 := awsfake.NewEC2(metal("i-1", ciTag), nested, virt, metalish, untyped, i386)
 	var reported []Unsupported
 	d, err := New(&config.Fleet{Discovery: config.Discovery{TagKey: "flintlock-runner", TagValue: "ci"}}, ec2,
 		WithUnsupported(func(u Unsupported) { reported = append(reported, u) }))
@@ -108,22 +112,18 @@ func TestNonMetalInstancesAreExcludedAndReported(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if want := []string{"i-1"}; !reflect.DeepEqual(ids(got), want) {
-		t.Errorf("discovered %v, want %v", ids(got), want)
+	if want := []string{"i-1", "i-metalish", "i-nested", "i-untyped", "i-virt"}; !reflect.DeepEqual(ids(got), want) {
+		t.Errorf("discovered %v, want %v: every type is a candidate", ids(got), want)
 	}
-	if len(reported) != 2 || reported[0].Instance.ID != "i-metalish" || reported[1].Instance.ID != "i-virt" {
-		t.Fatalf("reported %+v, want i-metalish and i-virt", reported)
-	}
-	for _, u := range reported {
-		if !strings.Contains(u.Error(), "KVM is unavailable") {
-			t.Errorf("report %q does not say KVM is unavailable", u.Error())
-		}
+	if len(reported) != 1 || reported[0].Instance.ID != "i-x386" || !strings.Contains(reported[0].Error(), "architecture") {
+		t.Errorf("reported %+v, want only i-x386 for its architecture", reported)
 	}
 
-	// A static machine has no instance type and is kept.
-	ok, bad := Supported([]fleet.Instance{{ID: "lab", Type: TypeStatic, Arch: config.ArchAMD64}})
-	if len(ok) != 1 || len(bad) != 0 {
-		t.Errorf("static machine: kept %v, excluded %v", ok, bad)
+	// Supported, which the Runner's Inventory refresh also filters with,
+	// keeps every type too, the static list's included.
+	all := []fleet.Instance{nested, virt, {ID: "lab", Type: TypeStatic, Arch: config.ArchAMD64}}
+	if ok, bad := Supported(all); len(ok) != len(all) || len(bad) != 0 {
+		t.Errorf("Supported kept %v and excluded %v, want every instance kept", ids(ok), bad)
 	}
 }
 

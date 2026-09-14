@@ -16,7 +16,8 @@ import (
 type Instance struct {
 	// ID is the EC2 instance id, or the configured name for static hosts.
 	ID string
-	// Type is the EC2 instance type; it has to end in ".metal" (FL-003).
+	// Type is the EC2 instance type. Any type is accepted (FL-116); KVM is
+	// checked on the Host during provisioning (FL-117).
 	Type string
 	// Arch is from the instance attributes (FL-004).
 	Arch config.Architecture
@@ -28,15 +29,16 @@ type Instance struct {
 	// Tags are the EC2 tags, for the Host name and labels.
 	Tags map[string]string
 	// VCPU and MemoryMB are the raw instance capacity before the Host
-	// reserve (FL-061).
+	// reserve (FL-061). Discovery fills what it knows; provisioning replaces
+	// both with what the Host reports.
 	VCPU     int
 	MemoryMB int
 }
 
 // Discovery finds candidate instances. Implementations: EC2 by tag or id
 // (FL-001, FL-002) and static from configuration (TD-044). Filtering out
-// non-metal instances (FL-003) happens in the caller so that every provider
-// is treated alike.
+// unsupported instances happens in the caller so that every provider is
+// treated alike.
 type Discovery interface {
 	Discover(ctx context.Context) ([]Instance, error)
 }
@@ -144,17 +146,16 @@ type ParametersRecorder interface {
 }
 
 // Step is one provisioning step, each backed by one script (FL-020 to
-// FL-046, FL-050, FL-100 to FL-112). Steps are idempotent (FL-023, FL-030).
+// FL-046, FL-100 to FL-112, FL-117). Steps are idempotent (FL-023, FL-030).
 type Step string
 
 // Provisioning steps in execution order.
 const (
-	StepDetect       Step = "detect"        // FL-029, FL-030: installed versions, thin pool presence
+	StepDetect       Step = "detect"        // FL-029, FL-030, FL-061, FL-117: KVM, capacity, installed versions, thin pool presence
 	StepFlintlock    Step = "flintlock"     // FL-020, FL-021, FL-027: host provisioner unattended
 	StepThinPool     Step = "thin_pool"     // FL-022, FL-023
 	StepNetworking   Step = "networking"    // FL-040 to FL-046, FL-108, SE-030 to SE-032
 	StepFlintlockd   Step = "flintlockd"    // FL-024 to FL-026
-	StepPoolAgent    Step = "pool_agent"    // FL-050
 	StepHostServices Step = "host_services" // FL-100 to FL-107, FL-111, SE-050 to SE-052
 	StepPrepull      Step = "prepull"       // FL-028
 	StepPrewarm      Step = "prewarm"       // FL-112

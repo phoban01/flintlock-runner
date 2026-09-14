@@ -23,6 +23,33 @@ const StepReachability fleet.Step = "reachability"
 // DefaultDialTimeout bounds the FL-047 reachability check.
 const DefaultDialTimeout = 10 * time.Second
 
+// ErrKVMUnavailable is wrapped by the error of an instance on which the
+// detect step found no usable /dev/kvm (FL-117). Provision stops such an
+// instance before any other step and returns no Inventory entry for it;
+// errors.Is tells it apart from a failed step.
+var ErrKVMUnavailable = errors.New("unsupported because KVM is unavailable")
+
+// kvmUnavailable is the FL-117 error with detect's reason.
+func kvmUnavailable(reason string) error {
+	if reason == "" {
+		reason = "the detect step reported no usable /dev/kvm"
+	}
+	return fmt.Errorf("%w: %s; a virtualized instance type needs nested virtualization enabled", ErrKVMUnavailable, reason)
+}
+
+// withHostCapacity returns inst with the vCPU and memory the detect step
+// measured on the Host, which the Inventory entry's capacity is computed
+// from (FL-061). A figure detect did not report keeps the discovered value.
+func withHostCapacity(inst fleet.Instance, detected scripts.Output) fleet.Instance {
+	if detected.VCPU > 0 {
+		inst.VCPU = detected.VCPU
+	}
+	if detected.MemoryMB > 0 {
+		inst.MemoryMB = detected.MemoryMB
+	}
+	return inst
+}
+
 // hostSteps are the provisioning steps in the order they run on a Host.
 // The thin pool comes before the flintlock host provisioner so that
 // containerd starts with its devicemapper pool present.
@@ -32,7 +59,6 @@ var hostSteps = []fleet.Step{
 	fleet.StepFlintlock,
 	fleet.StepNetworking,
 	fleet.StepFlintlockd,
-	fleet.StepPoolAgent,
 	fleet.StepHostServices,
 	fleet.StepPrepull,
 	fleet.StepPrewarm,
@@ -132,7 +158,10 @@ func New(o Options) (*Provisioner, error) {
 
 // Provision runs every Host step on inst and returns its Inventory entry.
 // A failed step ends the instance's provisioning; the caller carries on
-// with the other instances (FL-013).
+// with the other instances (FL-013). The first step, detect, decides
+// whether the instance can be a Host at all: without a usable /dev/kvm it
+// ends there with ErrKVMUnavailable (FL-117). Its vCPU and memory replace
+// the discovered ones in the result's Instance and in the entry (FL-061).
 func (p *Provisioner) Provision(ctx context.Context, inst fleet.Instance) fleet.HostResult {
 	res := fleet.HostResult{Instance: inst}
 	in := fleet.RenderInput{
@@ -163,8 +192,20 @@ func (p *Provisioner) Provision(ctx context.Context, inst fleet.Instance) fleet.
 		default:
 			out, err := p.run(ctx, step, in)
 			sr.Err = err
-			if step == fleet.StepDetect {
+			if step == fleet.StepDetect && err == nil {
 				detected = out
+				//= docs/requirements/06-fleet.md#discovery
+				//# If provisioning finds no usable `/dev/kvm` on an instance, then
+				//# the Fleet Controller SHALL exclude it from the Inventory and report it as
+				//# unsupported because KVM is unavailable.
+				if !out.KVM {
+					sr.Err = kvmUnavailable(out.KVMUnavailable)
+				}
+				//= docs/requirements/06-fleet.md#inventory-and-runner-configuration
+				//# The Fleet Controller SHALL compute each Host's capacity as the
+				//# instance's vCPU and memory minus the configured Host reserve.
+				inst = withHostCapacity(inst, out)
+				in.Instance, res.Instance = inst, inst
 			}
 			if step == fleet.StepFlintlock && err == nil {
 				flintlockRan = true
@@ -175,6 +216,12 @@ func (p *Provisioner) Provision(ctx context.Context, inst fleet.Instance) fleet.
 		}
 		sr.Duration = time.Since(start)
 		res.Steps = append(res.Steps, sr)
+		if errors.Is(sr.Err, ErrKVMUnavailable) {
+			// Stopped before anything was installed; no entry, so the
+			// instance stays out of the Inventory.
+			res.Err = fmt.Errorf("%s (%s): %w", inst.ID, inst.Type, sr.Err)
+			return res
+		}
 		if sr.Err != nil {
 			res.Err = fmt.Errorf("%s: step %s: %w", inst.ID, step, sr.Err)
 			return res

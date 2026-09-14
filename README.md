@@ -1,7 +1,7 @@
 # flintlock-runner
 
 A GitLab CI runner that runs every job in its own Firecracker/Cloud Hypervisor
-microVM on a fleet of bare-metal EC2 hosts. Built on two liquidmetal
+microVM on a fleet of EC2 hosts with KVM. Built on two liquidmetal
 components: [flintlock](https://github.com/liquidmetal-dev/flintlock) runs
 the microVMs and [battery](https://github.com/liquidmetal-dev/battery) keeps
 warm pools of them on the hosts and leases them out. The runner itself is
