@@ -1,19 +1,21 @@
 {{template "prelude" .}}
 
-# Teardown stops and disables every service the Fleet Controller installed.
-# The thin pool and its device are removed only with the purge flag.
-for u in poolmgr-hostagent flintlock-runner-buildkitd flintlock-runner-athens flintlock-runner-zot flintlockd; do
+# Teardown stops and disables every service the Fleet Controller installed
+# on the Host, the ones verify_active checks: the pool agent, the Host
+# Services, flintlockd, containerd, the bridge's DHCP and DNS service and
+# the guest bridge. The thin pool and its device are removed only with the
+# purge flag.
+if [ -f /etc/nginx/conf.d/flintlock-runner.conf ]; then
+  rm -f /etc/nginx/conf.d/flintlock-runner.conf
+  changed "removed the nginx Host Service configuration"
+fi
+for u in poolmgr-hostagent flintlock-runner-buildkitd flintlock-runner-athens flintlock-runner-zot nginx flintlockd containerd dnsmasq flintlock-runner-network; do
   if systemctl cat "$u.service" >/dev/null 2>&1 &&
     { systemctl is-enabled --quiet "$u" || systemctl is-active --quiet "$u"; }; then
     systemctl disable --now --quiet "$u"
     changed "disabled $u"
   fi
 done
-if [ -f /etc/nginx/conf.d/flintlock-runner.conf ]; then
-  rm -f /etc/nginx/conf.d/flintlock-runner.conf
-  systemctl reload-or-restart nginx || true
-  changed "removed the nginx Host Service configuration"
-fi
 {{- if eq (index .Options "purge") "true"}}
 vg={{q .ThinPool}}
 if vgs "$vg" >/dev/null 2>&1; then
