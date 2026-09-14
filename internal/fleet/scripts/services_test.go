@@ -199,7 +199,8 @@ func TestGoProxyCachesPrivateListingsForRevalidationInterval(t *testing.T) {
 	mustContain(t, loc, "proxy_cache flr_goproxy_private;", "proxy_cache_valid 200 404 410 43200s;")
 	mustContain(t, s, "keys_zone=flr_goproxy_private:10m inactive=43200s")
 
-	patterns := append(fullInput().HostServices.GoProxy.PrivatePatterns, "gitlab.example.com/*/internal")
+	patterns := fullInput().HostServices.GoProxy.PrivatePatterns
+	patterns = append(patterns, "gitlab.example.com/*/internal")
 	re := regexp.MustCompile(privateRegex(patterns))
 	for path, want := range map[string]bool{
 		// A * matches one path element, as in GOPRIVATE.
