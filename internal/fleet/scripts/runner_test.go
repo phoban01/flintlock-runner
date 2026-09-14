@@ -47,8 +47,9 @@ func TestRunnerStepInstallsEnablesAndChecksTheService(t *testing.T) {
 		"TimeoutStopSec=90\n",
 		"WantedBy=multi-user.target",
 		`ensure_service "$unit" "$restart"`,
-		`status=$(systemctl is-active "$unit" || true)`,
-		`die "$unit did not stay active (it is $status)"`,
+		`restarts=$(systemctl show -p NRestarts --value "$unit")`+"\nsleep 10\n"+`status=$(systemctl is-active "$unit" || true)`+"\n"+
+			`if [ "$status" != active ] || [ "$(systemctl show -p NRestarts --value "$unit")" != "$restarts" ]; then`+"\n",
+		`die "$unit did not stay active (it is $status)"`+"\nfi\nprintf '::active:: %s\\n' \"$unit\"\n",
 		"reads=('/etc/flintlock-runner/config.yaml' '/etc/flintlock-runner/inventory.yaml' '/etc/flintlock-runner/tls/ca.pem')",
 		`runuser -u "$user" -- test -r "$f" || die "$user cannot read $f"`,
 	)

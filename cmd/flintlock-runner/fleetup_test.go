@@ -224,6 +224,21 @@ func TestFleetProvisionDryRunReportsThePlanAndChangesNothing(t *testing.T) {
 func TestFleetUpProvisionsThenVerifiesAndPrintsTheRunCommand(t *testing.T) {
 	t.Parallel()
 	f := upFixture(t, opstest.Options{Hosts: 2})
+	// The input references an Inventory file that provisioning does not
+	// write, so that only the Runner configuration provisioning wrote leads
+	// verification to the provisioned Hosts.
+	input, err := os.ReadFile(f.configPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	stale := "inventory:\n  file: " + f.invPath + "\n"
+	if !strings.Contains(string(input), stale) {
+		t.Fatalf("the fixture input no longer has %q", stale)
+	}
+	input = []byte(strings.Replace(string(input), stale, "inventory:\n  file: "+filepath.Join(f.dir, "elsewhere.yaml")+"\n", 1))
+	if err := os.WriteFile(f.configPath, input, 0o600); err != nil {
+		t.Fatal(err)
+	}
 	s := f.seams()
 	control := &scriptRecorder{}
 	s.ControlRemote = control
@@ -384,7 +399,8 @@ func TestFleetUpInstallsTheRunnerService(t *testing.T) {
 		"User=$user",
 		"ExecStart=$bin --config $config run",
 		`ensure_service "$unit"`,
-		`status=$(systemctl is-active "$unit" || true)`,
+		`status=$(systemctl is-active "$unit" || true)` + "\n" +
+			`if [ "$status" != active ] || [ "$(systemctl show -p NRestarts --value "$unit")" != "$restarts" ]; then`,
 		"'" + f.runnerPath + "' '" + f.invPath + "'",
 	} {
 		if !strings.Contains(unit, want) {
