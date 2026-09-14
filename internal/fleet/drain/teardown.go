@@ -230,7 +230,7 @@ func (t *Teardown) waitMicroVMs(ctx context.Context, inv *fleet.Inventory) error
 				if n := remaining[name]; n > 0 {
 					err := fmt.Errorf("%d MicroVM(s) still present after %s; services left running", n, t.cfg.Timeout)
 					if lastErr != nil {
-						err = fmt.Errorf("%w (last error: %v)", err, lastErr)
+						err = fmt.Errorf("%w (last error: %w)", err, lastErr)
 					}
 					failures = append(failures, fleet.Failure{Host: name, Step: StepWait, Err: err})
 				}

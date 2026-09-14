@@ -132,7 +132,7 @@ func TestDrainTimeoutLeavesServicesRunning(t *testing.T) {
 	s := opstest.Start(t, opstest.Options{Hosts: 2})
 	s.Declare(t)
 	s.WaitAvailable(t, 2)
-	lease := claimOn(t, s, "host-1")
+	lease := claimOn(t, s, "host-2")
 	t.Cleanup(func() { _ = s.Client.ReleaseVM(context.Background(), lease) })
 
 	var stopped atomic.Int32
@@ -145,7 +145,7 @@ func TestDrainTimeoutLeavesServicesRunning(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	err = d.Drain(context.Background(), "host-1", 300*time.Millisecond)
+	err = d.Drain(context.Background(), "host-2", 300*time.Millisecond)
 	if !errors.Is(err, ErrLeasesRemain) {
 		t.Fatalf("Drain = %v, want ErrLeasesRemain", err)
 	}
