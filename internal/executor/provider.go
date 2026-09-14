@@ -314,7 +314,7 @@ func (p *provider) Shutdown(ctx context.Context, _ *common.Config) {
 // Stopper is the shutdown control of the provider NewProvider returns. `run`
 // drives it from the process's stop signals, because the run loop's own
 // handling of SIGTERM does not match GL-070 to GL-073 (see
-// cmd/flintlock-runner).
+// cmd/flr).
 type Stopper interface {
 	// BeginShutdown cancels the Scheduler's Run: every unconverted
 	// Reservation is released and no more are granted (GL-070); running

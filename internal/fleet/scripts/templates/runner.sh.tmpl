@@ -1,6 +1,6 @@
 {{template "prelude" .}}
 
-# The Runner, `flintlock-runner run`, as a systemd service on the Control
+# The Runner, `flr run`, as a systemd service on the Control
 # Node (FL-122), started with the generated Runner configuration.
 unit={{q .Runner.Unit}}
 {{- if .Runner.Remove}}

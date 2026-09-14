@@ -107,7 +107,7 @@ client together rather than letting them drift apart.
 
 - **TD-050** The project SHALL provide an end-to-end harness that starts the
   fake GitLab, the fake Pool Manager, a configurable number of fake Hosts
-  and the real `flintlock-runner` binary, submits Jobs and asserts on the
+  and the real `flr` binary, submits Jobs and asserts on the
   recorded trace and final state, and SHALL run in continuous integration
   on a machine without KVM.
 - **TD-051** The harness SHALL cover a successful Job, a script failure with

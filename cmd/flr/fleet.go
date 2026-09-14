@@ -57,7 +57,7 @@ func fleetCommands(s fleetSeams) []cli.Command {
 			Usage: "provision the fleet, then verify it with the Profiles' Pools declared, and print one summary (FL-119)",
 			Flags: []cli.Flag{
 				cli.BoolFlag{Name: "dry-run", Usage: "print the provision plan and what up would do next, and change nothing (FL-124)"},
-				cli.BoolFlag{Name: "install-runner", Usage: "also run the Runner as the systemd service flintlock-runner on the Control Node (FL-122)"},
+				cli.BoolFlag{Name: "install-runner", Usage: "also run the Runner as the systemd service flr on the Control Node (FL-122)"},
 				cli.DurationFlag{Name: "timeout", Usage: "verification timeout; default fleet.verification_timeout"},
 			},
 			Action: func(c *cli.Context) error { return fleetUp(c, s) },

@@ -36,7 +36,7 @@ const (
 	// agent (EX-052). The fake Hosts never read them.
 	EnvKernelImage = "FLINTLOCK_RUNNER_E2E_KERNEL_IMAGE"
 	EnvRootFSImage = "FLINTLOCK_RUNNER_E2E_ROOTFS_IMAGE"
-	// EnvRunnerBinary names a prebuilt flintlock-runner binary, so that a
+	// EnvRunnerBinary names a prebuilt flr binary, so that a
 	// test run does not build one. `make e2e` sets it.
 	EnvRunnerBinary = "FLINTLOCK_RUNNER_E2E_BINARY"
 )
@@ -81,7 +81,7 @@ type Options struct {
 	// BootDelay is how long a fake MicroVM stays PENDING (TD-022); zero
 	// means DefaultBootDelay.
 	BootDelay time.Duration
-	// RunnerBinary is a prebuilt flintlock-runner. Empty means build one
+	// RunnerBinary is a prebuilt flr binary. Empty means build one
 	// into the Stack's root with `go build`, which has to run inside this
 	// module.
 	RunnerBinary string
@@ -194,7 +194,7 @@ func (s *Stack) Pool() poolmgr.PoolRef {
 //= docs/requirements/10-test-doubles.md#end-to-end-harness
 //# The project SHALL provide an end-to-end harness that starts the
 //# fake GitLab, the fake Pool Manager, a configurable number of fake Hosts
-//# and the real `flintlock-runner` binary, submits Jobs and asserts on the
+//# and the real `flr` binary, submits Jobs and asserts on the
 //# recorded trace and final state, and SHALL run in continuous integration
 //# on a machine without KVM.
 
@@ -494,7 +494,7 @@ func (s *Stack) WaitReady(ctx context.Context) error {
 	for {
 		for _, r := range s.GitLab.Requests() {
 			if r == jobRequestPath {
-				s.logf("flintlock-runner is polling the fake GitLab for jobs")
+				s.logf("flr is polling the fake GitLab for jobs")
 				return nil
 			}
 		}
@@ -502,7 +502,7 @@ func (s *Stack) WaitReady(ctx context.Context) error {
 		case <-exited:
 			return s.runnerExitError()
 		case <-ctx.Done():
-			return fmt.Errorf("harness: flintlock-runner did not ask for a job: %w; last lines of %s:\n%s",
+			return fmt.Errorf("harness: flr did not ask for a job: %w; last lines of %s:\n%s",
 				context.Cause(ctx), s.RunnerLog, s.RunnerLogTail(20))
 		case <-ticker.C:
 		}

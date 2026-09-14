@@ -1,5 +1,5 @@
 // Package fleet is the Fleet Controller (docs/requirements/06-fleet.md): the
-// `flintlock-runner fleet` subcommands that turn EC2 instances with KVM
+// `flr fleet` subcommands that turn EC2 instances with KVM
 // into flintlock Hosts, install the Pool Manager and the Host Services, and
 // produce the Inventory and Runner configuration.
 //

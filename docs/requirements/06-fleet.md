@@ -1,6 +1,6 @@
 # Fleet {#fleet}
 
-This document specifies the Fleet Controller: the `flintlock-runner fleet`
+This document specifies the Fleet Controller: the `flr fleet`
 subcommands that turn a set of EC2 instances with KVM into flintlock Hosts,
 install the Pool Manager daemon and the Host Services, and produce the
 Inventory and Runner configuration. The intent is that an operator launches

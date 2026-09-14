@@ -16,7 +16,7 @@ import (
 )
 
 // runnerPackage is the import path of the Runner's main package.
-const runnerPackage = "github.com/phoban01/flintlock-runner/cmd/flintlock-runner"
+const runnerPackage = "github.com/phoban01/flintlock-runner/cmd/flr"
 
 // moduleGoMod is the first line of this module's go.mod, which is how
 // moduleRoot recognises it.
@@ -26,7 +26,7 @@ const moduleGoMod = "module github.com/phoban01/flintlock-runner"
 // gives up waiting for it.
 const killGrace = 10 * time.Second
 
-// BuildRunner builds the flintlock-runner binary into dir and returns its
+// BuildRunner builds the flr binary into dir and returns its
 // path. It runs `go build` from this module's root, found by walking up
 // from the working directory, so it works from a test in any package of
 // the module and from a command started inside the checkout.
@@ -35,7 +35,7 @@ func BuildRunner(ctx context.Context, dir string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	out := filepath.Join(dir, "flintlock-runner")
+	out := filepath.Join(dir, "flr")
 	cmd := exec.CommandContext(ctx, "go", "build", "-o", out, runnerPackage)
 	cmd.Dir = root
 	var stderr bytes.Buffer
@@ -83,7 +83,7 @@ func (s *Stack) runnerBinary(ctx context.Context) (string, error) {
 		}
 		return path, nil
 	}
-	s.logf("building flintlock-runner (go build %s)", runnerPackage)
+	s.logf("building flr (go build %s)", runnerPackage)
 	dir := filepath.Join(s.Root, "bin")
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return "", fmt.Errorf("harness: %w", err)
@@ -109,7 +109,7 @@ func (r *runnerProc) exited() bool {
 	}
 }
 
-// StartRunner spawns `flintlock-runner --config <ConfigPath> run` in its own
+// StartRunner spawns `flr --config <ConfigPath> run` in its own
 // process group, with its output in RunnerLog. The process is killed by
 // Shutdown, and on Linux also when the process that started it dies, so no
 // exit path of a test leaves it running.
@@ -160,7 +160,7 @@ func (s *Stack) StartRunner(ctx context.Context) error {
 		close(r.done)
 	}()
 	s.runner = r
-	s.logf("flintlock-runner started (pid %d, log %s)", cmd.Process.Pid, s.RunnerLog)
+	s.logf("flr started (pid %d, log %s)", cmd.Process.Pid, s.RunnerLog)
 	return nil
 }
 
@@ -200,7 +200,7 @@ func (s *Stack) runnerExitError() error {
 	if r == nil || !r.exited() {
 		return nil
 	}
-	return fmt.Errorf("harness: flintlock-runner exited unexpectedly (%v); last lines of %s:\n%s",
+	return fmt.Errorf("harness: flr exited unexpectedly (%v); last lines of %s:\n%s",
 		exitDescription(r.waitErr), s.RunnerLog, s.RunnerLogTail(20))
 }
 
@@ -223,17 +223,17 @@ func (s *Stack) stopRunner(grace time.Duration) error {
 	if crashed {
 		errs = append(errs, s.runnerExitError())
 	} else {
-		s.logf("stopping flintlock-runner (SIGTERM, up to %s)", grace)
+		s.logf("stopping flr (SIGTERM, up to %s)", grace)
 		_ = signalGroup(r.cmd.Process.Pid, syscall.SIGTERM)
 		select {
 		case <-r.done:
 		case <-time.After(grace):
-			errs = append(errs, fmt.Errorf("harness: flintlock-runner did not exit within %s of SIGTERM and was killed", grace))
+			errs = append(errs, fmt.Errorf("harness: flr did not exit within %s of SIGTERM and was killed", grace))
 			_ = signalGroup(r.cmd.Process.Pid, syscall.SIGKILL)
 			select {
 			case <-r.done:
 			case <-time.After(killGrace):
-				errs = append(errs, fmt.Errorf("harness: flintlock-runner (pid %d) survived SIGKILL", r.cmd.Process.Pid))
+				errs = append(errs, fmt.Errorf("harness: flr (pid %d) survived SIGKILL", r.cmd.Process.Pid))
 			}
 		}
 	}
@@ -245,7 +245,7 @@ func (s *Stack) stopRunner(grace time.Duration) error {
 		errs = append(errs, err)
 	}
 	if !crashed && r.exited() && r.waitErr != nil && len(errs) == 0 {
-		errs = append(errs, fmt.Errorf("harness: flintlock-runner exited on SIGTERM with %s; last lines of %s:\n%s",
+		errs = append(errs, fmt.Errorf("harness: flr exited on SIGTERM with %s; last lines of %s:\n%s",
 			exitDescription(r.waitErr), s.RunnerLog, s.RunnerLogTail(20)))
 	}
 	return errors.Join(errs...)

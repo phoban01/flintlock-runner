@@ -264,7 +264,7 @@ func TestFleetUpProvisionsThenVerifiesAndPrintsTheRunCommand(t *testing.T) {
 	for _, want := range []string{
 		"provision  ok: the Inventory " + f.invPath + " lists 2 Host(s); 2 provisioned, 0 already there, 0 removed",
 		"verify     ok: 2 Host(s) and 1 Pool(s) passed",
-		"runner     not installed; start it with: flintlock-runner --config " + f.runnerPath + " run",
+		"runner     not installed; start it with: flr --config " + f.runnerPath + " run",
 	} {
 		if !strings.Contains(summary, want) {
 			t.Errorf("the summary lacks %q:\n%s", want, summary)
@@ -367,7 +367,7 @@ func TestFleetUpInstallsTheRunnerService(t *testing.T) {
 		t.Fatal(err)
 	}
 	std := &standInScripts{real: real}
-	bin := filepath.Join(t.TempDir(), "flintlock-runner")
+	bin := filepath.Join(t.TempDir(), "flr")
 	if err := os.WriteFile(bin, []byte("binary"), 0o700); err != nil {
 		t.Fatal(err)
 	}
@@ -392,10 +392,16 @@ func TestFleetUpInstallsTheRunnerService(t *testing.T) {
 	if len(rendered) != 1 {
 		t.Fatalf("the runner step was rendered %d times", len(rendered))
 	}
+	// fleet up installs the binary's resolved path. On macOS the temp
+	// directory is under /var, a symlink to /private/var.
+	resolved, err := filepath.EvalSymlinks(bin)
+	if err != nil {
+		t.Fatal(err)
+	}
 	unit := rendered[0].Content
 	for _, want := range []string{
 		"config='" + f.runnerPath + "'",
-		"install -D -m 0755 '" + bin + "' \"$bin\"",
+		"install -D -m 0755 '" + resolved + "' \"$bin\"",
 		"User=$user",
 		"ExecStart=$bin --config $config run",
 		`ensure_service "$unit"`,
@@ -410,7 +416,7 @@ func TestFleetUpInstallsTheRunnerService(t *testing.T) {
 	if strings.Contains(unit, "ca-key.pem") {
 		t.Error("the runner step gives the Runner's user the CA key")
 	}
-	if !strings.Contains(out, "runner     ok: the systemd service flintlock-runner is active, running flintlock-runner --config "+f.runnerPath+" run") {
+	if !strings.Contains(out, "runner     ok: the systemd service flr is active, running flr --config "+f.runnerPath+" run") {
 		t.Errorf("the summary does not report the Runner active:\n%s", out)
 	}
 
@@ -450,7 +456,7 @@ func TestFleetUpDryRunChangesNothing(t *testing.T) {
 		"write the Inventory " + f.invPath + " and the Runner configuration " + f.runnerPath,
 		"install the Pool Manager daemon on the Control Node",
 		"run fleet verify --declare against " + f.runnerPath,
-		`install "flintlock-runner --config ` + f.runnerPath + ` run" as the systemd service flintlock-runner on the Control Node`,
+		`install "flr --config ` + f.runnerPath + ` run" as the systemd service flr on the Control Node`,
 	} {
 		if !strings.Contains(out, want) {
 			t.Errorf("output lacks %q:\n%s", want, out)

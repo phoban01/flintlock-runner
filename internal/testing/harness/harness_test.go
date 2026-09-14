@@ -241,14 +241,14 @@ func TestOptionsFromEnv(t *testing.T) {
 		EnvPoolManager:       "10.0.0.5:9440",
 		EnvKernelImage:       "k:1",
 		EnvRootFSImage:       "r:1",
-		EnvRunnerBinary:      "/bin/flintlock-runner",
+		EnvRunnerBinary:      "/bin/flr",
 	}
 	lookup := func(k string) (string, bool) { v, ok := env[k]; return v, ok }
 
 	got := optionsFromLookup(Options{PoolManagerEndpoint: "explicit:1"}, lookup)
 	want := Options{
 		HardwareInventory: "/etc/inventory.yaml", PoolManagerEndpoint: "explicit:1",
-		KernelImage: "k:1", RootFSImage: "r:1", RunnerBinary: "/bin/flintlock-runner",
+		KernelImage: "k:1", RootFSImage: "r:1", RunnerBinary: "/bin/flr",
 	}
 	if fmt.Sprintf("%+v", got) != fmt.Sprintf("%+v", want) {
 		t.Errorf("optionsFromLookup = %+v, want %+v (explicit options win)", got, want)

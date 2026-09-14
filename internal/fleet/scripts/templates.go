@@ -270,7 +270,7 @@ const guestVerifyTemplate = "guest_verify.sh.tmpl"
 //# generated Runner configuration, and SHALL enable and start it and verify
 //# that it is active.
 
-// runnerTemplate installs `flintlock-runner run` as a systemd service on
+// runnerTemplate installs `flr run` as a systemd service on
 // the Control Node, started with the generated Runner configuration, as an
 // unprivileged user that may read the files the Runner reads; it enables
 // and starts the service and fails unless it stays active. With the remove

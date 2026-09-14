@@ -11,7 +11,7 @@ if [ -f /etc/nginx/conf.d/flintlock-runner.conf ]; then
   rm -f /etc/nginx/conf.d/flintlock-runner.conf
   changed "removed the nginx Host Service configuration"
 fi
-for u in flintlock-runner flintlock-runner-buildkitd flintlock-runner-athens flintlock-runner-zot nginx flintlockd containerd dnsmasq flintlock-runner-network; do
+for u in flr flintlock-runner-buildkitd flintlock-runner-athens flintlock-runner-zot nginx flintlockd containerd dnsmasq flintlock-runner-network; do
   if systemctl cat "$u.service" >/dev/null 2>&1 &&
     { systemctl is-enabled --quiet "$u" || systemctl is-active --quiet "$u"; }; then
     systemctl disable --now --quiet "$u"

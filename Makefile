@@ -27,7 +27,7 @@ help:
 ## build: compile every package and the binaries into bin/
 build:
 	$(GO) build ./...
-	$(GO) build -o $(BIN)/flintlock-runner ./cmd/flintlock-runner
+	$(GO) build -o $(BIN)/flr ./cmd/flr
 	$(GO) build -o $(BIN)/fake-poolmgr ./cmd/fake-poolmgr
 	$(GO) build -o $(BIN)/flintlock-devstack ./cmd/flintlock-devstack
 
@@ -75,15 +75,15 @@ coverage-gate:
 # fast. FLINTLOCK_RUNNER_E2E_INVENTORY selects the hardware tier (TD-052) and
 # FLINTLOCK_RUNNER_E2E_POOL_MANAGER a real Pool Manager (TD-053).
 e2e:
-	$(GO) build -o $(BIN)/flintlock-runner ./cmd/flintlock-runner
-	FLINTLOCK_RUNNER_E2E_BINARY=$(abspath $(BIN))/flintlock-runner \
+	$(GO) build -o $(BIN)/flr ./cmd/flr
+	FLINTLOCK_RUNNER_E2E_BINARY=$(abspath $(BIN))/flr \
 		$(GO) test -race -tags e2e -count=1 -timeout 15m $(E2E_FLAGS) ./internal/testing/harness/...
 
 ## demo: run jobs through the real runner on a local fake stack, no KVM needed (DEMO_ARGS='-keep', '-jobs 3', "-script 'exit 3'")
 demo:
-	$(GO) build -o $(BIN)/flintlock-runner ./cmd/flintlock-runner
+	$(GO) build -o $(BIN)/flr ./cmd/flr
 	$(GO) build -o $(BIN)/flintlock-devstack ./cmd/flintlock-devstack
-	$(BIN)/flintlock-devstack -runner-bin $(BIN)/flintlock-runner $(DEMO_ARGS)
+	$(BIN)/flintlock-devstack -runner-bin $(BIN)/flr $(DEMO_ARGS)
 
 ## clean: remove build outputs and generated duvet files
 clean:

@@ -156,7 +156,7 @@ func runFleetCommand(t *testing.T, s fleetSeams, configPath string, args ...stri
 	var out syncBuffer
 	app.Writer = &out
 	app.ErrWriter = &out
-	err := app.Run(append([]string{"flintlock-runner", "--config", configPath, "fleet"}, args...))
+	err := app.Run(append([]string{"flr", "--config", configPath, "fleet"}, args...))
 	return out.String(), err
 }
 

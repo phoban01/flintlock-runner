@@ -103,7 +103,7 @@ const (
 	// OptionRunnerConfig is the absolute path of the generated Runner
 	// configuration the Runner's service starts with (runner, FL-122).
 	OptionRunnerConfig = "runner_config"
-	// OptionRunnerBinary is the flintlock-runner binary the step installs
+	// OptionRunnerBinary is the flr binary the step installs
 	// as RunnerBinary; empty keeps the one installed.
 	OptionRunnerBinary = "runner_binary"
 	// OptionRunnerStateDir is the Runner's state directory, which its user
@@ -125,12 +125,12 @@ const (
 const (
 	// RunnerUnit is the systemd unit, and RunnerUser the unprivileged user
 	// it runs as.
-	RunnerUnit = "flintlock-runner"
+	RunnerUnit = "flr"
 	RunnerUser = "flintlock-runner"
 	// RunnerUnitPath is the unit file the step writes.
 	RunnerUnitPath = "/etc/systemd/system/" + RunnerUnit + ".service"
 	// RunnerBinary is where the step installs the binary the unit runs.
-	RunnerBinary = "/usr/local/bin/flintlock-runner"
+	RunnerBinary = "/usr/local/bin/flr"
 	// runnerSettle is how long the Runner has to stay active after a start
 	// before the step reports it active.
 	runnerSettle = 10 * time.Second

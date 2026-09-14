@@ -29,9 +29,9 @@ exists is:
 
 No KVM, EC2 or GitLab needed: `make demo` starts a fake GitLab, the fake
 Pool Manager and two fake flintlock Hosts on loopback ports, runs the real
-`flintlock-runner` against them, queues a hello-world job and streams its
-log. The fake Hosts run each job's script as a local process under a
-temporary directory.
+`flr` command against them, queues a hello-world job and streams its log.
+The fake Hosts run each job's script as a local process under a temporary
+directory.
 
 ```sh
 make demo                                  # one hello-world job
@@ -48,10 +48,10 @@ section (`docs/requirements/07-configuration.md`) and instances launched with
 its discovery tag, or listed statically for SSH:
 
 ```sh
-flintlock-runner --config fleet.yaml fleet provision --dry-run     # what would be provisioned, left alone and removed; changes nothing
-flintlock-runner --config fleet.yaml fleet up                      # provision, then verify with the Pools declared; one summary at the end
-flintlock-runner --config fleet.yaml fleet up --install-runner     # and run the Runner as the systemd service flintlock-runner
-flintlock-runner --config fleet.yaml fleet up --dry-run            # the plan and what up would do next
+flr --config fleet.yaml fleet provision --dry-run     # what would be provisioned, left alone and removed; changes nothing
+flr --config fleet.yaml fleet up                      # provision, then verify with the Pools declared; one summary at the end
+flr --config fleet.yaml fleet up --install-runner     # and run the Runner as the systemd service flr
+flr --config fleet.yaml fleet up --dry-run            # the plan and what up would do next
 ```
 
 `fleet up` stops before verification when provisioning fails and exits
@@ -69,6 +69,12 @@ Tagged builds for Linux and macOS, on amd64 and arm64, are on the
 `vX.Y.Z-rc.N` tags are release candidates, published as pre-releases, and
 `vX.Y.Z` tags are releases. Each ships the requirements report for its
 commit. [docs/RELEASING.md](docs/RELEASING.md) is the procedure.
+
+The command is `flr`. To build it from source instead:
+
+```sh
+go install github.com/phoban01/flintlock-runner/cmd/flr@latest
+```
 
 ## Requirements tracing
 
@@ -88,7 +94,7 @@ make duvet-ci         # fails if .duvet/snapshot.txt is stale
 ## Layout
 
 ```
-cmd/flintlock-runner/   main: run, config show, fleet {provision,verify,up,drain,teardown,emit-userdata}
+cmd/flr/                main: run, config show, fleet {provision,verify,up,drain,teardown,emit-userdata}
 cmd/fake-poolmgr/       the fake Pool Manager as a standalone binary (TD-009)
 cmd/flintlock-devstack/ the end-to-end harness as a demo: fakes + the real runner + jobs (make demo)
 internal/clock/         Clock and Backoff interfaces shared by the scheduler, poolmgr and the fakes

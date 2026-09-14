@@ -480,7 +480,7 @@ func verifyRunner(ctx context.Context, client common.Network, rc *common.RunnerC
 			return nil
 		case err == nil:
 			log.Error("gitlab rejected the runner token", "url", rc.URL)
-			return cli.NewExitError("flintlock-runner: GitLab rejected the runner authentication token (403 Forbidden)", exitVerifyFailed)
+			return cli.NewExitError("flr: GitLab rejected the runner authentication token (403 Forbidden)", exitVerifyFailed)
 		}
 		lastErr = err
 		log.Warn("could not verify the runner with gitlab; retrying", "attempt", i+1, "error", err)
@@ -490,7 +490,7 @@ func verifyRunner(ctx context.Context, client common.Network, rc *common.RunnerC
 		case <-time.After(time.Duration(i+1) * time.Second):
 		}
 	}
-	return cli.NewExitError(fmt.Sprintf("flintlock-runner: verifying the runner with GitLab: %v", lastErr), exitVerifyFailed)
+	return cli.NewExitError(fmt.Sprintf("flr: verifying the runner with GitLab: %v", lastErr), exitVerifyFailed)
 }
 
 //= docs/requirements/08-observability.md#logging

@@ -67,7 +67,7 @@ func describeInstance(inst fleet.Instance) string {
 // runCommand is the command that starts the Runner with the Runner
 // configuration at path.
 func runCommand(path string) string {
-	return "flintlock-runner --config " + path + " run"
+	return "flr --config " + path + " run"
 }
 
 // upSummary is the one summary fleet up prints at the end: a line per
@@ -218,14 +218,14 @@ func installRunner(ctx context.Context, c *cli.Context, s fleetSeams, cfg *confi
 			"which the service will not have: %w", runnerPath, err)
 	}
 	if s.Executable == nil {
-		return errors.New("no flintlock-runner binary to install")
+		return errors.New("no flr binary to install")
 	}
 	bin, err := s.Executable()
 	if err != nil {
-		return fmt.Errorf("finding the flintlock-runner binary: %w", err)
+		return fmt.Errorf("finding the flr binary: %w", err)
 	}
 	if bin, err = filepath.EvalSymlinks(bin); err != nil {
-		return fmt.Errorf("finding the flintlock-runner binary: %w", err)
+		return fmt.Errorf("finding the flr binary: %w", err)
 	}
 	stateDir := rcfg.StateDir
 	if !filepath.IsAbs(stateDir) {

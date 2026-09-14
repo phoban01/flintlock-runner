@@ -1,7 +1,7 @@
-// Command flintlock-runner is the GitLab CI runner that runs every Job in its
-// own MicroVM on a fleet of flintlock Hosts. It is a single Go program built
-// from the gitlab-runner packages with the flintlock executor inserted at the
-// executor boundary (docs/architecture.md).
+// Command flr is flintlock-runner, the GitLab CI runner that runs every Job
+// in its own MicroVM on a fleet of flintlock Hosts. It is a single Go program
+// built from the gitlab-runner packages with the flintlock executor inserted
+// at the executor boundary (docs/architecture.md).
 //
 // Subcommands:
 //
@@ -55,7 +55,7 @@ func main() {
 // no gitlab-runner binary is involved.
 func newApp() *cli.App {
 	app := cli.NewApp()
-	app.Name = "flintlock-runner"
+	app.Name = "flr"
 	app.Usage = "GitLab CI runner that executes every job in its own flintlock microVM"
 	app.Version = version
 	// cli.App leaves ErrWriter nil and falls back to os.Stderr only in its

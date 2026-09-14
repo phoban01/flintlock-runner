@@ -12,13 +12,17 @@ For `linux/amd64`, `linux/arm64`, `darwin/amd64` and `darwin/arm64`:
 
 | Archive | Contents |
 |---|---|
-| `flintlock-runner_<version>_<os>_<arch>.tar.gz` | the Runner, which a Control Node installs, and the `fleet` commands |
+| `flr_<version>_<os>_<arch>.tar.gz` | `flr`: the Runner, which a Control Node installs, and the `fleet` commands |
 | `flintlock-devtools_<version>_<os>_<arch>.tar.gz` | `fake-poolmgr`, the stand-in Pool Manager an early fleet can run without battery (TD-009), and `flintlock-devstack`, the local demo stack |
 | `checksums.txt` | SHA-256 of every archive |
 | `requirements-report.html`, `requirements-report.json` | the duvet report for the tagged commit: every requirement in `docs/requirements/` and whether this build implements and tests it |
 
+Up to `v1.0.0-rc.1` the Runner's archive and binary were called
+`flintlock-runner`; from then on they are `flr`. The configuration, paths
+and identifiers keep the `flintlock-runner` name.
+
 Binaries are static (`CGO_ENABLED=0`), built with `-trimpath`, stamped with
-the version (`flintlock-runner --version`), and carry the commit's timestamp
+the version (`flr --version`), and carry the commit's timestamp
 rather than the build's, so the same tag builds the same bytes.
 
 ### On macOS
@@ -33,7 +37,7 @@ on Linux only.
 
 The binaries are not signed or notarized. A file downloaded with a browser
 carries the quarantine attribute, which Gatekeeper refuses to run; clear it
-with `xattr -d com.apple.quarantine flintlock-runner`. A file fetched with
+with `xattr -d com.apple.quarantine flr`. A file fetched with
 `curl` is not quarantined.
 
 ## Cutting a release candidate
@@ -97,8 +101,8 @@ packaging dry run that builds every archive without publishing anything.
 
 ```sh
 sha256sum --check --ignore-missing checksums.txt
-tar -xzf flintlock-runner_0.1.0-rc.1_linux_amd64.tar.gz
-./flintlock-runner --version
+tar -xzf flr_0.1.0-rc.1_linux_amd64.tar.gz
+./flr --version
 ```
 
 ## Not yet done

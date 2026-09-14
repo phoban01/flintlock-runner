@@ -12,9 +12,9 @@ before:
 
 builds:
   - &build
-    id: flintlock-runner
-    main: ./cmd/flintlock-runner
-    binary: flintlock-runner
+    id: flr
+    main: ./cmd/flr
+    binary: flr
     env:
       - CGO_ENABLED=0
     goos: [linux, darwin]
@@ -36,8 +36,8 @@ builds:
 archives:
   # The Runner on its own, which is what a Control Node installs.
   - id: runner
-    ids: [flintlock-runner]
-    name_template: "flintlock-runner_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+    ids: [flr]
+    name_template: "flr_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
     formats: [tar.gz]
     files:
       - LICENSE

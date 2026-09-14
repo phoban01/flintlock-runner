@@ -23,7 +23,7 @@ import (
 )
 
 // stack is the fake GitLab, the fake Pool Manager and one fake Host, all in
-// the test process, with the real flintlock-runner binary pointed at them.
+// the test process, with the real flr binary pointed at them.
 type stack struct {
 	gitlab   *fakegitlab.Server
 	pm       *pmfake.PoolManager
@@ -167,7 +167,7 @@ func waitFor(t *testing.T, d time.Duration, what string, cond func() bool) {
 	}
 }
 
-// buildBinary builds flintlock-runner without the race detector. The
+// buildBinary builds flr without the race detector. The
 // binary runs gitlab-runner's run loop, which races on its own stop signal
 // at the pinned commit (RunCommand.runWait writes stopSignal while the
 // workers read it), so the test runs it out of process, as the harness
@@ -175,12 +175,12 @@ func waitFor(t *testing.T, d time.Duration, what string, cond func() bool) {
 func buildBinary(t *testing.T) string {
 	t.Helper()
 	binOnce.Do(func() {
-		dir, err := os.MkdirTemp("", "flintlock-runner-e2e-")
+		dir, err := os.MkdirTemp("", "flr-e2e-")
 		if err != nil {
 			binErr = err
 			return
 		}
-		binPath = filepath.Join(dir, "flintlock-runner")
+		binPath = filepath.Join(dir, "flr")
 		cmd := exec.Command("go", "build", "-o", binPath, ".")
 		cmd.Env = append(os.Environ(), "GOFLAGS=")
 		if out, err := cmd.CombinedOutput(); err != nil {
@@ -200,7 +200,7 @@ var (
 	binErr  error
 )
 
-// runner is a flintlock-runner child process.
+// runner is an flr child process.
 type runnerProc struct {
 	cmd    *exec.Cmd
 	out    *syncBuffer
@@ -270,7 +270,7 @@ func (r *runnerProc) waitExit(t *testing.T, d time.Duration) {
 //# When starting, the Runner SHALL call `POST /api/v4/runners/verify`
 //# with the full `info` payload before it requests any Job.
 
-// TestRunRunsAJobEndToEnd starts the flintlock-runner binary's `run` against
+// TestRunRunsAJobEndToEnd starts the flr binary's `run` against
 // the fake GitLab, the fake Pool Manager and a fake Host, hands it one Job
 // and checks that the Job's script ran in the MicroVM, that its output
 // reached GitLab and that the Job was reported successful. The fake GitLab

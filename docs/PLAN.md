@@ -70,8 +70,8 @@ script; six issues opened from the table below.
 | `hosts` | `internal/flintlock`, `internal/transport` | HO, EX-040..EX-051 | interfaces, `fakes` (host fake) | exec stream, host unhealthy, ServerInfo variants |
 | `scheduler` | `internal/scheduler` | SC | interfaces | capacity refusal, unknown image, placement both paths |
 | `config` | `internal/config` | CF | nothing | validation cases, defaults, reload |
-| `executor` | `internal/executor`, `cmd/flintlock-runner run` | EX-001..EX-033, EX-060..EX-066, GL, OB, SE (runner-side) | all of the above | successful job, script failure, cancel, timeout, artifacts, cache, env injection |
-| `fleet` | `internal/fleet`, `cmd/flintlock-runner fleet` | FL, TD-040..TD-044, SE (fleet-side) | `config` | static-provider provision against a local SSH target; script lint |
+| `executor` | `internal/executor`, `cmd/flr run` | EX-001..EX-033, EX-060..EX-066, GL, OB, SE (runner-side) | all of the above | successful job, script failure, cancel, timeout, artifacts, cache, env injection |
+| `fleet` | `internal/fleet`, `cmd/flr fleet` | FL, TD-040..TD-044, SE (fleet-side) | `config` | static-provider provision against a local SSH target; script lint |
 | `harness` | `internal/testing/harness`, `make e2e` | TD-050..TD-054 | `fakes` to boot, `executor` to run a job | every TD-051 scenario; hardware tier gated by env var |
 
 `fakes` and `config` start immediately after Phase 0. `poolmgr`, `hosts` and

@@ -116,7 +116,7 @@ func startFakeHost(t *testing.T, name, root string) *hostfake.Host {
 //# its Inventory from tag discovery at the configured interval so that
 //# self-provisioned Hosts join without a restart.
 
-// TestRunRefreshesInventoryFromTagDiscovery starts the flintlock-runner
+// TestRunRefreshesInventoryFromTagDiscovery starts the flr
 // binary's `run` in launch template mode with a short refresh interval,
 // with EC2 answered by an in-process endpoint. The Runner starts with the
 // one Host it is configured with; an instance carrying the tag then

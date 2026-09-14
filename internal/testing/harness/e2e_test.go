@@ -16,7 +16,7 @@ import (
 	"github.com/phoban01/flintlock-runner/internal/testing/fakegitlab"
 )
 
-// The scenarios in this file run the real flintlock-runner binary. They are
+// The scenarios in this file run the real flr binary. They are
 // behind the e2e build tag so that plain `go test ./...` stays fast; `make
 // e2e` runs them. The binary is built once per test run unless
 // FLINTLOCK_RUNNER_E2E_BINARY names one.
@@ -59,7 +59,7 @@ func TestConfigShowAcceptsTheGeneratedConfiguration(t *testing.T) {
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &stdout, &stderr
 	if err := cmd.Run(); err != nil {
-		t.Fatalf("flintlock-runner config show: %v\nstderr:\n%s", err, stderr.String())
+		t.Fatalf("flr config show: %v\nstderr:\n%s", err, stderr.String())
 	}
 	out := stdout.String()
 	for _, want := range []string{s.GitLab.URL(), s.PoolManagerAddr(), s.Inventory[0].Endpoint, s.Config.Profiles[0].BuildsDir} {
@@ -183,7 +183,7 @@ func runScenarios(t *testing.T, opts Options) {
 //= type=test
 //# The project SHALL provide an end-to-end harness that starts the
 //# fake GitLab, the fake Pool Manager, a configurable number of fake Hosts
-//# and the real `flintlock-runner` binary, submits Jobs and asserts on the
+//# and the real `flr` binary, submits Jobs and asserts on the
 //# recorded trace and final state, and SHALL run in continuous integration
 //# on a machine without KVM.
 

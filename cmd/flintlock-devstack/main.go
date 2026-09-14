@@ -1,10 +1,10 @@
 // Command flintlock-devstack runs flintlock-runner end to end on a laptop,
 // without KVM, EC2 or a GitLab instance. It starts the fake GitLab, the fake
-// Pool Manager and fake flintlock Hosts on loopback ports, runs the real
-// flintlock-runner binary against them, queues one or more Jobs, streams each
-// Job's log as the Runner sends it, prints the final state and shuts
-// everything down, checking that no Lease is held and no MicroVM sandbox is
-// left behind (TD-054). It is the end-to-end harness
+// Pool Manager and fake flintlock Hosts on loopback ports, runs the real flr
+// binary against them, queues one or more Jobs, streams each Job's log as
+// the Runner sends it, prints the final state and shuts everything down,
+// checking that no Lease is held and no MicroVM sandbox is left behind
+// (TD-054). It is the end-to-end harness
 // (internal/testing/harness) with a human watching.
 //
 // Usage:
@@ -75,14 +75,14 @@ func parseFlags(args []string, stderr io.Writer) (*options, error) {
 	fs.StringVar(&scriptFile, "script-file", "", "read the job script from this file")
 	fs.IntVar(&o.hosts, "hosts", harness.DefaultHosts, "number of fake flintlock Hosts")
 	fs.IntVar(&o.poolSize, "pool-size", harness.DefaultPoolSize, "warm MicroVMs in the pool")
-	fs.StringVar(&o.runnerBin, "runner-bin", "", "prebuilt flintlock-runner binary (default: go build it)")
+	fs.StringVar(&o.runnerBin, "runner-bin", "", "prebuilt flr binary (default: go build it)")
 	fs.BoolVar(&o.keep, "keep", false, "leave the stack running after the jobs, until Ctrl-C")
 	fs.DurationVar(&o.timeout, "timeout", 5*time.Minute, "give up on a job after this long")
 	fs.BoolVar(&o.runnerLogs, "runner-logs", false, "copy the runner's own log to stderr as well as to its log file")
 	fs.BoolVar(&o.raw, "raw", false, "print job logs exactly as GitLab receives them (timestamps, ANSI, section markers)")
 	fs.Usage = func() {
 		fmt.Fprintf(stderr, "usage: flintlock-devstack [flags]\n\n"+
-			"Runs flintlock-runner against a local fake GitLab, fake Pool Manager and fake\n"+
+			"Runs flr against a local fake GitLab, fake Pool Manager and fake\n"+
 			"flintlock Hosts, queues jobs and streams their logs. No KVM needed: the fake\n"+
 			"Hosts run each job's script as a local process.\n\n")
 		fs.PrintDefaults()
@@ -187,7 +187,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	u.step("flintlock-devstack: fake GitLab, fake Pool Manager and %d fake flintlock Host(s), with the real flintlock-runner", o.hosts)
+	u.step("flintlock-devstack: fake GitLab, fake Pool Manager and %d fake flintlock Host(s), with the real flr", o.hosts)
 	// The fakes log through slog's default logger; their lines go to a
 	// file in the stack's directory so that the terminal shows the jobs.
 	root, err := os.MkdirTemp("", "flintlock-devstack-")
@@ -222,7 +222,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 	}
 	ok := session(ctx, s, u, o, stderr)
 
-	u.step("shutting down: flintlock-runner first (SIGTERM), then the fakes")
+	u.step("shutting down: flr first (SIGTERM), then the fakes")
 	if err := s.Shutdown(context.Background()); err != nil {
 		u.line(u.paint("1;31", "shutdown check failed:"))
 		u.line(err.Error())
@@ -241,7 +241,7 @@ func session(ctx context.Context, s *harness.Stack, u *ui, o *options, stderr io
 		fmt.Fprintf(stderr, "flintlock-devstack: %v\n", err)
 		return false
 	}
-	u.step("waiting for flintlock-runner to declare its pool and ask for a job")
+	u.step("waiting for flr to declare its pool and ask for a job")
 	if err := s.WaitReady(ctx); err != nil {
 		fmt.Fprintf(stderr, "flintlock-devstack: %v\n", err)
 		return false
@@ -349,7 +349,7 @@ func keep(ctx context.Context, s *harness.Stack, u *ui, o *options) {
 	}
 	u.line("    runner metrics  http://" + s.Config.Observability.ListenAddress + "/metrics")
 	u.line("    fakes' log      " + filepath.Join(s.Root, fakesLog))
-	u.line("    try             flintlock-runner --config " + s.ConfigPath + " config show")
+	u.line("    try             flr --config " + s.ConfigPath + " config show")
 	if !isTerminal(os.Stdin) {
 		<-ctx.Done()
 		return
