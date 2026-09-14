@@ -206,6 +206,41 @@ each Host for the Guest Transport.
   its Inventory from tag discovery at the configured interval so that
   self-provisioned Hosts join without a restart.
 
+## One-shot operation {#one-shot-operation}
+
+- **FL-118** Where the dry-run flag is passed, the provision command SHALL
+  report each instance it would provision, each Inventory Host it would leave
+  unchanged and each Host it would remove from the Inventory, and SHALL NOT
+  contact any Host, write the Inventory or the Runner configuration, or change
+  the Pool Manager.
+- **FL-119** The Fleet Controller SHALL provide an up command that runs the
+  provision command, then runs the verification command with the Profiles'
+  Pools declared against the Runner configuration that provisioning wrote,
+  and reports the outcome of both in one summary.
+- **FL-120** If provisioning fails, then the up command SHALL NOT run
+  verification and SHALL exit with a non-zero status.
+- **FL-121** If verification fails, then the up command SHALL exit with a
+  non-zero status.
+- **FL-122** Where the install-runner flag is passed, the up command SHALL
+  install the Runner as a systemd service on the Control Node that uses the
+  generated Runner configuration, and SHALL enable and start it and verify
+  that it is active.
+- **FL-123** Where the install-runner flag is not passed, the up command
+  SHALL print the command that starts the Runner with the generated Runner
+  configuration.
+- **FL-124** Where the dry-run flag is passed, the up command SHALL report
+  the provision plan and the steps it would run after provisioning, and
+  SHALL NOT provision, verify or install anything.
+
+The up command is the provision command followed by the verification
+command, so that an operator goes from tagged instances to a verified fleet
+with one invocation. It adds nothing of its own to either step: it stops
+before verification when provisioning failed, because verifying a fleet that
+did not provision only repeats the failure. A dry run computes its plan the
+same way a real run does, but the KVM check is made on each host during
+provisioning, so a dry run cannot say which of the instances it would
+provision would be excluded for want of KVM, and its output says so.
+
 ## Host services {#host-services}
 
 - **FL-100** The Fleet Controller SHALL install on every Host a `buildkitd`
