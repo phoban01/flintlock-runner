@@ -145,6 +145,11 @@ func (s *impl) probeHost(ctx context.Context, name string) {
 // are counted consecutively and reset by any success, so a single lost call
 // does not take a Host out; the count reaching the configured threshold does,
 // and the next successful probe puts it back.
+//
+// A Host that is no longer in the health table was removed by a Reload while
+// its probe was in flight. Its result is dropped rather than recorded: adding
+// the Host back would leave a Host that is not in the Inventory in the table,
+// where probeAll would go on probing it and Snapshot reporting it for ever.
 func (s *impl) recordProbe(name string, info *flintlock.HostInfo, probeErr error) {
 	threshold := s.hostUnhealthyThreshold()
 	now := s.clk.Now()
@@ -152,8 +157,8 @@ func (s *impl) recordProbe(name string, info *flintlock.HostInfo, probeErr error
 	s.mu.Lock()
 	st, ok := s.hosts[name]
 	if !ok {
-		st = &hostState{healthy: true}
-		s.hosts[name] = st
+		s.mu.Unlock()
+		return
 	}
 	st.lastProbeAt = now
 	var becameHealthy, becameUnhealthy bool

@@ -828,6 +828,8 @@ type envConfig struct {
 	backoff   clock.Backoff
 	tune      func(*Settings)
 	specsErr  error
+	// wrapHosts, when set, wraps the test Registry the Scheduler is given.
+	wrapHosts func(*testRegistry) flintlock.Registry
 }
 
 // env is a Scheduler with every dependency a test can reach.
@@ -908,6 +910,10 @@ func newEnv(t *testing.T, cfg envConfig) *env {
 	if cfg.tune != nil {
 		cfg.tune(&settings)
 	}
+	var hosts flintlock.Registry = e.registry
+	if cfg.wrapHosts != nil {
+		hosts = cfg.wrapHosts(e.registry)
+	}
 
 	sched, err := New(Deps{
 		PoolManager:  cfg.client,
@@ -916,7 +922,7 @@ func newEnv(t *testing.T, cfg envConfig) *env {
 		Declarer:     e.declarer,
 		Tracker:      e.tracker,
 		Health:       e.health,
-		Hosts:        e.registry,
+		Hosts:        hosts,
 		Clock:        e.clk,
 		Backoff:      cfg.backoff,
 		Metrics:      e.metrics,

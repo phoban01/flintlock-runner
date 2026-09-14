@@ -4,11 +4,15 @@ import (
 	"context"
 	"errors"
 	"runtime"
+	"slices"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/phoban01/flintlock-runner/internal/clock"
 	"github.com/phoban01/flintlock-runner/internal/config"
+	"github.com/phoban01/flintlock-runner/internal/flintlock"
 	"github.com/phoban01/flintlock-runner/internal/poolmgr"
 )
 
@@ -278,6 +282,185 @@ func TestReloadReplacesProfilesAndKeepsTheOldPool(t *testing.T) {
 	if got := e.sched.Snapshot().Hosts; len(got) != 2 {
 		t.Fatalf("hosts after the reload = %d, want 2", len(got))
 	}
+}
+
+// TestReloadWhileRunningIsRaceFree is the regression test for Run reading
+// the Inventory without the lock while Reload replaced it, which the race
+// detector found once the Runner refreshed its Inventory periodically
+// (FL-092). Reload is called over and over, with an Inventory and a Profile
+// list that change every time, from before Run starts until after it has
+// stopped, while the probe loop probes, the declaration loop retries and Jobs
+// are allocated and released. It checks little of its own beyond the Jobs
+// going through: its point is that `go test -race` sees every access to what
+// Reload replaces. Run is started afresh in every round, because its startup
+// is where it first reads the Inventory.
+func TestReloadWhileRunningIsRaceFree(t *testing.T) {
+	t.Parallel()
+	ctx := testContext(t)
+	for round := range 20 {
+		reloadWhileRunning(t, ctx, round)
+	}
+}
+
+// reloadWhileRunning is one round of TestReloadWhileRunningIsRaceFree.
+func reloadWhileRunning(t *testing.T, ctx context.Context, round int) {
+	t.Helper()
+	client := newStubClient()
+	client.script(func(c *stubClient) {
+		c.claimFn = claimsFrom("host-1")
+		c.beatFn = beatsFor(clock.NewFake(testEpoch), time.Hour)
+	})
+	// Every Inventory keeps host-1, which every claim names; the others come
+	// and go. The Registry holds all three, so Apply keeps whichever are named.
+	inventories := [][]config.HostEntry{
+		{testHostEntry("host-1")},
+		{testHostEntry("host-1"), testHostEntry("host-2")},
+		{testHostEntry("host-1"), testHostEntry("host-2"), testHostEntry("host-3")},
+		{testHostEntry("host-3"), testHostEntry("host-1")},
+	}
+	profiles := [][]config.Profile{
+		{testProfile("default", 2)},
+		{testProfile("default", 3), testProfile("extra", 1)},
+	}
+	e := newEnv(t, envConfig{client: client, inventory: inventories[2]})
+	e.health.contact()
+	e.tracker.setAvailable(e.poolOf("default"), 100)
+
+	// The reloader starts before Run, so that its Reloads overlap Run's
+	// startup as well as its steady state.
+	stopReloads := make(chan struct{})
+	reloaderDone := make(chan struct{})
+	var reloads atomic.Int64
+	go func() {
+		defer close(reloaderDone)
+		for n := 0; ; n++ {
+			select {
+			case <-stopReloads:
+				return
+			default:
+			}
+			if err := e.sched.Reload(ctx, profiles[n%len(profiles)], inventories[(n+round)%len(inventories)]); err != nil {
+				t.Errorf("Reload: %v", err)
+				return
+			}
+			reloads.Add(1)
+		}
+	}()
+	stop := e.run(ctx)
+
+	for job := range 5 {
+		// Every Job overlaps at least one whole Reload.
+		before := reloads.Load()
+		// Probes, heartbeats and declaration retries all run on the fake
+		// clock; moving it lets each of them run against a changing Inventory.
+		e.clk.Advance(30 * time.Second)
+		_ = e.sched.Snapshot()
+
+		r, err := e.sched.Reserve(ctx)
+		if err != nil {
+			t.Fatalf("round %d: Reserve: %v", round, err)
+		}
+		p, err := e.sched.ResolveProfile(JobInfo{ID: int64(job)})
+		if err != nil {
+			t.Fatalf("round %d: ResolveProfile: %v", round, err)
+		}
+		h, err := e.sched.Allocate(ctx, r, JobInfo{ID: int64(job)}, p)
+		if err != nil {
+			t.Fatalf("round %d: Allocate: %v", round, err)
+		}
+		e.sched.Release(h)
+		waitFor(t, ctx, func() bool { return reloads.Load() > before })
+	}
+
+	close(stopReloads)
+	<-reloaderDone
+	stop()
+}
+
+// TestReloadDuringRunStartupIsNotUndoneByIt holds the other half of the
+// FL-092 fix: Run's startup builds the Registry from the Inventory it
+// snapshots, and a Reload that lands while that Apply is in flight must end
+// up applied last. Run's first Apply is held at a gate while a Reload that
+// drops host-2 is made; were the two not serialised, the Reload would apply
+// its Inventory at once and Run's Apply, released afterwards, would put
+// host-2 back into the Registry with nothing left to take it out again.
+func TestReloadDuringRunStartupIsNotUndoneByIt(t *testing.T) {
+	t.Parallel()
+	ctx := testContext(t)
+	gated := &gatedRegistry{entered: make(chan struct{}), gate: make(chan struct{})}
+	e := newEnv(t, envConfig{
+		inventory: []config.HostEntry{testHostEntry("host-1"), testHostEntry("host-2")},
+		wrapHosts: func(r *testRegistry) flintlock.Registry {
+			gated.testRegistry = r
+			return gated
+		},
+	})
+	e.health.contact()
+	e.run(ctx)
+
+	select {
+	case <-gated.entered:
+	case <-ctx.Done():
+		t.Fatal("Run's startup never applied the Inventory")
+	}
+	reloaded := make(chan error, 1)
+	go func() {
+		reloaded <- e.sched.Reload(ctx, []config.Profile{testProfile("default", 1)},
+			[]config.HostEntry{testHostEntry("host-1")})
+	}()
+	// Give an unserialised Reload the time to finish ahead of Run's Apply. A
+	// serialised one waits for the gate, and the timer is what ends the wait.
+	timer := time.NewTimer(100 * time.Millisecond)
+	defer timer.Stop()
+	finishedFirst := false
+	select {
+	case err := <-reloaded:
+		finishedFirst = true
+		if err != nil {
+			t.Fatalf("Reload: %v", err)
+		}
+	case <-timer.C:
+	}
+	close(gated.gate)
+	if !finishedFirst {
+		select {
+		case err := <-reloaded:
+			if err != nil {
+				t.Fatalf("Reload: %v", err)
+			}
+		case <-ctx.Done():
+			t.Fatal("Reload did not return once Run's startup had applied")
+		}
+	}
+	// Run's startup declares the Pool after its Apply and the Reload declares
+	// it again, so two declarations mean both Applies have happened.
+	waitFor(t, ctx, func() bool { return len(e.declarer.declared()) == 2 })
+
+	if got := e.registry.Names(); !slices.Equal(got, []string{"host-1"}) {
+		t.Fatalf("registry hosts after the reload = %v, want [host-1]: Run's startup Inventory was applied over the reload's", got)
+	}
+	if got := e.sched.Snapshot().Hosts; len(got) != 1 || got[0].Name != "host-1" {
+		t.Fatalf("host health after the reload = %+v, want host-1 alone", got)
+	}
+}
+
+// gatedRegistry holds the first Apply until gate is closed, and closes
+// entered when that Apply has arrived.
+type gatedRegistry struct {
+	*testRegistry
+	entered chan struct{}
+	gate    chan struct{}
+	once    sync.Once
+}
+
+func (g *gatedRegistry) Apply(ctx context.Context, eps []flintlock.Endpoint) error {
+	first := false
+	g.once.Do(func() { first = true })
+	if first {
+		close(g.entered)
+		<-g.gate
+	}
+	return g.testRegistry.Apply(ctx, eps)
 }
 
 func TestRunTwiceIsRefused(t *testing.T) {

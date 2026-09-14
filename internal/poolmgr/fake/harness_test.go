@@ -63,6 +63,12 @@ type stubHost struct {
 	deleteGate    chan struct{}
 	attempted     []string
 	deleteEntered chan struct{}
+	// createGate, while non-nil, holds every CreateMicroVM call until it is
+	// closed or the caller gives up, announcing the call on createEntered.
+	// Like flintlockd, the Host makes the MicroVM either way: a caller that
+	// gave up gets its context's error and no uid.
+	createGate    chan struct{}
+	createEntered chan struct{}
 	// execExit is the exit code every hook command gets; execErr fails the
 	// stream instead.
 	execExit int32
@@ -75,6 +81,7 @@ func newStubHost(name string) *stubHost {
 		vms:           make(map[string]*types.MicroVM),
 		deletions:     make(chan string, 64),
 		deleteEntered: make(chan struct{}, 64),
+		createEntered: make(chan struct{}, 64),
 	}
 }
 
@@ -119,7 +126,30 @@ func (h *stubHost) SSHProxy(context.Context, string) (io.ReadWriteCloser, error)
 
 func (h *stubHost) Close() error { return nil }
 
-func (h *stubHost) CreateMicroVM(_ context.Context, spec *types.MicroVMSpec) (*types.MicroVM, error) {
+func (h *stubHost) CreateMicroVM(ctx context.Context, spec *types.MicroVMSpec) (*types.MicroVM, error) {
+	h.mu.Lock()
+	gate := h.createGate
+	h.mu.Unlock()
+	if gate != nil {
+		select {
+		case h.createEntered <- struct{}{}:
+		default:
+		}
+		select {
+		case <-gate:
+		case <-ctx.Done():
+		}
+		vm, err := h.create(spec)
+		if err == nil && ctx.Err() != nil {
+			return nil, ctx.Err()
+		}
+		return vm, err
+	}
+	return h.create(spec)
+}
+
+// create makes a MicroVM on the Host.
+func (h *stubHost) create(spec *types.MicroVMSpec) (*types.MicroVM, error) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	if h.createErr != nil {
