@@ -74,6 +74,28 @@ type Options struct {
 	ReadFile func(name string) ([]byte, error)
 }
 
+// OptionsFrom builds Options from the configuration and the Fleet
+// Controller's dependencies: deps.Scripts, deps.Remote, deps.Parameters
+// (optional) and deps.Out. certs is the bundle deps.Certs.Ensure returned,
+// nil for an insecure fleet; inv returns the current Inventory for the peer
+// addresses (FL-046) and may be nil.
+func OptionsFrom(cfg *config.Config, deps fleet.Deps, certs *fleet.CertBundle, inv func() fleet.Inventory) Options {
+	o := Options{
+		Scripts:      deps.Scripts,
+		Remote:       deps.Remote,
+		Parameters:   deps.Parameters,
+		HostServices: cfg.HostServices,
+		Profiles:     cfg.Profiles,
+		Inventory:    inv,
+		Certs:        certs,
+		Out:          deps.Out,
+	}
+	if cfg.Fleet != nil {
+		o.Fleet = *cfg.Fleet
+	}
+	return o
+}
+
 // Provisioner implements fleet.Provisioner over fleet.Remote.
 type Provisioner struct {
 	o Options

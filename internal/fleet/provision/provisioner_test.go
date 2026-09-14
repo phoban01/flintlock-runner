@@ -441,6 +441,17 @@ func TestProvisionStopsAtFailedStep(t *testing.T) {
 	}
 }
 
+func TestOptionsFrom(t *testing.T) {
+	t.Parallel()
+	f := testFleet()
+	cfg := &config.Config{Fleet: &f, HostServices: testServices(), Profiles: []config.Profile{{Name: "p"}}}
+	r := &recordingRemote{}
+	o := OptionsFrom(cfg, fleet.Deps{Remote: r, Parameters: fakeParams{}}, &fleet.CertBundle{CAFile: "/ca"}, nil)
+	if o.Remote != r || o.Fleet.ThinPoolDevice != f.ThinPoolDevice || o.Certs.CAFile != "/ca" || len(o.Profiles) != 1 || o.Parameters == nil {
+		t.Errorf("options = %+v", o)
+	}
+}
+
 func TestNewRequiresTLSUnlessInsecure(t *testing.T) {
 	t.Parallel()
 	sc, err := scripts.New()
