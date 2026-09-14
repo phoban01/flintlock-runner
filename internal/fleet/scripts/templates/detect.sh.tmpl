@@ -1,5 +1,39 @@
 {{template "prelude" .}}
 
+# FL-117: whether this Host can run MicroVMs is a property of the running
+# Host, not of its instance type: a bare-metal instance has KVM and so does a
+# virtualized one with nested virtualization enabled. flintlockd runs as root
+# and hands /dev/kvm to every MicroVM, so the Host is usable when /dev/kvm is
+# a character device that root can open for reading and writing. That open
+# fails when the node exists but no KVM driver is bound to it. The check
+# changes nothing and needs no package, so it works on a stock Ubuntu or
+# Amazon Linux Host; the Provisioner stops a Host that fails it before any
+# other step runs.
+if [ ! -e /dev/kvm ]; then
+  echo '::kvm:: unavailable /dev/kvm does not exist'
+elif [ ! -c /dev/kvm ]; then
+  echo '::kvm:: unavailable /dev/kvm is not a character device'
+elif ! { : <>/dev/kvm; } 2>/dev/null; then
+  echo '::kvm:: unavailable /dev/kvm cannot be opened for reading and writing'
+else
+  echo '::kvm:: ok'
+fi
+
+# FL-061: the Host's own vCPU and memory, from which the Fleet Controller
+# takes the Host reserve. They are measured here because EC2 reports no
+# memory for an instance and no table of instance types can cover every
+# type the fleet accepts (FL-116).
+vcpu=$(getconf _NPROCESSORS_ONLN 2>/dev/null || nproc)
+mem_kib=0
+while read -r key value _; do
+  if [ "$key" = MemTotal: ]; then
+    mem_kib=$value
+    break
+  fi
+done </proc/meminfo
+printf '::capacity:: vcpu %s\n' "$vcpu"
+printf '::capacity:: memory_mb %s\n' "$((mem_kib / 1024))"
+
 {{template "installed_versions" .}}
 
 # Report what is installed (FL-029) and whether the thin pool exists, so

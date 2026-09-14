@@ -259,6 +259,64 @@ func TestDetectReportsInstalledVersions(t *testing.T) {
 	}
 }
 
+//= docs/requirements/06-fleet.md#discovery
+//= type=test
+//# If provisioning finds no usable `/dev/kvm` on an instance, then
+//# the Fleet Controller SHALL exclude it from the Inventory and report it as
+//# unsupported because KVM is unavailable.
+
+func TestDetectChecksKVMIsUsable(t *testing.T) {
+	t.Parallel()
+	s := render(t, fleet.StepDetect, fullInput())
+	check := section(t, s, "if [ ! -e /dev/kvm ]; then", "\nfi\n")
+	mustContain(t, check,
+		"echo '::kvm:: unavailable /dev/kvm does not exist'",
+		"elif [ ! -c /dev/kvm ]; then\n  echo '::kvm:: unavailable /dev/kvm is not a character device'",
+		// Root, which flintlockd runs as, has to be able to open it for
+		// reading and writing: a node with no KVM driver behind it fails.
+		"elif ! { : <>/dev/kvm; } 2>/dev/null; then\n  echo '::kvm:: unavailable /dev/kvm cannot be opened for reading and writing'",
+		"else\n  echo '::kvm:: ok'",
+	)
+	// The check installs nothing and comes before everything else detect
+	// does.
+	mustNotContain(t, check, "ensure_packages", "apt-get", "modprobe")
+	if strings.Index(s, "if [ ! -e /dev/kvm ]") > strings.Index(s, "\ninstalled_versions\n") {
+		t.Error("the KVM check runs after the version detection")
+	}
+
+	for stdout, want := range map[string]Output{
+		"::kvm:: ok\n": {KVM: true},
+		"::kvm:: unavailable /dev/kvm does not exist\n": {KVMUnavailable: "/dev/kvm does not exist"},
+		"::thinpool:: absent\n":                         {},
+	} {
+		got := ParseOutput(stdout)
+		if got.KVM != want.KVM || got.KVMUnavailable != want.KVMUnavailable {
+			t.Errorf("ParseOutput(%q) kvm = %v %q, want %v %q", stdout, got.KVM, got.KVMUnavailable, want.KVM, want.KVMUnavailable)
+		}
+	}
+}
+
+//= docs/requirements/06-fleet.md#inventory-and-runner-configuration
+//= type=test
+//# The Fleet Controller SHALL compute each Host's capacity as the
+//# instance's vCPU and memory minus the configured Host reserve.
+
+func TestDetectReportsHostCapacity(t *testing.T) {
+	t.Parallel()
+	s := render(t, fleet.StepDetect, fullInput())
+	mustContain(t, s,
+		"vcpu=$(getconf _NPROCESSORS_ONLN 2>/dev/null || nproc)",
+		"if [ \"$key\" = MemTotal: ]; then\n    mem_kib=$value",
+		"done </proc/meminfo",
+		`printf '::capacity:: vcpu %s\n' "$vcpu"`,
+		`printf '::capacity:: memory_mb %s\n' "$((mem_kib / 1024))"`,
+	)
+	out := ParseOutput("::capacity:: vcpu 16\n::capacity:: memory_mb 31536\n::capacity:: vcpu x\n")
+	if out.VCPU != 16 || out.MemoryMB != 31536 {
+		t.Errorf("parsed capacity %d vCPU %d MB, want 16 and 31536", out.VCPU, out.MemoryMB)
+	}
+}
+
 // TestScriptsCarryNoSecrets renders every step with secrets configured and
 // checks none of them is in any script (SE-014).
 func TestScriptsCarryNoSecrets(t *testing.T) {

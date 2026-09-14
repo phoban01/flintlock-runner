@@ -7,6 +7,7 @@ import (
 	"errors"
 	"io"
 	"sort"
+	"strconv"
 	"strings"
 
 	"github.com/phoban01/flintlock-runner/internal/config"
@@ -42,9 +43,15 @@ type Output struct {
 	Versions config.InstalledVersions
 	// ThinPool is true when detect found the thin pool (FL-023).
 	ThinPool bool
-	// Skipped lists components a step did not install, such as a host agent
-	// the pinned release does not ship.
-	Skipped []string
+	// KVM is true when detect found a usable /dev/kvm; KVMUnavailable is
+	// detect's reason when it did not (FL-117). A report without a KVM line
+	// leaves both empty, which the Provisioner treats as unavailable.
+	KVM            bool
+	KVMUnavailable string
+	// VCPU and MemoryMB are the Host's online CPUs and total memory in MiB
+	// as detect measured them, zero when not reported (FL-061).
+	VCPU     int
+	MemoryMB int
 	// Inactive lists the units verify_active found not running (FL-053).
 	Inactive []string
 	// Services are guest_verify's per-service outcomes (FL-109).
@@ -69,8 +76,25 @@ func ParseOutput(stdout string) Output {
 		switch kind {
 		case "changed":
 			o.Changed = append(o.Changed, rest)
-		case "skipped":
-			o.Skipped = append(o.Skipped, rest)
+		case "kvm":
+			if rest == "ok" {
+				o.KVM, o.KVMUnavailable = true, ""
+			} else {
+				o.KVM = false
+				o.KVMUnavailable = strings.TrimSpace(strings.TrimPrefix(rest, "unavailable"))
+			}
+		case "capacity":
+			what, v, _ := strings.Cut(rest, " ")
+			n, err := strconv.Atoi(strings.TrimSpace(v))
+			if err != nil || n < 0 {
+				continue
+			}
+			switch what {
+			case "vcpu":
+				o.VCPU = n
+			case "memory_mb":
+				o.MemoryMB = n
+			}
 		case "inactive":
 			name, _, _ := strings.Cut(rest, " ")
 			o.Inactive = append(o.Inactive, name)
