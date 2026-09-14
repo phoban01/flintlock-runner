@@ -118,6 +118,8 @@ func NewRefresher(ctx context.Context, f *config.Fleet, onChange OnChange, opts 
 }
 
 //= docs/requirements/06-fleet.md#launch-template-mode
+//= type=todo
+//= tracking-issue=8
 //# Where launch template mode is selected, the Runner SHALL refresh
 //# its Inventory from tag discovery at the configured interval so that
 //# self-provisioned Hosts join without a restart.
