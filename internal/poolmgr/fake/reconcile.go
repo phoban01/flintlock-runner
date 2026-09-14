@@ -224,7 +224,16 @@ func (p *PoolManager) provision(ctx context.Context, vm *vmState) {
 	hooks := ps.spec.CreateCommands
 	p.mu.Unlock()
 
-	created, err := hc.CreateMicroVM(ctx, spec)
+	// The create is not cancelled when the fake stops. A Host does not undo
+	// a CreateMicroVM its caller stopped waiting for, flintlockd no more
+	// than the fake Host, so a create cut short by stop could leave a
+	// MicroVM behind with no uid for cleanupAll to delete it by. It runs
+	// detached from ctx instead, bounded like the cleanup, and a MicroVM it
+	// makes while the fake is stopping is recorded below like any other and
+	// deleted by cleanupAll once stop has waited for this goroutine.
+	createCtx, cancelCreate := context.WithTimeout(context.WithoutCancel(ctx), shutdownTimeout)
+	created, err := hc.CreateMicroVM(createCtx, spec)
+	cancelCreate()
 	if err != nil {
 		p.dropReserved(vm, fmt.Errorf("create microvm on %s: %w", vm.host, err))
 		return
@@ -247,6 +256,11 @@ func (p *PoolManager) provision(ctx context.Context, vm *vmState) {
 	p.emitLocked(vm.pool, uid, poolmgrv1.EventType_VM_PROVISIONED, map[string]any{"host": vm.host})
 	p.mu.Unlock()
 
+	if ctx.Err() != nil {
+		// The fake is stopping. The MicroVM has its uid now, so cleanupAll
+		// deletes it; running the rest of the pipeline would only fail it.
+		return
+	}
 	if err := p.waitCreated(ctx, hc, uid); err != nil {
 		p.applyHookFailurePolicy(ctx, vm, poolmgr.HookCreate, err)
 		return
