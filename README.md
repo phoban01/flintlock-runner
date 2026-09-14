@@ -41,6 +41,27 @@ make demo DEMO_ARGS='-keep'                # leave the stack up; type commands t
 make e2e                                   # the end-to-end scenarios (TD-050)
 ```
 
+## Bring up a fleet
+
+On the Control Node, as root, with a configuration that has a `fleet`
+section (`docs/requirements/07-configuration.md`) and instances launched with
+its discovery tag, or listed statically for SSH:
+
+```sh
+flintlock-runner --config fleet.yaml fleet provision --dry-run     # what would be provisioned, left alone and removed; changes nothing
+flintlock-runner --config fleet.yaml fleet up                      # provision, then verify with the Pools declared; one summary at the end
+flintlock-runner --config fleet.yaml fleet up --install-runner     # and run the Runner as the systemd service flintlock-runner
+flintlock-runner --config fleet.yaml fleet up --dry-run            # the plan and what up would do next
+```
+
+`fleet up` stops before verification when provisioning fails and exits
+non-zero when either step fails. Without `--install-runner` its summary ends
+with the command that starts the Runner with the generated configuration.
+With it, the Runner runs as the unprivileged user `flintlock-runner`, which
+is given read access to the files the Runner reads; `fleet teardown` stops
+and disables the service. `fleet provision`, `fleet verify [--declare]`,
+`fleet drain` and `fleet teardown` remain available one step at a time.
+
 ## Releases
 
 Tagged builds for `linux/amd64` and `linux/arm64` are on the
@@ -67,7 +88,7 @@ make duvet-ci         # fails if .duvet/snapshot.txt is stale
 ## Layout
 
 ```
-cmd/flintlock-runner/   main: run, config show, fleet {provision,verify,drain,teardown,emit-userdata}
+cmd/flintlock-runner/   main: run, config show, fleet {provision,verify,up,drain,teardown,emit-userdata}
 cmd/fake-poolmgr/       the fake Pool Manager as a standalone binary (TD-009)
 cmd/flintlock-devstack/ the end-to-end harness as a demo: fakes + the real runner + jobs (make demo)
 internal/clock/         Clock and Backoff interfaces shared by the scheduler, poolmgr and the fakes

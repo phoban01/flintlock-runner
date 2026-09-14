@@ -121,8 +121,10 @@ layers and modules. Build outputs such as `GOCACHE` cross hosts through
 GitLab's distributed cache on S3, using pre-signed URLs generated on the
 control node so no AWS credentials enter a guest.
 
-**Fleet Controller.** `flintlock-runner fleet {provision,verify,drain,
-teardown,emit-userdata}`. Discovers instances by tag, of any type, checks
+**Fleet Controller.** `flintlock-runner fleet {provision,verify,up,drain,
+teardown,emit-userdata}`, where `up` is `provision` followed by `verify
+--declare` and can install the runner as a systemd service on the control
+node, and `provision --dry-run` prints the plan. Discovers instances by tag, of any type, checks
 each for a usable `/dev/kvm` (bare metal, or a virtualized type with nested
 virtualization enabled; see `docs/fleet/instance-types.md`), provisions
 them over SSM Run Command with `flintlock-provision all`, sets up a NAT'd
