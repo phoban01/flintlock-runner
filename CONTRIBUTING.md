@@ -24,7 +24,7 @@ long one and `docs/PLAN.md` is the coordination contract.
   imported only by `internal/executor`, by `internal/config/runnercfg` (which
   holds the `RunnerConfig` translation so that `internal/config` itself stays
   free of it), by the GitLab test doubles under `internal/testing`, and by
-  `cmd/flintlock-runner`. The flintlock and battery generated protos are
+  `cmd/flr`. The flintlock and battery generated protos are
   spoken only by `internal/flintlock` and `internal/poolmgr`: they hold every
   call to those services. A package that reaches one of those services
   through a lead-owned interface expressed in generated types, today

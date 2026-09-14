@@ -3,7 +3,7 @@
 The Fleet Controller never creates, changes or deletes a security group
 (SE-042); it has no permission to, since its IAM policy holds no security
 group action. The operator puts the rules below in place before running
-`flintlock-runner fleet provision`. When a Host's `flintlockd` port is
+`flr fleet provision`. When a Host's `flintlockd` port is
 unreachable after provisioning, the Fleet Controller names the rule from this
 table that is missing (FL-047).
 
