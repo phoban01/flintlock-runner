@@ -10,6 +10,7 @@ import (
 
 	"github.com/phoban01/flintlock-runner/internal/config"
 	"github.com/phoban01/flintlock-runner/internal/fleet"
+	"github.com/phoban01/flintlock-runner/internal/flintlock"
 )
 
 // LabelInstanceID is the label that ties an Inventory entry to the instance
@@ -206,4 +207,20 @@ func RunnerConfig(in *config.Config, inventoryPath string) *config.Config {
 	out.Fleet = nil
 	out.Profiles = slices.Clone(in.Profiles)
 	return &out
+}
+
+// Endpoint is how the Fleet Controller reaches an Inventory Host's
+// flintlockd, with the same token and TLS material the Runner uses.
+func Endpoint(h *config.HostEntry) flintlock.Endpoint {
+	return flintlock.Endpoint{
+		Name:    h.Name,
+		Address: h.Endpoint,
+		Token:   string(h.Token),
+		TLS: flintlock.TLSOptions{
+			CAFile:   h.TLS.CAFile,
+			CertFile: h.TLS.CertFile,
+			KeyFile:  h.TLS.KeyFile,
+			Insecure: h.TLS.Insecure,
+		},
+	}
 }
