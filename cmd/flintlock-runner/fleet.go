@@ -609,6 +609,7 @@ func fleetVerify(c *cli.Context, s fleetSeams) error {
 			fmt.Fprintf(c.App.Writer, "%s: claim to ready %s\n", h.Host, h.ClaimToReady.Round(time.Millisecond))
 		}
 	}
+	printHostServiceNotes(c.App.Writer, cfg.HostServices)
 	//= docs/requirements/06-fleet.md#verification
 	//# If verification fails on any Host or service, then the Fleet
 	//# Controller SHALL exit with a non-zero status naming each failure and the

@@ -281,3 +281,38 @@ func TestPrepareSectionNamesTheHostServices(t *testing.T) {
 		t.Errorf("section lacks %q before its end:\n%s", line, log)
 	}
 }
+
+//= docs/requirements/09-security.md#host-services-security
+//= type=test
+//# The Executor SHALL NOT inject Host Service variables that would
+//# route a Job's traffic to a Host other than the one running its MicroVM.
+
+// TestHostServiceVariablesComeFromThePlacementHost gives two Hosts
+// distinguishable Host Service addresses and checks that the Job placed on
+// host-a sees host-a's and never host-b's.
+func TestHostServiceVariablesComeFromThePlacementHost(t *testing.T) {
+	t.Parallel()
+	f := newFixture(t)
+	withHostServices(f)
+	other := hostEntry()
+	other.Name = "host-b"
+	other.Services = config.HostServiceAddresses{
+		Buildkit:       "tcp://10.0.9.9:1234",
+		GoProxy:        "http://10.0.9.9:3000",
+		RegistryMirror: "10.0.9.9:5000",
+		HTTPCache:      map[string]string{"nodejs": "http://10.0.9.9:3128/nodejs"},
+	}
+	f.deps.Inventory = inventoryMap{"host-b": other, "host-a": hostEntry()}
+	if _, _, err := f.runBuild(context.Background(), testJob()); err != nil {
+		t.Fatal(err)
+	}
+	vars := f.currentBuild.GetAllVariables()
+	if got := vars.Value("BUILDKIT_HOST"); got != "tcp://172.31.0.1:1234" {
+		t.Errorf("BUILDKIT_HOST = %q, want host-a's", got)
+	}
+	for _, st := range f.tr.stages() {
+		if strings.Contains(string(st.Stdin), "10.0.9.9") {
+			t.Fatalf("a Stage of the Job placed on host-a carries host-b's Host Service address:\n%s", st.Stdin)
+		}
+	}
+}
