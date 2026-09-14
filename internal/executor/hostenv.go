@@ -133,6 +133,10 @@ func (e *executor) allowedVarNames() map[string]bool {
 //# section of the Job log naming the Host Services that were made available
 //# to the Job.
 
+//= docs/requirements/09-security.md#host-services-security
+//# The Executor SHALL NOT inject Host Service variables that would
+//# route a Job's traffic to a Host other than the one running its MicroVM.
+
 // addHostServiceEnv adds the Host Service variables of the Placement's Host
 // to the Job's variables. It runs in Prepare, which the Build finishes
 // before it generates the first Stage script, so prepare_script,
