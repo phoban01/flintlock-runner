@@ -392,10 +392,16 @@ func TestFleetUpInstallsTheRunnerService(t *testing.T) {
 	if len(rendered) != 1 {
 		t.Fatalf("the runner step was rendered %d times", len(rendered))
 	}
+	// fleet up installs the binary's resolved path. On macOS the temp
+	// directory is under /var, a symlink to /private/var.
+	resolved, err := filepath.EvalSymlinks(bin)
+	if err != nil {
+		t.Fatal(err)
+	}
 	unit := rendered[0].Content
 	for _, want := range []string{
 		"config='" + f.runnerPath + "'",
-		"install -D -m 0755 '" + bin + "' \"$bin\"",
+		"install -D -m 0755 '" + resolved + "' \"$bin\"",
 		"User=$user",
 		"ExecStart=$bin --config $config run",
 		`ensure_service "$unit"`,
