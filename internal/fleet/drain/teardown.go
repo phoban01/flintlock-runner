@@ -21,6 +21,9 @@ import (
 const (
 	OptionPurge     = "purge"
 	OptionTerminate = "terminate"
+	// OptionStopFlintlockd lets the drain script stop flintlockd. Drain sets
+	// it only once no leased MicroVM remains on the Host (FL-084).
+	OptionStopFlintlockd = "stop_flintlockd"
 )
 
 // StepPools and StepWait name the teardown steps that run before any Host

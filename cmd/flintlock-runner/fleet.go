@@ -674,8 +674,11 @@ func fleetDrain(c *cli.Context, s fleetSeams) error {
 		if err != nil {
 			return seamErr(err)
 		}
+		// Stop runs only once the Drainer has seen no leased MicroVM on the
+		// Host, and only then is the script told it may stop flintlockd.
 		dcfg.Stop = func(ctx context.Context, _ string) error {
-			return runStep(ctx, remote, scripts, cfg, inv, entry, fleet.StepDrain, c.App.Writer)
+			return runStep(ctx, remote, scripts, cfg, inv, entry, fleet.StepDrain,
+				map[string]string{drain.OptionStopFlintlockd: "true"}, c.App.Writer)
 		}
 	}
 	d, err := drain.NewDrainer(dcfg)
@@ -694,8 +697,8 @@ func fleetDrain(c *cli.Context, s fleetSeams) error {
 }
 
 // runStep renders one step's script for a Host and runs it.
-func runStep(ctx context.Context, remote fleet.Remote, scripts fleet.Scripts, cfg *config.Config, inv *fleet.Inventory, h *config.HostEntry, step fleet.Step, out io.Writer) error {
-	in := fleet.RenderInput{Fleet: *cfg.Fleet, HostServices: cfg.HostServices, Profiles: cfg.Profiles, Instance: inventory.InstanceOf(h), Inventory: *inv}
+func runStep(ctx context.Context, remote fleet.Remote, scripts fleet.Scripts, cfg *config.Config, inv *fleet.Inventory, h *config.HostEntry, step fleet.Step, options map[string]string, out io.Writer) error {
+	in := fleet.RenderInput{Fleet: *cfg.Fleet, HostServices: cfg.HostServices, Profiles: cfg.Profiles, Instance: inventory.InstanceOf(h), Inventory: *inv, Options: options}
 	script, err := scripts.Render(step, in)
 	if err != nil {
 		return err

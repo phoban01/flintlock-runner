@@ -368,6 +368,10 @@ func TestFleetDrainRemovesHostFromPools(t *testing.T) {
 	if len(calls) != 1 || calls[0].Script != string(fleet.StepDrain) || calls[0].Instance.ID != "host-1" {
 		t.Errorf("remote calls = %+v, want the drain script on host-1", calls)
 	}
+	renders := f.scripts.Calls()
+	if len(renders) != 1 || renders[0].Input.Options[drain.OptionStopFlintlockd] != "true" {
+		t.Errorf("drain script input = %+v, want it allowed to stop flintlockd once no lease remains", renders)
+	}
 	if _, err := f.run(t, "drain", "host-9"); exitCode(err) != exitFleetFailure {
 		t.Errorf("draining a Host not in the Inventory = %v, want a failure", err)
 	}
