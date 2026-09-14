@@ -159,7 +159,24 @@ func (p *Provisioner) Provision(ctx context.Context, inst fleet.Instance) fleet.
 		}
 	}
 
-	entry, err := p.entry(inst, detected.Versions, flintlockRan)
+	//= docs/requirements/06-fleet.md#host-provisioning
+	//# The Fleet Controller SHALL record the installed versions of
+	//# flintlock, Firecracker, Cloud Hypervisor and containerd in the Inventory.
+	versions := detected.Versions
+	if flintlockRan {
+		// The provisioner changed what is installed: detect again, so that
+		// the Inventory records what is on the Host rather than the pins.
+		start := time.Now()
+		out, err := p.run(ctx, fleet.StepDetect, in)
+		res.Steps = append(res.Steps, fleet.StepResult{Step: fleet.StepDetect, Duration: time.Since(start), Err: err})
+		if err != nil {
+			res.Err = fmt.Errorf("%s: step %s: %w", inst.ID, fleet.StepDetect, err)
+			return res
+		}
+		versions = out.Versions
+	}
+
+	entry, err := p.entry(inst, versions)
 	if err != nil {
 		res.Err = fmt.Errorf("%s: %w", inst.ID, err)
 		return res
@@ -269,7 +286,7 @@ func (p *Provisioner) secrets(ctx context.Context, step fleet.Step, inst fleet.I
 }
 
 // entry builds the instance's Inventory entry.
-func (p *Provisioner) entry(inst fleet.Instance, detected config.InstalledVersions, flintlockRan bool) (*config.HostEntry, error) {
+func (p *Provisioner) entry(inst fleet.Instance, versions config.InstalledVersions) (*config.HostEntry, error) {
 	port := p.o.Fleet.Flintlockd.Port
 	if port == 0 {
 		port = config.DefaultFlintlockdPort
@@ -284,16 +301,6 @@ func (p *Provisioner) entry(inst fleet.Instance, detected config.InstalledVersio
 	svc, err := scripts.ServiceAddresses(p.o.HostServices, p.o.Fleet.GuestSubnet)
 	if err != nil {
 		return nil, err
-	}
-	//= docs/requirements/06-fleet.md#host-provisioning
-	//# The Fleet Controller SHALL record the installed versions of
-	//# flintlock, Firecracker, Cloud Hypervisor and containerd in the Inventory.
-	versions := detected
-	if flintlockRan {
-		// The flintlock step checks that every component is at its pinned
-		// version before it succeeds.
-		v := p.o.Fleet.Versions
-		versions = config.InstalledVersions{Flintlock: v.Flintlock, Firecracker: v.Firecracker, CloudHypervisor: v.CloudHypervisor, Containerd: v.Containerd}
 	}
 	e := &config.HostEntry{
 		// FL-052: the Host's name is its instance id, here and in the Pool
