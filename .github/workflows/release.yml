@@ -1,0 +1,151 @@
+name: release
+
+# A tag vX.Y.Z-rc.N publishes a release candidate as a GitHub pre-release; a
+# tag vX.Y.Z publishes a release. docs/RELEASING.md is the procedure. The same
+# workflow dry-runs the packaging on any pull request that changes it.
+on:
+  push:
+    tags: ["v*"]
+  pull_request:
+    paths:
+      - .goreleaser.yaml
+      - .github/workflows/release.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  GOTOOLCHAIN: auto
+  DUVET_VERSION: 0.4.3
+  GORELEASER_VERSION: v2.18.1
+
+jobs:
+  # Decide what the tag is, and refuse anything that is not a clean candidate
+  # or release cut from main.
+  tag:
+    name: check the tag
+    if: startsWith(github.ref, 'refs/tags/')
+    runs-on: ubuntu-latest
+    outputs:
+      kind: ${{ steps.kind.outputs.kind }}
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          fetch-depth: 0
+      - id: kind
+        name: classify the tag
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          if [[ "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+-rc\.[0-9]+$ ]]; then
+            echo "kind=candidate" >> "$GITHUB_OUTPUT"
+          elif [[ "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "kind=release" >> "$GITHUB_OUTPUT"
+          else
+            echo "::error::tag $TAG is neither vX.Y.Z-rc.N (a release candidate) nor vX.Y.Z (a release)"
+            exit 1
+          fi
+      - name: the tagged commit is on main
+        run: |
+          git fetch --no-tags origin main
+          if ! git merge-base --is-ancestor "$GITHUB_SHA" origin/main; then
+            echo "::error::$GITHUB_REF_NAME points at a commit that is not on main; tag a commit main already has"
+            exit 1
+          fi
+      - name: a release follows a release candidate
+        if: steps.kind.outputs.kind == 'release'
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          if [ -z "$(git tag -l "${TAG}-rc.*")" ]; then
+            echo "::error::no release candidate ${TAG}-rc.N exists; cut and try a candidate before releasing $TAG"
+            exit 1
+          fi
+
+  # The tagged commit passed CI on main, but a release is rebuilt from scratch,
+  # so the tests run again on exactly what ships.
+  verify:
+    name: test the tagged commit
+    needs: tag
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6.5.0
+        with:
+          go-version-file: go.mod
+          cache: true
+      - run: go vet ./...
+      - run: go test -race ./...
+      - name: end-to-end harness
+        run: make e2e
+
+  release:
+    name: publish
+    needs: [tag, verify]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6.5.0
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: install duvet
+        uses: awslabs/duvet@44f43e87683ae6077c64f4aa8fd519910c981fb6 # main, 2026-08-26
+        with:
+          version: ${{ env.DUVET_VERSION }}
+      # A release candidate ships whatever coverage the commit has. A release
+      # is a milestone, so its committed requirements snapshot must be the
+      # one this commit produces: make duvet-ci fails if it would change.
+      - name: requirements report
+        env:
+          KIND: ${{ needs.tag.outputs.kind }}
+        run: |
+          if [ "$KIND" = release ]; then
+            make duvet-ci
+          else
+            make duvet
+            git checkout -- .duvet/snapshot.txt
+          fi
+      - uses: goreleaser/goreleaser-action@f06c13b6b1a9625abc9e6e439d9c05a8f2190e94 # v7.2.3
+        with:
+          distribution: goreleaser
+          version: ${{ env.GORELEASER_VERSION }}
+          args: release --clean
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  # On a pull request that changes the packaging, build every archive without
+  # publishing, so a broken configuration is caught before a tag finds it.
+  dry-run:
+    name: packaging dry run
+    if: "!startsWith(github.ref, 'refs/tags/')"
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6.5.0
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: install duvet
+        uses: awslabs/duvet@44f43e87683ae6077c64f4aa8fd519910c981fb6 # main, 2026-08-26
+        with:
+          version: ${{ env.DUVET_VERSION }}
+      - run: make duvet && git checkout -- .duvet/snapshot.txt
+      - uses: goreleaser/goreleaser-action@f06c13b6b1a9625abc9e6e439d9c05a8f2190e94 # v7.2.3
+        with:
+          distribution: goreleaser
+          version: ${{ env.GORELEASER_VERSION }}
+          args: release --snapshot --clean
+      - name: list what a release would publish
+        run: ls -l dist/*.tar.gz dist/checksums.txt
