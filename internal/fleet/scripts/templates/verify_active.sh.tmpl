@@ -3,9 +3,6 @@
 # FL-053: every service this Fleet Controller installed has to be active
 # before the instance is reported as provisioned.
 units=(containerd flintlockd flintlock-runner-network dnsmasq{{range .Services.Units}} {{.}}{{end}})
-if [ -x /usr/local/bin/poolmgr-hostagent ]; then
-  units+=(poolmgr-hostagent)
-fi
 failed=0
 for u in "${units[@]}"; do
   if systemctl is-active --quiet "$u"; then

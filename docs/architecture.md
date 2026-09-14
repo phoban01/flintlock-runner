@@ -8,7 +8,7 @@ made (September 2026).
 ## What it is
 
 `flintlock-runner` is a GitLab CI runner that executes every job in its own
-Firecracker or Cloud Hypervisor microVM on a fleet of bare-metal EC2 hosts.
+Firecracker or Cloud Hypervisor microVM on a fleet of EC2 hosts with KVM.
 It is built on two liquidmetal components:
 
 - [flintlock](https://github.com/liquidmetal-dev/flintlock) runs microVMs on
@@ -41,7 +41,6 @@ container runtime.
           ┌───────────────▼─────────────┐    ┌───────────────▼─────────────┐
           │ Host A (m7g.metal)          │    │ Host B (m7g.metal)          │
           │  flintlockd :9090           │    │  flintlockd :9090           │
-          │  poolmgr-hostagent          │    │  poolmgr-hostagent          │
           │  containerd + thinpool      │    │  containerd + thinpool      │
           │  bridge + dnsmasq + NAT     │    │  bridge + dnsmasq + NAT     │
           │  buildkitd, go proxy, mirror│    │  buildkitd, go proxy, mirror│
@@ -123,10 +122,12 @@ GitLab's distributed cache on S3, using pre-signed URLs generated on the
 control node so no AWS credentials enter a guest.
 
 **Fleet Controller.** `flintlock-runner fleet {provision,verify,drain,
-teardown,emit-userdata}`. Discovers `*.metal` instances by tag, provisions
+teardown,emit-userdata}`. Discovers instances by tag, of any type, checks
+each for a usable `/dev/kvm` (bare metal, or a virtualized type with nested
+virtualization enabled; see `docs/fleet/instance-types.md`), provisions
 them over SSM Run Command with `flintlock-provision all`, sets up a NAT'd
-guest bridge with dnsmasq, installs the battery host agent and the host
-services on every host and battery's daemon on the control node, pre-pulls
+guest bridge with dnsmasq, installs the host services on every host and
+battery's daemon on the control node, pre-pulls
 images, writes an inventory and generates the runner config. No part of the
 liquidmetal ecosystem knows about EC2, so this layer is entirely ours.
 
@@ -197,7 +198,10 @@ across jobs. Warm pools provide the latency win instead.
   #45 added `HostInfo{name, address}` to `ClaimVMResponse`, which is the
   field the runner needs for placement; the README status line still says
   pre-alpha and is stale. Hosts are a static list; placement is round-robin
-  or least-VMs; the host agent is reached through each VM's vsock path.
+  or least-VMs. battery's host agent was removed on 2026-09-07 (b675a46a,
+  superseded by flintlock's native `MicroVMExec` and `MicroVMSSHProxy`
+  services) and is in no release, so nothing of battery's runs on a Host
+  (FL-050 is withdrawn); the README still mentions it.
 - **gitlab-runner** 19.4.0 (HEAD). Importable via pseudo-version only
   (`go get gitlab.com/gitlab-org/gitlab-runner@<commit>`); `go 1.26`.
   `common.JobResponse` is gone in favour of `common/spec.Job`; executor
@@ -232,8 +236,7 @@ order:
    pool manager, just not a production one.
 2. **Scheduler and Executor** against the fake, then against real flintlock
    hosts with the fake standing in for battery.
-3. **Fleet Controller** for EC2: provisioning, host services, battery agent
-   installation, verification.
+3. **Fleet Controller** for EC2: provisioning, host services, verification.
 4. **Real battery** from a build of `main` in the hardware tier, then from a
    tagged release when one exists.
 5. **Launch-template mode** for self-provisioning auto scaling groups.

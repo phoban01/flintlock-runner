@@ -31,10 +31,10 @@ directory. It contains no requirements.
 - **GitLab** — the GitLab instance the Runner takes Jobs from, via the Runner
   REST API (`/api/v4/jobs/request`, `/api/v4/jobs/:id`,
   `/api/v4/jobs/:id/trace`, artifact endpoints).
-- **Host** — a bare-metal machine (on EC2, a `*.metal` instance) running
-  `flintlockd`, containerd with a devicemapper thin pool, Firecracker and/or
-  Cloud Hypervisor, the Pool Manager's host agent and the Host Services.
-  Identified by a name and a gRPC endpoint.
+- **Host** — a machine with a usable KVM (on EC2, a `*.metal` instance or a
+  virtualized one with nested virtualization enabled) running `flintlockd`,
+  containerd with a devicemapper thin pool, Firecracker and/or Cloud
+  Hypervisor and the Host Services. Identified by a name and a gRPC endpoint.
 - **Pool Manager** — [battery](https://github.com/liquidmetal-dev/battery), the
   service that keeps warm MicroVMs in named Pools, places them on Hosts,
   hands them out through its `Lease` gRPC service (`ClaimVM`, `Heartbeat`,
@@ -48,8 +48,8 @@ directory. It contains no requirements.
 - **Distributed cache** — the GitLab `cache:` mechanism, backed by an S3
   bucket, through which build outputs move between Jobs on different Hosts.
 - **Control Node** — the machine running the Runner process and the Pool
-  Manager daemon. It can be a Host or a separate, non-metal instance with
-  network reachability to every Host.
+  Manager daemon. It can be a Host or a separate instance, which needs no
+  KVM, with network reachability to every Host.
 
 ## Domain terms {#domain-terms}
 

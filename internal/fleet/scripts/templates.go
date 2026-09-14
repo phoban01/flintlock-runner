@@ -4,8 +4,18 @@ package scripts
 // cited here, on the constant naming its template; the template carries a
 // comment with the identifier at the place that implements it.
 
-// detectTemplate reports installed versions and the thin pool (FL-029,
-// FL-030).
+//= docs/requirements/06-fleet.md#discovery
+//# If provisioning finds no usable `/dev/kvm` on an instance, then
+//# the Fleet Controller SHALL exclude it from the Inventory and report it as
+//# unsupported because KVM is unavailable.
+
+//= docs/requirements/06-fleet.md#inventory-and-runner-configuration
+//# The Fleet Controller SHALL compute each Host's capacity as the
+//# instance's vCPU and memory minus the configured Host reserve.
+
+// detectTemplate reports whether /dev/kvm is usable (FL-117), the Host's
+// vCPU and memory (FL-061), the installed versions and the thin pool
+// (FL-029, FL-030).
 const detectTemplate = "detect.sh.tmpl"
 
 //= docs/requirements/06-fleet.md#host-provisioning
@@ -104,13 +114,6 @@ const networkingTemplate = "networking.sh.tmpl"
 // configuration itself is in flintlockd_lib.sh.tmpl, shared with the
 // flintlock step so that the provisioner never starts flintlockd without it.
 const flintlockdTemplate = "flintlockd.sh.tmpl"
-
-//= docs/requirements/06-fleet.md#pool-manager-install
-//# The Fleet Controller SHALL install the pinned Pool Manager host
-//# agent on every Host as a systemd service.
-
-// poolAgentTemplate installs the Pool Manager host agent.
-const poolAgentTemplate = "pool_agent.sh.tmpl"
 
 //= docs/requirements/06-fleet.md#host-services
 //# The Fleet Controller SHALL install on every Host a `buildkitd`

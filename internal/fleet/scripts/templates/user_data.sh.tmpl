@@ -3,6 +3,14 @@
 # Launch template user-data: the Host provisioning steps, unattended at
 # first boot. Nothing secret is in this script; each step reads its secrets
 # from the Systems Manager parameters named in it.
+
+{{template "kvm_status" .}}
+
+# An instance without a usable /dev/kvm cannot be a Host (FL-117): stop
+# before anything is installed on it.
+kvm=$(kvm_status)
+[ "$kvm" = ok ] || die "unsupported because KVM is unavailable: $kvm; a virtualized instance type needs nested virtualization enabled"
+
 steps_dir="$FLR_STATE/user-data"
 mkdir -p "$steps_dir"
 chmod 0700 "$steps_dir"

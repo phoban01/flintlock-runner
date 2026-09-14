@@ -82,28 +82,6 @@ func TestControlNodeReloadKeepsLeases(t *testing.T) {
 
 //= docs/requirements/06-fleet.md#pool-manager-install
 //= type=test
-//# The Fleet Controller SHALL install the pinned Pool Manager host
-//# agent on every Host as a systemd service.
-
-func TestPoolAgentInstalledAsSystemdService(t *testing.T) {
-	t.Parallel()
-	s := render(t, fleet.StepPoolAgent, fullInput())
-	mustContain(t, s,
-		"version='v0.1.0'",
-		`asset="poolmgr-hostagent_${version#v}_linux_$FLR_ARCH.tar.gz"`,
-		"https://github.com/liquidmetal-dev/battery/releases/download/$version/$asset",
-		"install -m 0755 \"$work/poolmgr-hostagent\" /usr/local/bin/poolmgr-hostagent",
-		"write_file /etc/systemd/system/poolmgr-hostagent.service 0644",
-		"ExecStart=/usr/local/bin/poolmgr-hostagent --listen $FLR_ADDRESS:9091",
-		"WantedBy=multi-user.target",
-		`ensure_service poolmgr-hostagent "$restart"`,
-	)
-	// A release without the agent is reported, anything else fails.
-	mustContain(t, section(t, s, "404)", ";;"), "echo '::skipped:: poolmgr-hostagent'")
-}
-
-//= docs/requirements/06-fleet.md#pool-manager-install
-//= type=test
 //# The Fleet Controller SHALL verify that each installed service is
 //# active before reporting an instance as provisioned.
 
@@ -112,7 +90,6 @@ func TestVerifyActiveChecksEveryInstalledUnit(t *testing.T) {
 	s := render(t, fleet.StepVerifyActive, fullInput())
 	mustContain(t, s,
 		"units=(containerd flintlockd flintlock-runner-network dnsmasq flintlock-runner-buildkitd flintlock-runner-athens flintlock-runner-zot nginx)",
-		"units+=(poolmgr-hostagent)",
 		`systemctl is-active --quiet "$u"`,
 		`die "some services are not active"`,
 	)
@@ -165,6 +142,17 @@ func TestUserDataEmbedsHostStepsWithoutSecrets(t *testing.T) {
 	}
 	mustContain(t, s, `FLR_ARCH="$(host_arch)"`, "token=$(secret flintlockd_token '/flr/host-token')")
 	mustNotContain(t, s, string(in.Fleet.Flintlockd.Token))
+}
+
+// TestUserDataStopsWithoutKVM checks that a self-provisioning instance
+// without a usable /dev/kvm stops before it writes or runs any step, as
+// the Provisioner stops one after detect (FL-117).
+func TestUserDataStopsWithoutKVM(t *testing.T) {
+	t.Parallel()
+	s := render(t, fleet.StepUserData, fullInput())
+	guard := `[ "$kvm" = ok ] || die "unsupported because KVM is unavailable: $kvm; a virtualized instance type needs nested virtualization enabled"`
+	mustContain(t, s, "kvm_status() {", "kvm=$(kvm_status)\n"+guard)
+	before(t, s, guard, `cat >"$steps_dir/`)
 }
 
 func TestDrainAndTeardownGuards(t *testing.T) {

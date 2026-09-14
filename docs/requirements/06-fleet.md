@@ -1,10 +1,10 @@
 # Fleet {#fleet}
 
 This document specifies the Fleet Controller: the `flintlock-runner fleet`
-subcommands that turn a set of EC2 bare-metal instances into flintlock Hosts,
-install the Pool Manager daemon, its host agents and the Host Services, and
-produce the Inventory and Runner configuration. The intent is that an operator
-launches metal instances with a known tag, runs one command from a Control
+subcommands that turn a set of EC2 instances with KVM into flintlock Hosts,
+install the Pool Manager daemon and the Host Services, and produce the
+Inventory and Runner configuration. The intent is that an operator launches
+instances with a known tag, runs one command from a Control
 Node, and ends with a working Runner. Nothing in the flintlock ecosystem is
 EC2-specific; the Fleet Controller supplies that layer.
 
@@ -15,9 +15,8 @@ EC2-specific; the Fleet Controller supplies that layer.
   by the `running` instance state.
 - **FL-002** Where explicit instance ids are configured, the Fleet Controller
   SHALL use them instead of tag discovery.
-- **FL-003** If a discovered instance's type does not end in `.metal`, then
-  the Fleet Controller SHALL exclude it and report it as unsupported because
-  KVM is unavailable.
+- **FL-003** (withdrawn) Replaced by FL-116 and FL-117: an instance is no
+  longer excluded by the name of its type.
 - **FL-004** The Fleet Controller SHALL determine each instance's
   architecture from the EC2 instance attributes and record it in the
   Inventory.
@@ -25,6 +24,16 @@ EC2-specific; the Fleet Controller supplies that layer.
   as the Host endpoint address unless an override is configured.
 - **FL-006** The Fleet Controller SHALL obtain AWS credentials through the
   default credential chain of the AWS SDK.
+- **FL-116** The Fleet Controller SHALL NOT exclude a discovered instance
+  from provisioning because of its instance type.
+- **FL-117** If provisioning finds no usable `/dev/kvm` on an instance, then
+  the Fleet Controller SHALL exclude it from the Inventory and report it as
+  unsupported because KVM is unavailable.
+
+KVM is available on bare-metal instance types and, where nested
+virtualization is enabled, on some virtualized types too, so the name of an
+instance type does not say whether an instance can run MicroVMs. The check is
+therefore made on the host itself, before anything else is installed there.
 
 ## Remote execution {#remote-execution}
 
@@ -109,8 +118,9 @@ the Host, so no inbound path to the guest is needed.
 
 ## Pool Manager {#pool-manager-install}
 
-- **FL-050** The Fleet Controller SHALL install the pinned Pool Manager host
-  agent on every Host as a systemd service.
+- **FL-050** (withdrawn) battery removed its Pool Manager host agent on
+  2026-09-07 (commit b675a46a) because flintlock's native MicroVMExec and
+  MicroVMSSHProxy services superseded it, and no battery release ships it.
 - **FL-051** The Fleet Controller SHALL install the pinned Pool Manager daemon
   on the Control Node with a host list generated from the Inventory that
   names every Host with its `flintlockd` endpoint, token and TLS settings.

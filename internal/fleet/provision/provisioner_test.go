@@ -13,6 +13,7 @@ import (
 
 	"github.com/phoban01/flintlock-runner/internal/config"
 	"github.com/phoban01/flintlock-runner/internal/fleet"
+	"github.com/phoban01/flintlock-runner/internal/fleet/inventory"
 	"github.com/phoban01/flintlock-runner/internal/fleet/scripts"
 	"github.com/phoban01/flintlock-runner/internal/poolmgr"
 )
@@ -75,10 +76,13 @@ func (r *recordingRemote) call(step fleet.Step) (call, bool) {
 	return call{}, false
 }
 
+// kvmOK is what detect prints first on a Host with a usable /dev/kvm.
+const kvmOK = "::kvm:: ok\n"
+
 const (
-	pinnedDetect = "::version:: flintlock v0.14.0\n::version:: firecracker v1.10.1\n" +
+	pinnedDetect = kvmOK + "::version:: flintlock v0.14.0\n::version:: firecracker v1.10.1\n" +
 		"::version:: cloud_hypervisor v41.0\n::version:: containerd v1.7.22\n::thinpool:: present\n"
-	freshDetect = "::version:: flintlock none\n::version:: firecracker none\n" +
+	freshDetect = kvmOK + "::version:: flintlock none\n::version:: firecracker none\n" +
 		"::version:: cloud_hypervisor none\n::version:: containerd none\n::thinpool:: absent\n"
 )
 
@@ -438,6 +442,84 @@ func TestProvisionStopsAtFailedStep(t *testing.T) {
 	}
 	if _, ran := r.call(fleet.StepFlintlockd); ran {
 		t.Error("ran a step after a failed one")
+	}
+}
+
+//= docs/requirements/06-fleet.md#discovery
+//= type=test
+//# If provisioning finds no usable `/dev/kvm` on an instance, then
+//# the Fleet Controller SHALL exclude it from the Inventory and report it as
+//# unsupported because KVM is unavailable.
+
+func TestProvisionStopsAHostWithoutKVM(t *testing.T) {
+	t.Parallel()
+	virt := testInstance
+	virt.Type = "c8i.2xlarge"
+	noKVMLine := strings.TrimPrefix(freshDetect, kvmOK)
+	for name, tc := range map[string]struct{ stdout, reason string }{
+		"no device":        {"::kvm:: unavailable /dev/kvm does not exist\n" + noKVMLine, "/dev/kvm does not exist"},
+		"cannot open":      {"::kvm:: unavailable /dev/kvm cannot be opened for reading and writing\n" + noKVMLine, "cannot be opened"},
+		"nothing reported": {noKVMLine, "no usable /dev/kvm"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			r := &recordingRemote{answers: map[fleet.Step]fleet.RunResult{fleet.StepDetect: {Stdout: tc.stdout}}}
+			res := newTestProvisioner(t, r, nil).Provision(context.Background(), virt)
+			if res.Entry != nil {
+				t.Errorf("a Host without KVM got an Inventory entry: %+v", res.Entry)
+			}
+			if !errors.Is(res.Err, ErrKVMUnavailable) {
+				t.Fatalf("err = %v, want ErrKVMUnavailable", res.Err)
+			}
+			for _, want := range []string{virt.ID, "unsupported", "KVM is unavailable", tc.reason} {
+				if !strings.Contains(res.Err.Error(), want) {
+					t.Errorf("error %q lacks %q", res.Err, want)
+				}
+			}
+			// Nothing but detect was sent to the Host.
+			if got := r.steps(); len(got) != 1 || got[0] != fleet.StepDetect {
+				t.Errorf("sent %v to a Host without KVM, want detect only", got)
+			}
+			if len(res.Steps) != 1 || res.Steps[0].Step != fleet.StepDetect || res.Steps[0].Err == nil {
+				t.Errorf("steps = %+v, want a failed detect only", res.Steps)
+			}
+		})
+	}
+}
+
+//= docs/requirements/06-fleet.md#inventory-and-runner-configuration
+//= type=test
+//# The Fleet Controller SHALL compute each Host's capacity as the
+//# instance's vCPU and memory minus the configured Host reserve.
+
+func TestProvisionTakesCapacityFromTheHost(t *testing.T) {
+	t.Parallel()
+	// EC2 reports no memory for an instance, and a discovered vCPU count
+	// is not what the Host has once it runs: the Host's own figures count.
+	inst := testInstance
+	inst.Type, inst.VCPU, inst.MemoryMB = "c8i.4xlarge", 64, 0
+	r := &recordingRemote{answers: map[fleet.Step]fleet.RunResult{fleet.StepDetect: {
+		Stdout: pinnedDetect + "::capacity:: vcpu 16\n::capacity:: memory_mb 31536\n",
+	}}}
+	res := newTestProvisioner(t, r, nil).Provision(context.Background(), inst)
+	if res.Err != nil {
+		t.Fatal(res.Err)
+	}
+	if res.Instance.VCPU != 16 || res.Instance.MemoryMB != 31536 {
+		t.Errorf("instance capacity = %d vCPU %d MB, want the Host's 16 and 31536", res.Instance.VCPU, res.Instance.MemoryMB)
+	}
+	reserve := testFleet().HostReserve
+	if res.Entry.VCPU != 16-reserve.VCPU || res.Entry.MemoryMB != 31536-reserve.MemoryMB {
+		t.Errorf("entry capacity = %d vCPU %d MB, want %d and %d", res.Entry.VCPU, res.Entry.MemoryMB, 16-reserve.VCPU, 31536-reserve.MemoryMB)
+	}
+	// The Inventory is completed from the same instance and agrees.
+	f := testFleet()
+	e, err := inventory.Complete(*res.Entry, res.Instance, &f)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if e.VCPU != 16-reserve.VCPU || e.MemoryMB != 31536-reserve.MemoryMB {
+		t.Errorf("completed entry capacity = %d vCPU %d MB", e.VCPU, e.MemoryMB)
 	}
 }
 
