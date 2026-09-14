@@ -34,6 +34,7 @@ var templateFor = map[fleet.Step]string{
 	fleet.StepTeardown:     teardownTemplate,
 	fleet.StepUserData:     userDataTemplate,
 	fleet.StepGuestVerify:  guestVerifyTemplate,
+	fleet.StepRunner:       runnerTemplate,
 }
 
 // allSteps is every Step in the order the Provisioner runs the host steps,
@@ -53,6 +54,7 @@ var allSteps = []fleet.Step{
 	fleet.StepTeardown,
 	fleet.StepUserData,
 	fleet.StepGuestVerify,
+	fleet.StepRunner,
 }
 
 // Set is the fleet.Scripts implementation: the embedded templates, parsed

@@ -165,6 +165,7 @@ const (
 	StepTeardown     Step = "teardown"      // FL-081 to FL-083
 	StepUserData     Step = "user_data"     // FL-090, FL-091
 	StepGuestVerify  Step = "guest_verify"  // FL-109: runs inside a verification MicroVM
+	StepRunner       Step = "runner"        // FL-122: the Runner's systemd service on the Control Node
 )
 
 // RenderInput is everything a script template may read. Secrets are not in

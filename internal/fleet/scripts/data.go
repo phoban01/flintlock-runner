@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net"
 	"net/netip"
+	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
@@ -98,6 +99,41 @@ const (
 	OptionStopFlintlockd = "stop_flintlockd"
 	// OptionPurge and OptionTerminate mirror the teardown flags.
 	OptionPurge = "purge"
+
+	// OptionRunnerConfig is the absolute path of the generated Runner
+	// configuration the Runner's service starts with (runner, FL-122).
+	OptionRunnerConfig = "runner_config"
+	// OptionRunnerBinary is the flintlock-runner binary the step installs
+	// as RunnerBinary; empty keeps the one installed.
+	OptionRunnerBinary = "runner_binary"
+	// OptionRunnerStateDir is the Runner's state directory, which its user
+	// owns.
+	OptionRunnerStateDir = "runner_state_dir"
+	// OptionRunnerReads lists, one per line, the absolute paths of the
+	// files the Runner reads: its configuration, the Inventory and TLS
+	// material. The step lets the Runner's user read each.
+	OptionRunnerReads = "runner_reads"
+	// OptionRunnerStopTimeout is how long systemd waits for the Runner's
+	// graceful shutdown, as a Go duration.
+	OptionRunnerStopTimeout = "runner_stop_timeout"
+	// OptionRunnerRemove makes the runner step stop and disable the
+	// service instead, for teardown, when it is "true".
+	OptionRunnerRemove = "runner_remove"
+)
+
+// The Runner's service on the Control Node (runner).
+const (
+	// RunnerUnit is the systemd unit, and RunnerUser the unprivileged user
+	// it runs as.
+	RunnerUnit = "flintlock-runner"
+	RunnerUser = "flintlock-runner"
+	// RunnerUnitPath is the unit file the step writes.
+	RunnerUnitPath = "/etc/systemd/system/" + RunnerUnit + ".service"
+	// RunnerBinary is where the step installs the binary the unit runs.
+	RunnerBinary = "/usr/local/bin/flintlock-runner"
+	// runnerSettle is how long the Runner has to stay active after a start
+	// before the step reports it active.
+	runnerSettle = 10 * time.Second
 )
 
 // data is what the templates see.
@@ -149,6 +185,9 @@ type data struct {
 	PMCert           string
 	PMKey            string
 	HostCAFile       string
+
+	// Runner is the Runner's service on the Control Node (runner).
+	Runner runnerService
 
 	// Guest verification (guest_verify): the Host's Inventory entry and the
 	// module fetched through its proxy, as a proxy URL path without the
@@ -284,7 +323,7 @@ func newData(step fleet.Step, in fleet.RenderInput, atBoot bool) (*data, error) 
 	case atBoot || step == fleet.StepUserData:
 		// Launch template mode: the instance does not exist yet, so the
 		// script detects its architecture and address on the Host.
-	case step == fleet.StepControlNode || step == fleet.StepGuestVerify:
+	case step == fleet.StepControlNode || step == fleet.StepGuestVerify || step == fleet.StepRunner:
 		// These run on the Control Node and in a guest, not on the Host.
 	case in.Instance.Arch == config.ArchAMD64 || in.Instance.Arch == config.ArchARM64:
 		d.Arch = string(in.Instance.Arch)
@@ -314,6 +353,11 @@ func newData(step fleet.Step, in fleet.RenderInput, atBoot bool) (*data, error) 
 	}
 	d.images(in.Profiles)
 	d.poolManager(in)
+	if step == fleet.StepRunner {
+		if err := d.runner(); err != nil {
+			return nil, err
+		}
+	}
 	d.Entry = findEntry(in.Inventory, in.Instance)
 	d.VerifyModule = escapeModulePath(defaultVerifyModule) + "/@v/" + defaultVerifyVersion
 	if len(d.GoPrewarm) > 0 {
@@ -652,6 +696,72 @@ func (d *data) poolManager(in fleet.RenderInput) {
 	d.PMCert = d.Options[OptionPoolManagerCert]
 	d.PMKey = d.Options[OptionPoolManagerKey]
 	d.HostCAFile = d.Options[OptionHostCAFile]
+}
+
+// runnerService is what the runner template sees.
+type runnerService struct {
+	Unit   string
+	User   string
+	Binary string
+	// Source is the binary installed as Binary; empty keeps Binary.
+	Source   string
+	Config   string
+	StateDir string
+	// Reads are the files the Runner reads.
+	Reads          []string
+	StopTimeoutSec int64
+	SettleSec      int64
+	Remove         bool
+}
+
+// runner reads the runner step's options. Every path ends up on the unit's
+// ExecStart line or in a shell word, so each has to be absolute and free of
+// what systemd or a here-document would interpret.
+func (d *data) runner() error {
+	r := runnerService{
+		Unit:      RunnerUnit,
+		User:      RunnerUser,
+		Binary:    RunnerBinary,
+		Source:    d.Options[OptionRunnerBinary],
+		Config:    d.Options[OptionRunnerConfig],
+		StateDir:  d.Options[OptionRunnerStateDir],
+		SettleSec: int64(runnerSettle / time.Second),
+		Remove:    d.Options[OptionRunnerRemove] == "true",
+	}
+	if r.Config == "" {
+		r.Config = config.DefaultRunnerConfigPath
+	}
+	if r.StateDir == "" {
+		r.StateDir = config.DefaultStateDir
+	}
+	stop := config.DefaultShutdownTimeout + 30*time.Second
+	if v := d.Options[OptionRunnerStopTimeout]; v != "" {
+		var err error
+		if stop, err = time.ParseDuration(v); err != nil || stop <= 0 {
+			return fmt.Errorf("runner: %s %q is not a positive duration", OptionRunnerStopTimeout, v)
+		}
+	}
+	r.StopTimeoutSec = int64((stop + time.Second - 1) / time.Second)
+	for _, f := range strings.Split(d.Options[OptionRunnerReads], "\n") {
+		if f = strings.TrimSpace(f); f != "" {
+			r.Reads = append(r.Reads, f)
+		}
+	}
+	for _, p := range append([]string{r.Config, r.StateDir, r.Source}, r.Reads...) {
+		if p == "" {
+			continue
+		}
+		if !strings.HasPrefix(p, "/") || strings.ContainsFunc(p, func(c rune) bool {
+			return unicode.IsSpace(c) || !unicode.IsPrint(c) || strings.ContainsRune("\"'`$\\%;", c)
+		}) {
+			return fmt.Errorf("runner: %q has to be an absolute path without spaces, quotes, $, %%, ; or backslashes", p)
+		}
+	}
+	if filepath.Clean(r.StateDir) == "/" {
+		return fmt.Errorf("runner: the state directory cannot be /")
+	}
+	d.Runner = r
+	return nil
 }
 
 func findEntry(inv fleet.Inventory, inst fleet.Instance) *config.HostEntry {

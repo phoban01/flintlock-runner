@@ -8,6 +8,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"syscall"
 
 	"gopkg.in/yaml.v3"
 
@@ -109,11 +110,20 @@ func encodeConfig(cfg *config.Config) ([]byte, error) {
 
 // writeAtomic writes data to a temporary file beside path with owner-only
 // permissions and renames it over path. The directory is created owner-only
-// when missing.
+// when missing. A file it replaces that its group may read keeps that
+// group and that read permission, and nothing wider: that is how the
+// Runner's service user, which `fleet up --install-runner` gives read
+// access to these files, keeps it when fleet provision rewrites them.
 func writeAtomic(path string, data []byte) (err error) {
 	dir := filepath.Dir(path)
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return fmt.Errorf("inventory: create %s: %w", dir, err)
+	}
+	mode, gid := fileMode, -1
+	if fi, err := os.Stat(path); err == nil && fi.Mode().Perm()&0o040 != 0 {
+		if st, ok := fi.Sys().(*syscall.Stat_t); ok {
+			mode, gid = fileMode|0o040, int(st.Gid)
+		}
 	}
 	tmp, err := os.CreateTemp(dir, "."+filepath.Base(path)+".*")
 	if err != nil {
@@ -124,7 +134,13 @@ func writeAtomic(path string, data []byte) (err error) {
 			_ = os.Remove(tmp.Name())
 		}
 	}()
-	if err := tmp.Chmod(fileMode); err != nil {
+	if gid >= 0 {
+		if err := tmp.Chown(-1, gid); err != nil {
+			_ = tmp.Close()
+			return fmt.Errorf("inventory: write %s: keep its group: %w", path, err)
+		}
+	}
+	if err := tmp.Chmod(mode); err != nil {
 		_ = tmp.Close()
 		return fmt.Errorf("inventory: write %s: %w", path, err)
 	}

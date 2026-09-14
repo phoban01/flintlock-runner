@@ -41,7 +41,10 @@ func TestScriptsLint(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	inputs := map[string]fleet.RenderInput{"full": fullInput(), "sparse": sparseInput(), "public": publicGoInput()}
+	remove := runnerInput()
+	remove.Options[OptionRunnerRemove] = "true"
+	inputs := map[string]fleet.RenderInput{"full": fullInput(), "sparse": sparseInput(), "public": publicGoInput(),
+		"runner": runnerInput(), "runner-remove": remove}
 	if len(s.All()) != len(templateFor) {
 		t.Fatalf("All lists %d steps, %d templates", len(s.All()), len(templateFor))
 	}

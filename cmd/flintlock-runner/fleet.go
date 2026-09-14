@@ -36,8 +36,11 @@ const exitFleetFailure = 1
 func fleetCommands(s fleetSeams) []cli.Command {
 	return []cli.Command{
 		{
-			Name:   "provision",
-			Usage:  "discover instances, provision the new ones as Hosts and write the Inventory and Runner configuration",
+			Name:  "provision",
+			Usage: "discover instances, provision the new ones as Hosts and write the Inventory and Runner configuration",
+			Flags: []cli.Flag{
+				cli.BoolFlag{Name: "dry-run", Usage: "print what would be provisioned, left alone and removed, and change nothing (FL-118)"},
+			},
 			Action: func(c *cli.Context) error { return fleetProvision(c, s) },
 		},
 		{
@@ -48,6 +51,16 @@ func fleetCommands(s fleetSeams) []cli.Command {
 				cli.DurationFlag{Name: "timeout", Usage: "verification timeout; default fleet.verification_timeout"},
 			},
 			Action: func(c *cli.Context) error { return fleetVerify(c, s) },
+		},
+		{
+			Name:  "up",
+			Usage: "provision the fleet, then verify it with the Profiles' Pools declared, and print one summary (FL-119)",
+			Flags: []cli.Flag{
+				cli.BoolFlag{Name: "dry-run", Usage: "print the provision plan and what up would do next, and change nothing (FL-124)"},
+				cli.BoolFlag{Name: "install-runner", Usage: "also run the Runner as the systemd service flintlock-runner on the Control Node (FL-122)"},
+				cli.DurationFlag{Name: "timeout", Usage: "verification timeout; default fleet.verification_timeout"},
+			},
+			Action: func(c *cli.Context) error { return fleetUp(c, s) },
 		},
 		{
 			Name:      "drain",
@@ -98,7 +111,13 @@ func seamErr(err error) error {
 // so that a secret the operator supplied through the environment is not
 // written to disk.
 func loadFleetConfig(c *cli.Context, hosts []config.HostEntry, withEnv bool) (*config.Config, error) {
-	path := c.GlobalString("config")
+	return loadFleetConfigAt(c, c.GlobalString("config"), hosts, withEnv)
+}
+
+// loadFleetConfigAt is loadFleetConfig for the configuration at path rather
+// than the one --config names; fleet up verifies the Runner configuration
+// provisioning wrote with it.
+func loadFleetConfigAt(c *cli.Context, path string, hosts []config.HostEntry, withEnv bool) (*config.Config, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return nil, cli.NewExitError(fmt.Sprintf("config: read %s: %v", path, err), exitInvalidConfig)
@@ -223,38 +242,80 @@ func certificateAuthority(cfg *config.Config) ca.Authority {
 // fleetProvision is `fleet provision`: discover, provision only the new
 // instances, merge them into the Inventory, drop the vanished ones, write
 // the Inventory and the Runner configuration, and install or reload the
-// Pool Manager daemon with the new host list.
+// Pool Manager daemon with the new host list. With --dry-run it stops once
+// the plan is computed and reports it.
 func fleetProvision(c *cli.Context, s fleetSeams) error {
 	ctx := context.Background()
 	// Every instance's output streams here at once (FL-014).
 	out := remote.SyncWriter(c.App.Writer)
-	cfg, err := loadFleetConfig(c, nil, true)
+	p, err := planProvision(ctx, c, s, out)
 	if err != nil {
 		return err
 	}
-	if err := checkSecretsOverSSM(cfg.Fleet); err != nil {
-		return cli.NewExitError(err.Error(), exitInvalidConfig)
+	if c.Bool("dry-run") {
+		p.report(out)
+		return nil
 	}
-	store := inventory.Store{}
-	invPath := fleetInventoryPath(cfg)
-	current, err := store.Load(ctx, invPath)
-	if err != nil {
-		return cli.NewExitError(err.Error(), exitFleetFailure)
-	}
+	_, err = p.apply(ctx, c, s, out)
+	return err
+}
 
+// provisionPlan is what fleet provision has found before it changes
+// anything: the configuration, the Inventory as it stands, and what the
+// run has to do to it.
+type provisionPlan struct {
+	cfg     *config.Config
+	current *fleet.Inventory
+	plan    inventory.Plan
+}
+
+// planProvision loads the configuration and the Inventory, discovers the
+// instances and computes the plan with inventory.Diff. It reaches no Host,
+// writes nothing and does not touch the Pool Manager: a dry run stops after
+// it and a real run continues from it, so the two cannot plan differently.
+func planProvision(ctx context.Context, c *cli.Context, s fleetSeams, out io.Writer) (*provisionPlan, error) {
+	cfg, err := loadFleetConfig(c, nil, true)
+	if err != nil {
+		return nil, err
+	}
+	if err := checkSecretsOverSSM(cfg.Fleet); err != nil {
+		return nil, cli.NewExitError(err.Error(), exitInvalidConfig)
+	}
+	current, err := (inventory.Store{}).Load(ctx, fleetInventoryPath(cfg))
+	if err != nil {
+		return nil, cli.NewExitError(err.Error(), exitFleetFailure)
+	}
 	disc, err := s.discovery(ctx, cfg, func(u discovery.Unsupported) {
 		fmt.Fprintf(out, "excluded %s: %s\n", u.Instance.ID, u.Reason)
 	})
 	if err != nil {
-		return seamErr(err)
+		return nil, seamErr(err)
 	}
 	discovered, err := disc.Discover(ctx)
 	if err != nil {
 		// Without a complete discovery nothing can be said to have gone;
 		// the Inventory is left as it is.
-		return cli.NewExitError(fmt.Sprintf("fleet provision: discovery: %v", err), exitFleetFailure)
+		return nil, cli.NewExitError(fmt.Sprintf("fleet provision: discovery: %v", err), exitFleetFailure)
 	}
-	plan := inventory.Diff(current, discovered)
+	return &provisionPlan{cfg: cfg, current: current, plan: inventory.Diff(current, discovered)}, nil
+}
+
+// provisionOutcome is what a provisioning run did.
+type provisionOutcome struct {
+	// provisioned is the number of instances provisioned by this run.
+	provisioned int
+	// inventory is the Inventory it wrote, nil when it wrote none.
+	inventory *fleet.Inventory
+}
+
+// apply carries out the plan: it provisions the new instances, writes the
+// Inventory and the Runner configuration, and installs or reloads the Pool
+// Manager daemon. The error is the command's exit error, summarising every
+// failure (FL-013).
+func (p *provisionPlan) apply(ctx context.Context, c *cli.Context, s fleetSeams, out io.Writer) (*provisionOutcome, error) {
+	cfg, current, plan := p.cfg, p.current, p.plan
+	store := inventory.Store{}
+	invPath := fleetInventoryPath(cfg)
 	//= docs/requirements/06-fleet.md#inventory-and-runner-configuration
 	//# When run again after an instance in the Inventory no longer
 	//# exists, the Fleet Controller SHALL remove it from the Inventory and report
@@ -268,7 +329,7 @@ func fleetProvision(c *cli.Context, s fleetSeams) error {
 
 	scr, err := s.scripts(cfg)
 	if err != nil {
-		return seamErr(err)
+		return nil, seamErr(err)
 	}
 	authority := certificateAuthority(cfg)
 	var failures []fleet.Failure
@@ -276,7 +337,7 @@ func fleetProvision(c *cli.Context, s fleetSeams) error {
 	if len(plan.New) > 0 {
 		results, err := provisionNew(ctx, s, cfg, out, scr, authority, peerInventory(cfg, current, plan), plan.New)
 		if err != nil {
-			return err
+			return nil, err
 		}
 		for _, res := range results {
 			if res.Err != nil || res.Entry == nil {
@@ -295,8 +356,9 @@ func fleetProvision(c *cli.Context, s fleetSeams) error {
 
 	merged := inventory.Merge(current, plan, added, s.Now().UTC())
 	if err := store.Save(ctx, invPath, merged); err != nil {
-		return cli.NewExitError(err.Error(), exitFleetFailure)
+		return nil, cli.NewExitError(err.Error(), exitFleetFailure)
 	}
+	outcome := &provisionOutcome{provisioned: len(added), inventory: merged}
 	fmt.Fprintf(out, "wrote the Inventory %s with %d Host(s)\n", invPath, len(merged.Hosts))
 	if err := writeRunnerConfig(ctx, c, out, cfg, merged); err != nil {
 		failures = append(failures, fleet.Failure{Host: "runner configuration", Err: err})
@@ -315,9 +377,9 @@ func fleetProvision(c *cli.Context, s fleetSeams) error {
 	// did, the ones that succeeded are in the Inventory, and every failure
 	// is one line of the exit message.
 	if len(failures) > 0 {
-		return cli.NewExitError(summarise("fleet provision", failures), exitFleetFailure)
+		return outcome, cli.NewExitError(summarise("fleet provision", failures), exitFleetFailure)
 	}
-	return nil
+	return outcome, nil
 }
 
 // peerInventory is the Inventory the new instances' guest firewalls take
@@ -584,29 +646,36 @@ func fleetInventory(cfg *config.Config) *fleet.Inventory {
 
 // fleetVerify is `fleet verify` (FL-070 to FL-073).
 func fleetVerify(c *cli.Context, s fleetSeams) error {
-	ctx := context.Background()
 	cfg, err := loadFleetConfig(c, nil, true)
 	if err != nil {
 		return err
 	}
+	_, err = verifyFleet(context.Background(), c.App.Writer, s, cfg, c.Bool("declare"), c.Duration("timeout"))
+	return err
+}
+
+// verifyFleet verifies the Hosts of cfg's Inventory, first declaring the
+// Profiles' Pools when declare is set; timeout overrides
+// fleet.verification_timeout when positive. The error is the command's
+// exit error.
+func verifyFleet(ctx context.Context, out io.Writer, s fleetSeams, cfg *config.Config, declare bool, timeout time.Duration) (*fleet.VerifyReport, error) {
 	inv := fleetInventory(cfg)
 	if len(inv.Hosts) == 0 {
-		return cli.NewExitError(fmt.Sprintf("fleet verify: the Inventory %s lists no Host; run fleet provision first", fleetInventoryPath(cfg)), exitFleetFailure)
+		return nil, cli.NewExitError(fmt.Sprintf("fleet verify: the Inventory %s lists no Host; run fleet provision first", fleetInventoryPath(cfg)), exitFleetFailure)
 	}
 	pm, err := s.PoolManager(cfg)
 	if err != nil {
-		return seamErr(err)
+		return nil, seamErr(err)
 	}
 	defer func() { _ = pm.Close() }()
 
-	if c.Bool("declare") {
-		if err := declarePools(ctx, c.App.Writer, pm, cfg); err != nil {
-			return cli.NewExitError(err.Error(), exitFleetFailure)
+	if declare {
+		if err := declarePools(ctx, out, pm, cfg); err != nil {
+			return nil, cli.NewExitError(err.Error(), exitFleetFailure)
 		}
 	}
-	timeout := cfg.Fleet.VerificationTimeout
-	if d := c.Duration("timeout"); d > 0 {
-		timeout = d
+	if timeout <= 0 {
+		timeout = cfg.Fleet.VerificationTimeout
 	}
 	v, err := verify.New(verify.Config{
 		PoolManager:       pm,
@@ -615,30 +684,30 @@ func fleetVerify(c *cli.Context, s fleetSeams) error {
 		Profiles:          cfg.Profiles,
 		Timeout:           timeout,
 		TransportDeadline: cfg.Executor.TransportDeadline,
-		Out:               c.App.Writer,
+		Out:               out,
 	})
 	if err != nil {
-		return cli.NewExitError(err.Error(), exitFleetFailure)
+		return nil, cli.NewExitError(err.Error(), exitFleetFailure)
 	}
 	report, err := v.Verify(ctx, inv)
 	if err != nil {
-		return cli.NewExitError(err.Error(), exitFleetFailure)
+		return nil, cli.NewExitError(err.Error(), exitFleetFailure)
 	}
 	for _, h := range report.Hosts {
 		if h.Exercised {
-			fmt.Fprintf(c.App.Writer, "%s: claim to ready %s\n", h.Host, h.ClaimToReady.Round(time.Millisecond))
+			fmt.Fprintf(out, "%s: claim to ready %s\n", h.Host, h.ClaimToReady.Round(time.Millisecond))
 		}
 	}
-	printHostServiceNotes(c.App.Writer, cfg.HostServices)
+	printHostServiceNotes(out, cfg.HostServices)
 	//= docs/requirements/06-fleet.md#verification
 	//# If verification fails on any Host or service, then the Fleet
 	//# Controller SHALL exit with a non-zero status naming each failure and the
 	//# step that failed.
 	if err := verify.Summary(report); err != nil {
-		return cli.NewExitError(err.Error(), exitFleetFailure)
+		return report, cli.NewExitError(err.Error(), exitFleetFailure)
 	}
-	fmt.Fprintln(c.App.Writer, "verification passed")
-	return nil
+	fmt.Fprintln(out, "verification passed")
+	return report, nil
 }
 
 // declarePools declares every Profile's Pool as the Runner would.
@@ -760,6 +829,11 @@ func fleetTeardown(c *cli.Context, s fleetSeams) error {
 		if ec2, err = s.ec2(ctx, cfg); err != nil {
 			return seamErr(err)
 		}
+	}
+	// The Runner goes first, so that it neither claims from nor declares
+	// the Pools being deleted.
+	if err := removeRunner(ctx, s, cfg, c.App.Writer); err != nil {
+		return cli.NewExitError(fmt.Sprintf("fleet teardown: stopping the Runner on the Control Node: %v", err), exitFleetFailure)
 	}
 	td, err := drain.NewTeardown(drain.TeardownConfig{
 		Pools:         pm,

@@ -1,0 +1,112 @@
+{{template "prelude" .}}
+
+# The Runner, `flintlock-runner run`, as a systemd service on the Control
+# Node (FL-122), started with the generated Runner configuration.
+unit={{q .Runner.Unit}}
+{{- if .Runner.Remove}}
+
+# Teardown: stop and disable the service; its user, state and files stay.
+if systemctl cat "$unit.service" >/dev/null 2>&1 &&
+  { systemctl is-enabled --quiet "$unit" || systemctl is-active --quiet "$unit"; }; then
+  systemctl disable --now --quiet "$unit"
+  changed "disabled $unit"
+fi
+{{- else}}
+user={{q .Runner.User}}
+bin={{q .Runner.Binary}}
+config={{q .Runner.Config}}
+state={{q .Runner.StateDir}}
+restart=0
+
+# The Runner needs no root: it talks to GitLab, the Pool Manager and
+# flintlockd over the network, serves metrics on an unprivileged port and
+# writes only its state directory, which its own user owns.
+ensure_user "$user" "$state"
+if [ "$(stat -c %U "$state")" != "$user" ]; then
+  chown "$user:$user" "$state"
+  chmod 0700 "$state"
+  changed "$state owned by $user"
+fi
+find "$state" -maxdepth 1 -type f ! -user "$user" -exec chown "$user:$user" {} +
+{{- if .Runner.Source}}
+
+if ! cmp -s {{q .Runner.Source}} "$bin"; then
+  install -D -m 0755 {{q .Runner.Source}} "$bin"
+  changed "installed $bin"
+  restart=1
+fi
+{{- end}}
+[ -x "$bin" ] || die "$bin is not installed"
+
+# The Fleet Controller writes the Runner configuration, the Inventory and
+# the TLS material owner-only. The Runner's user is given read access to
+# each file it reads, and search access to the directories above them,
+# where it does not have them already, and to nothing else.
+reads=({{qjoin .Runner.Reads}})
+for f in "${reads[@]}"; do
+  [ -f "$f" ] || die "the Runner reads $f, which does not exist"
+  runuser -u "$user" -- test -r "$f" && continue
+  d=$(dirname "$f")
+  while [ "$d" != / ]; do
+    if ! runuser -u "$user" -- test -x "$d"; then
+      command -v setfacl >/dev/null 2>&1 || ensure_packages acl
+      setfacl -m "u:$user:x" "$d"
+      changed "$d searchable by $user"
+    fi
+    d=$(dirname "$d")
+  done
+  if ! runuser -u "$user" -- test -r "$f"; then
+    chgrp "$user" "$f"
+    chmod g+r "$f"
+    changed "$f readable by $user"
+  fi
+  runuser -u "$user" -- test -r "$f" || die "$user cannot read $f"
+done
+
+# SIGTERM starts the Runner's graceful shutdown; systemd waits for it past
+# gitlab.shutdown_timeout before it kills the Runner. SIGHUP reloads the
+# Profiles and the Inventory (CF-007).
+if write_file "/etc/systemd/system/$unit.service" 0644 <<FLR_EOF
+[Unit]
+Description=flintlock-runner GitLab CI runner
+Wants=network-online.target
+After=network-online.target poolmgrd.service
+
+[Service]
+User=$user
+Group=$user
+ExecStart=$bin --config $config run
+ExecReload=/bin/kill -HUP \$MAINPID
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec={{.Runner.StopTimeoutSec}}
+
+[Install]
+WantedBy=multi-user.target
+FLR_EOF
+then
+  FLR_DAEMON_RELOAD=1
+  restart=1
+fi
+
+was_active=0
+systemctl is-active --quiet "$unit" && was_active=1
+ensure_service "$unit" "$restart"
+if [ "$was_active" = 1 ] && [ "$restart" = 0 ]; then
+  # A running Runner re-reads the Inventory fleet provision may have
+  # rewritten.
+  systemctl reload "$unit"
+  log "reloaded $unit"
+fi
+
+# FL-122: the service has to be active and stay active: a Runner that
+# cannot load its configuration or reach GitLab exits and is restarted.
+restarts=$(systemctl show -p NRestarts --value "$unit")
+sleep {{.Runner.SettleSec}}
+status=$(systemctl is-active "$unit" || true)
+if [ "$status" != active ] || [ "$(systemctl show -p NRestarts --value "$unit")" != "$restarts" ]; then
+  journalctl -u "$unit" -n 20 --no-pager >&2 || true
+  die "$unit did not stay active (it is $status)"
+fi
+printf '::active:: %s\n' "$unit"
+{{- end}}

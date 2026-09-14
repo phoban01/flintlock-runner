@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"os"
 	"runtime"
 	"sync"
 	"time"
@@ -67,6 +68,13 @@ type fleetSeams struct {
 	Leases func(pm poolmgr.Client) drain.LeaseReporter
 	// Now is the clock for the Inventory's generated_at.
 	Now func() time.Time
+	// Executable is the flintlock-runner binary fleet up --install-runner
+	// installs as the Runner's service.
+	Executable func() (string, error)
+	// RunnerInstalled reports whether the Runner's systemd unit is
+	// installed on the Control Node, where the Fleet Controller runs, so
+	// that fleet teardown stops it there.
+	RunnerInstalled func() bool
 }
 
 // productionSeams are the seams of the released binary.
@@ -85,6 +93,11 @@ func productionSeams() fleetSeams {
 		Transports: func() transport.Factory { return transport.NewFactory() },
 		Leases:     func(pm poolmgr.Client) drain.LeaseReporter { return drain.PoolLeases{Pools: pm} },
 		Now:        time.Now,
+		Executable: os.Executable,
+		RunnerInstalled: func() bool {
+			_, err := os.Stat(scripts.RunnerUnitPath)
+			return err == nil
+		},
 	}
 }
 
