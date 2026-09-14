@@ -33,6 +33,7 @@ ensure_packages ca-certificates curl
 # listen address travels as flags instead: provision.sh cannot merge a
 # value containing a colon.
 flintlockd_config "$work/flintlockd-full.yaml"
+log "staged flintlockd configuration (TLS material changed: $FLR_FLINTLOCKD_CHANGED)"
 grep -v '^grpc-endpoint:' "$work/flintlockd-full.yaml" >"$work/flintlockd.yaml"
 chmod 0600 "$work/flintlockd.yaml"
 

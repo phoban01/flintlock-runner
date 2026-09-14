@@ -1,3 +1,16 @@
 {{template "prelude" .}}
 
-log "not yet implemented"
+# Drain runs after the Pool Manager has stopped placing on this Host. It
+# reports the MicroVM processes still running and stops flintlockd only
+# when asked to and only when none remain.
+running=$(pgrep -c -x 'firecracker|cloud-hypervisor|cloud-hypervisor-static' || true)
+printf '::microvms:: %s\n' "${running:-0}"
+{{- if eq (index .Options "stop_flintlockd") "true"}}
+if [ "${running:-0}" -gt 0 ]; then
+  die "$running MicroVMs still run on this Host; flintlockd stays up"
+fi
+if systemctl is-active --quiet flintlockd; then
+  systemctl stop flintlockd
+  changed "stopped flintlockd"
+fi
+{{- end}}

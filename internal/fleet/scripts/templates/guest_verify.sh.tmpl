@@ -1,3 +1,58 @@
-{{template "prelude" .}}
+#!/usr/bin/env bash
+# flintlock-runner fleet step "{{.Step}}". Runs inside a verification MicroVM
+# on the Host named below, never on the Host itself (FL-109). It exercises
+# each Host Service from the guest side and reports one line per service:
+#   ::service:: NAME ok
+#   ::service:: NAME fail REASON
+# It always exits 0; the report is the result.
+set -uo pipefail
+work=$(mktemp -d)
+trap 'rm -rf "$work"' EXIT
+report() { printf '::service:: %s %s\n' "$1" "$2"; }
+{{- with .Entry}}
+{{- if .Services.Buildkit}}
 
-log "not yet implemented"
+# buildkit: build a trivial image with buildctl.
+mkdir -p "$work/ctx"
+printf 'flintlock-runner\n' >"$work/ctx/hello"
+printf 'FROM scratch\nCOPY hello /hello\n' >"$work/ctx/Dockerfile"
+if out=$(buildctl --addr {{q .Services.Buildkit}} build --frontend dockerfile.v0 \
+  --local context="$work/ctx" --local dockerfile="$work/ctx" 2>&1); then
+  report buildkit ok
+else
+  report buildkit "fail $(printf '%s' "$out" | tail -n1)"
+fi
+{{- end}}
+{{- if .Services.GoProxy}}
+
+# go_proxy: fetch a module through the proxy.
+if out=$(curl -fsS -o /dev/null {{q (printf "%s/%s.zip" .Services.GoProxy $.VerifyModule)}} 2>&1); then
+  report go_proxy ok
+else
+  report go_proxy "fail $out"
+fi
+{{- end}}
+{{- if .Services.RegistryMirror}}
+
+# registry_mirror: pull an image manifest and its first layer through the
+# mirror.
+accept='application/vnd.oci.image.index.v1+json,application/vnd.docker.distribution.manifest.list.v2+json,application/vnd.oci.image.manifest.v1+json,application/vnd.docker.distribution.manifest.v2+json'
+if out=$(curl -fsS -H "Accept: $accept" {{q (printf "%s/v2/library/alpine/manifests/latest" .Services.RegistryMirror)}} 2>&1); then
+  report registry_mirror ok
+else
+  report registry_mirror "fail $out"
+fi
+{{- end}}
+{{- range $name, $url := .Services.HTTPCache}}
+
+# http_cache {{$name}}: fetch one object through the cache.
+if out=$(curl -fsS -o /dev/null {{q (printf "%s/" $url)}} 2>&1); then
+  report {{q (printf "http_cache/%s" $name)}} ok
+else
+  report {{q (printf "http_cache/%s" $name)}} "fail $out"
+fi
+{{- end}}
+{{- else}}
+report inventory "fail no Inventory entry for this Host"
+{{- end}}
+exit 0

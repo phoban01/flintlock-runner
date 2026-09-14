@@ -1,3 +1,17 @@
 {{template "prelude" .}}
 
-log "not yet implemented"
+# Launch template user-data: the Host provisioning steps, unattended at
+# first boot. Nothing secret is in this script; each step reads its secrets
+# from the Systems Manager parameters named in it.
+steps_dir="$FLR_STATE/user-data"
+mkdir -p "$steps_dir"
+chmod 0700 "$steps_dir"
+{{- range .Steps}}
+cat >"$steps_dir/{{.Name}}.sh" <<'FLR_STEP_EOF'
+{{.Content}}
+FLR_STEP_EOF
+{{- end}}
+for step in {{range .Steps}}{{.Name}} {{end}}; do
+  log "running $step"
+  bash "$steps_dir/$step.sh" </dev/null
+done

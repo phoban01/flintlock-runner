@@ -1,3 +1,54 @@
 {{template "prelude" .}}
 
-log "not yet implemented"
+# FL-050: the Pool Manager host agent at the pinned battery version, as a
+# systemd service. battery v0.1.0 ships no host agent (its daemon reaches
+# guests through flintlockd's exec API), so a release without one is
+# reported and skipped rather than failed.
+version={{q .Versions.PoolManager}}
+[ -n "$version" ] || die "fleet.versions pins no pool_manager version"
+marker="$FLR_STATE/poolmgr-hostagent.version"
+restart=0
+
+if [ "$(cat "$marker" 2>/dev/null || true)" != "$version" ]; then
+  ensure_packages ca-certificates curl
+  work=$(mktemp -d)
+  trap 'rm -rf "$work"' EXIT
+  asset="poolmgr-hostagent_${version#v}_linux_$FLR_ARCH.tar.gz"
+  status=$(curl --proto '=https' --tlsv1.2 -sSL --retry 3 -o "$work/agent.tar.gz" -w '%{http_code}' \
+    "https://github.com/liquidmetal-dev/battery/releases/download/$version/$asset" || true)
+  case "$status" in
+  200) ;;
+  404)
+    log "battery $version ships no poolmgr-hostagent for $FLR_ARCH; nothing to install"
+    echo '::skipped:: poolmgr-hostagent'
+    exit 0
+    ;;
+  *) die "downloading $asset failed with HTTP status ${status:-none}" ;;
+  esac
+  tar -xzf "$work/agent.tar.gz" -C "$work" poolmgr-hostagent
+  install -m 0755 "$work/poolmgr-hostagent" /usr/local/bin/poolmgr-hostagent
+  mkdir -p "$FLR_STATE"
+  echo "$version" >"$marker"
+  changed "poolmgr-hostagent $version"
+  restart=1
+fi
+
+if write_file /etc/systemd/system/poolmgr-hostagent.service 0644 <<FLR_EOF
+[Unit]
+Description=battery Pool Manager host agent
+Requires=flintlockd.service
+After=flintlockd.service
+
+[Service]
+ExecStart=/usr/local/bin/poolmgr-hostagent --listen $FLR_ADDRESS:{{.PoolAgentPort}}
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
+FLR_EOF
+then
+  FLR_DAEMON_RELOAD=1
+  restart=1
+fi
+ensure_service poolmgr-hostagent "$restart"

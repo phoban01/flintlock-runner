@@ -61,6 +61,13 @@ const (
 	athensInternalPort = 3999
 )
 
+// The module guest verification fetches through the proxy when no module
+// is configured for pre-warming (FL-109).
+const (
+	defaultVerifyModule  = "golang.org/x/mod"
+	defaultVerifyVersion = "v0.17.0"
+)
+
 // Secret names in the bundle EncodeSecrets writes to a script's standard
 // input (SE-015).
 const (
@@ -128,7 +135,7 @@ type data struct {
 	Params config.LaunchTemplateParameters
 
 	Services services
-	Images   []string
+	Images   []image
 	// GoPrewarm and MirrorPrewarm drive the prewarm step (FL-112).
 	GoPrewarm     []goModule
 	MirrorPrewarm []string
@@ -141,13 +148,17 @@ type data struct {
 	PMKey            string
 	HostCAFile       string
 
-	// Guest verification (guest_verify).
-	Entry *config.HostEntry
+	// Guest verification (guest_verify): the Host's Inventory entry and the
+	// module fetched through its proxy, as a proxy URL path without the
+	// extension.
+	Entry        *config.HostEntry
+	VerifyModule string
 
 	Options map[string]string
 	Steps   []renderedStep
 
 	// The host layout constants, for the templates.
+	PoolAgentPort       int
 	ContainerdSocket    string
 	ContainerdNamespace string
 	TLSDir              string
@@ -166,6 +177,13 @@ type goModule struct {
 	// Path is the proxy URL path of the module, escaped as the Go module
 	// proxy protocol requires.
 	Path string
+}
+
+// image is one Profile image and the architecture of its Profile; an empty
+// architecture matches every Host.
+type image struct {
+	Arch string
+	Ref  string
 }
 
 type pmHost struct {
@@ -227,7 +245,7 @@ type httpUpstream struct {
 	TTLSec   int64
 }
 
-func newData(step fleet.Step, in fleet.RenderInput) (*data, error) {
+func newData(step fleet.Step, in fleet.RenderInput, atBoot bool) (*data, error) {
 	d := &data{
 		Step:     step,
 		Instance: in.Instance,
@@ -235,6 +253,7 @@ func newData(step fleet.Step, in fleet.RenderInput) (*data, error) {
 		Bridge:   Bridge,
 		Options:  in.Options,
 
+		PoolAgentPort:       PoolAgentPort,
 		ContainerdSocket:    ContainerdSocket,
 		ContainerdNamespace: ContainerdNamespace,
 		TLSDir:              TLSDir,
@@ -261,17 +280,21 @@ func newData(step fleet.Step, in fleet.RenderInput) (*data, error) {
 	//= docs/requirements/06-fleet.md#host-provisioning
 	//# The Fleet Controller SHALL select binaries and images matching
 	//# the instance's architecture.
-	switch in.Instance.Arch {
-	case config.ArchAMD64, config.ArchARM64:
+	switch {
+	case atBoot || step == fleet.StepUserData:
+		// Launch template mode: the instance does not exist yet, so the
+		// script detects its architecture and address on the Host.
+	case step == fleet.StepControlNode || step == fleet.StepGuestVerify:
+		// These run on the Control Node and in a guest, not on the Host.
+	case in.Instance.Arch == config.ArchAMD64 || in.Instance.Arch == config.ArchARM64:
 		d.Arch = string(in.Instance.Arch)
-	case "":
-		if step != fleet.StepUserData && step != fleet.StepControlNode {
-			return nil, fmt.Errorf("instance %s has no architecture", in.Instance.ID)
+		d.Address = in.Instance.PrivateIP
+		if d.Address == "" {
+			return nil, fmt.Errorf("instance %s has no private address", in.Instance.ID)
 		}
 	default:
 		return nil, fmt.Errorf("instance %s: unsupported architecture %q", in.Instance.ID, in.Instance.Arch)
 	}
-	d.Address = in.Instance.PrivateIP
 
 	//= docs/requirements/06-fleet.md#host-provisioning
 	//# The Fleet Controller SHALL enable the `flintlockd` exec API on
@@ -292,6 +315,10 @@ func newData(step fleet.Step, in fleet.RenderInput) (*data, error) {
 	d.images(in.Profiles)
 	d.poolManager(in)
 	d.Entry = findEntry(in.Inventory, in.Instance)
+	d.VerifyModule = escapeModulePath(defaultVerifyModule) + "/@v/" + defaultVerifyVersion
+	if len(d.GoPrewarm) > 0 {
+		d.VerifyModule = d.GoPrewarm[0].Path
+	}
 	return d, nil
 }
 
@@ -591,16 +618,17 @@ func zotConfig(root, gw string, port int, regs []registry) (string, error) {
 // images lists the kernel, initrd, root filesystem and volume images of
 // every Profile of the instance's architecture (FL-027, FL-028).
 func (d *data) images(profiles []config.Profile) {
-	seen := map[string]bool{}
-	add := func(ref string) {
-		if ref != "" && !seen[ref] {
-			seen[ref] = true
-			d.Images = append(d.Images, ref)
-		}
-	}
+	seen := map[image]bool{}
 	for _, p := range profiles {
 		if d.Arch != "" && p.Arch != "" && string(p.Arch) != d.Arch {
 			continue
+		}
+		add := func(ref string) {
+			im := image{Arch: string(p.Arch), Ref: ref}
+			if ref != "" && !seen[im] {
+				seen[im] = true
+				d.Images = append(d.Images, im)
+			}
 		}
 		add(p.Kernel.Image)
 		if p.Initrd != nil {

@@ -89,23 +89,60 @@ func (s *Set) All() []fleet.Step {
 // secrets reach the Host on the script's standard input (see
 // EncodeSecrets) or through the Systems Manager parameters it names.
 func (s *Set) Render(step fleet.Step, in fleet.RenderInput) (fleet.Script, error) {
-	name, ok := templateFor[step]
-	if !ok {
-		return fleet.Script{}, fmt.Errorf("unknown step %q", step)
-	}
-	d, err := newData(step, in)
+	content, err := s.render(step, in, false)
 	if err != nil {
-		return fleet.Script{}, fmt.Errorf("step %s: %w", step, err)
-	}
-	var buf bytes.Buffer
-	if err := s.tmpl.ExecuteTemplate(&buf, name, d); err != nil {
-		return fleet.Script{}, fmt.Errorf("render step %s: %w", step, err)
+		return fleet.Script{}, err
 	}
 	return fleet.Script{
 		Name:    string(step),
-		Content: buf.String(),
+		Content: content,
 		Timeout: DefaultTimeout,
 	}, nil
+}
+
+// userDataSteps are the Host provisioning steps the user-data script runs
+// at first boot, in order.
+var userDataSteps = []fleet.Step{
+	fleet.StepThinPool,
+	fleet.StepFlintlock,
+	fleet.StepNetworking,
+	fleet.StepFlintlockd,
+	fleet.StepPoolAgent,
+	fleet.StepHostServices,
+	fleet.StepPrepull,
+	fleet.StepPrewarm,
+	fleet.StepVerifyActive,
+}
+
+// render renders one step. atBoot is set for the steps embedded in
+// user-data, where the instance is not known yet and its architecture and
+// address are detected on the Host.
+func (s *Set) render(step fleet.Step, in fleet.RenderInput, atBoot bool) (string, error) {
+	name, ok := templateFor[step]
+	if !ok {
+		return "", fmt.Errorf("unknown step %q", step)
+	}
+	d, err := newData(step, in, atBoot)
+	if err != nil {
+		return "", fmt.Errorf("step %s: %w", step, err)
+	}
+	if step == fleet.StepUserData {
+		for _, sub := range userDataSteps {
+			c, err := s.render(sub, in, true)
+			if err != nil {
+				return "", err
+			}
+			if strings.Contains(c, "\nFLR_STEP_EOF\n") {
+				return "", fmt.Errorf("step %s contains the user-data delimiter", sub)
+			}
+			d.Steps = append(d.Steps, renderedStep{Name: string(sub), Content: strings.TrimSuffix(c, "\n")})
+		}
+	}
+	var buf bytes.Buffer
+	if err := s.tmpl.ExecuteTemplate(&buf, name, d); err != nil {
+		return "", fmt.Errorf("render step %s: %w", step, err)
+	}
+	return buf.String(), nil
 }
 
 // funcs are the template helpers. Every value interpolated into shell goes
@@ -115,6 +152,14 @@ var funcs = template.FuncMap{
 	"q":    shellQuote,
 	"line": oneLine,
 	"join": strings.Join,
+	// trimv drops a leading "v" from a version.
+	"trimv": func(v string) string { return strings.TrimPrefix(v, "v") },
+	// heredoc escapes what an unquoted here-document would expand.
+	"heredoc": func(v string) string {
+		v = strings.ReplaceAll(v, `\`, `\\`)
+		v = strings.ReplaceAll(v, "$", `\$`)
+		return strings.ReplaceAll(v, "`", "\\`")
+	},
 	"qjoin": func(vs []string) string {
 		out := make([]string, len(vs))
 		for i, v := range vs {

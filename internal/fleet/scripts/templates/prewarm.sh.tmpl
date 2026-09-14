@@ -1,3 +1,34 @@
 {{template "prelude" .}}
 
-log "not yet implemented"
+# FL-112: pre-warm the Go module proxy and the registry mirror with the
+# configured modules and images, through the services themselves so that
+# they land in the Host's cache. Fetching what is already cached is a cache
+# hit and changes nothing.
+{{- if and .Services.GoProxy .GoPrewarm}}
+proxy="http://{{.Gateway}}:{{.Services.GoProxyPort}}"
+modules=({{range .GoPrewarm}}{{q .Path}} {{end}})
+for path in "${modules[@]}"; do
+  for ext in info mod zip; do
+    curl -fsS --retry 3 -o /dev/null "$proxy/$path.$ext" || die "pre-warming $path.$ext through $proxy failed"
+  done
+done
+{{- end}}
+{{- if and .Services.Mirror .MirrorPrewarm}}
+mirror={{q (printf "%s:%d" .Gateway .Services.MirrorPort)}}
+ctr_ns=(ctr --address {{q .ContainerdSocket}} --namespace flintlock-runner-prewarm)
+images=({{qjoin .MirrorPrewarm}})
+for ref in "${images[@]}"; do
+  # The mirror serves every upstream under the repository path alone.
+  repo=$ref
+  case "${repo%%/*}" in
+  *.* | *:* | localhost) repo=${repo#*/} ;;
+  esac
+  case "$repo" in
+  */*) ;;
+  *) repo=library/$repo ;;
+  esac
+  "${ctr_ns[@]}" images pull --plain-http --platform "linux/$FLR_ARCH" "$mirror/$repo" >&2
+  "${ctr_ns[@]}" images rm "$mirror/$repo" >/dev/null
+done
+{{- end}}
+log "pre-warm done"
