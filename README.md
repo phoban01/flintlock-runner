@@ -43,7 +43,7 @@ make e2e                                   # the end-to-end scenarios (TD-050)
 
 ## Releases
 
-Tagged builds for `linux/amd64` and `linux/arm64` are on the
+Tagged builds for Linux and macOS, on amd64 and arm64, are on the
 [releases page](https://github.com/phoban01/flintlock-runner/releases):
 `vX.Y.Z-rc.N` tags are release candidates, published as pre-releases, and
 `vX.Y.Z` tags are releases. Each ships the requirements report for its
