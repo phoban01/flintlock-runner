@@ -207,8 +207,8 @@ func TestSaveRunnerConfigReferencesInventoryAndCarriesProfiles(t *testing.T) {
 	if !reflect.DeepEqual(got.Profiles, in.Profiles) {
 		t.Errorf("profiles = %#v\nwant %#v", got.Profiles, in.Profiles)
 	}
-	if got.Fleet != nil {
-		t.Errorf("the Runner configuration carries the fleet section: %#v", got.Fleet)
+	if got.Fleet == nil || got.Fleet.Region != in.Fleet.Region {
+		t.Errorf("the Runner configuration dropped the fleet section; the next fleet run reads it: %#v", got.Fleet)
 	}
 	fi, err := os.Stat(cfgPath)
 	if err != nil {

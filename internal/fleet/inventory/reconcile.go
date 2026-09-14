@@ -198,14 +198,19 @@ func InstanceOf(h *config.HostEntry) fleet.Instance {
 
 // RunnerConfig is the Runner configuration generated from the Fleet
 // Controller's input (FL-062): the input as given, with the Inventory
-// section replaced by a reference to the Inventory file and without the
-// Fleet section, which only the fleet subcommands read. The Pool Manager
-// section and the Profiles are carried over unchanged.
+// section replaced by a reference to the Inventory file. The Pool Manager
+// section and the Profiles are carried over unchanged, and so is the Fleet
+// section: the Runner ignores it, and keeping it means the generated file
+// is also a valid input for the next `fleet` run, which matters because the
+// two paths default to the same file.
 func RunnerConfig(in *config.Config, inventoryPath string) *config.Config {
 	out := *in
 	out.Inventory = config.Inventory{File: inventoryPath}
-	out.Fleet = nil
 	out.Profiles = slices.Clone(in.Profiles)
+	if in.Fleet != nil {
+		f := *in.Fleet
+		out.Fleet = &f
+	}
 	return &out
 }
 
