@@ -127,6 +127,8 @@ const (
 	// it runs as.
 	RunnerUnit = "flintlock-runner"
 	RunnerUser = "flintlock-runner"
+	// RunnerUnitPath is the unit file the step writes.
+	RunnerUnitPath = "/etc/systemd/system/" + RunnerUnit + ".service"
 	// RunnerBinary is where the step installs the binary the unit runs.
 	RunnerBinary = "/usr/local/bin/flintlock-runner"
 	// runnerSettle is how long the Runner has to stay active after a start
