@@ -79,14 +79,17 @@ func describeInput(f fleet.DescribeFilter) *ec2.DescribeInstancesInput {
 	return in
 }
 
-// instanceFromEC2 converts one described instance.
+// instanceFromEC2 converts one described instance. DescribeInstances reports
+// no memory, and DescribeInstanceTypes is outside the IAM policy of SE-040,
+// so MemoryMB is left zero: the Host's own vCPU and memory are measured when
+// it is provisioned (FL-061). VCPU is the active cores times threads, for
+// what it is worth before then.
 func instanceFromEC2(in ec2types.Instance) fleet.Instance {
 	out := fleet.Instance{
 		ID:        aws.ToString(in.InstanceId),
 		Type:      string(in.InstanceType),
 		Arch:      archFromEC2(in.Architecture),
 		PrivateIP: aws.ToString(in.PrivateIpAddress),
-		MemoryMB:  MetalMemoryMB(string(in.InstanceType)),
 	}
 	if in.State != nil {
 		out.State = string(in.State.Name)
@@ -124,64 +127,4 @@ func archFromEC2(a ec2types.ArchitectureValues) config.Architecture {
 	default:
 		return ""
 	}
-}
-
-// metalMemoryGiB is the memory of the bare-metal instance types, because
-// DescribeInstances does not report memory and DescribeInstanceTypes is
-// outside the IAM policy of SE-040.
-var metalMemoryGiB = map[string]int{
-	"a1.metal":     32,
-	"c5.metal":     192,
-	"c5d.metal":    192,
-	"c5n.metal":    192,
-	"c6a.metal":    384,
-	"c6g.metal":    128,
-	"c6gd.metal":   128,
-	"c6i.metal":    256,
-	"c6id.metal":   256,
-	"c6in.metal":   256,
-	"c7g.metal":    128,
-	"c7gd.metal":   128,
-	"c7gn.metal":   128,
-	"g4dn.metal":   384,
-	"i3.metal":     512,
-	"i3en.metal":   768,
-	"i4i.metal":    1024,
-	"m5.metal":     384,
-	"m5d.metal":    384,
-	"m5dn.metal":   384,
-	"m5n.metal":    384,
-	"m5zn.metal":   192,
-	"m6a.metal":    768,
-	"m6g.metal":    256,
-	"m6gd.metal":   256,
-	"m6i.metal":    512,
-	"m6id.metal":   512,
-	"m6idn.metal":  512,
-	"m6in.metal":   512,
-	"m7g.metal":    256,
-	"m7gd.metal":   256,
-	"r5.metal":     768,
-	"r5b.metal":    768,
-	"r5d.metal":    768,
-	"r5dn.metal":   768,
-	"r5n.metal":    768,
-	"r6a.metal":    1536,
-	"r6g.metal":    512,
-	"r6gd.metal":   512,
-	"r6i.metal":    1024,
-	"r6id.metal":   1024,
-	"r7g.metal":    512,
-	"r7gd.metal":   512,
-	"x2gd.metal":   1024,
-	"x2idn.metal":  2048,
-	"x2iedn.metal": 4096,
-	"x2iezn.metal": 1536,
-	"z1d.metal":    384,
-}
-
-// MetalMemoryMB returns the memory in MiB of a bare-metal instance type, or
-// zero when the type is not in the table.
-func MetalMemoryMB(instanceType string) int {
-	return metalMemoryGiB[instanceType] * 1024
 }
