@@ -16,7 +16,7 @@ import (
 )
 
 // runnerPackage is the import path of the Runner's main package.
-const runnerPackage = "github.com/phoban01/flintlock-runner/cmd/flintlock-runner"
+const runnerPackage = "github.com/phoban01/flintlock-runner/cmd/flr"
 
 // moduleGoMod is the first line of this module's go.mod, which is how
 // moduleRoot recognises it.

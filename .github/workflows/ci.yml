@@ -45,7 +45,7 @@ jobs:
         with:
           version: ${{ env.GOLANGCI_LINT_VERSION }}
 
-  # The end-to-end harness (TD-050): the real flintlock-runner binary against
+  # The end-to-end harness (TD-050): the real flr binary against
   # the fake GitLab, the fake Pool Manager and fake Hosts, on a runner with no
   # KVM. The hardware tier (TD-052) is skipped here because no hardware
   # Inventory is named.
