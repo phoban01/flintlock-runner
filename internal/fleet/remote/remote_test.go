@@ -77,9 +77,9 @@ func TestNewRunsThroughSystemsManagerByDefault(t *testing.T) {
 }
 
 // sshFleet is a fleet section selecting SSH to srv.
-func sshFleet(srv *sshtest.Server, user string) *config.Fleet {
+func sshFleet(srv *sshtest.Server) *config.Fleet {
 	return &config.Fleet{Remote: config.Remote{Mode: config.RemoteSSH, SSH: config.SSHRemote{
-		User: user, KeyFile: srv.ClientKeyFile, Port: srv.Port(), KnownHostsFile: srv.KnownHostsFile,
+		User: "fleet-admin", KeyFile: srv.ClientKeyFile, Port: srv.Port(), KnownHostsFile: srv.KnownHostsFile,
 	}}}
 }
 
@@ -121,7 +121,7 @@ func TestSSHModeRunsOverSSHWithConfiguredUserAndKey(t *testing.T) {
 	t.Parallel()
 	srv := sshtest.New(t)
 	ssm := awsfake.NewSSM()
-	r, err := New(sshFleet(srv, "fleet-admin"), ssm)
+	r, err := New(sshFleet(srv), ssm)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -157,7 +157,7 @@ func TestSSHModeRunsOverSSHWithConfiguredUserAndKey(t *testing.T) {
 
 	// Another key is refused: the configured key is the one that got in.
 	other := sshtest.New(t)
-	f := sshFleet(srv, "fleet-admin")
+	f := sshFleet(srv)
 	f.Remote.SSH.KeyFile = other.ClientKeyFile
 	r2, err := New(f, ssm)
 	if err != nil {
@@ -179,7 +179,7 @@ func TestSSHVerifiesHostKey(t *testing.T) {
 	if err := os.WriteFile(known, []byte(knownhosts.Line([]string{knownhosts.Normalize(srv.Addr)}, impostor.HostKey)+"\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	f := sshFleet(srv, "fleet-admin")
+	f := sshFleet(srv)
 	f.Remote.SSH.KnownHostsFile = known
 	r, err := New(f, nil)
 	if err != nil {
@@ -256,7 +256,7 @@ func TestSSMStreamsOutputPrefixedAsItArrives(t *testing.T) {
 func TestSSHStreamsOutputPrefixed(t *testing.T) {
 	t.Parallel()
 	srv := sshtest.New(t)
-	r, err := New(sshFleet(srv, "fleet-admin"), nil)
+	r, err := New(sshFleet(srv), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -289,7 +289,7 @@ func TestNonZeroExitReturnsResultAndExitError(t *testing.T) {
 	}
 
 	srv := sshtest.New(t)
-	r, err := New(sshFleet(srv, "fleet-admin"), nil)
+	r, err := New(sshFleet(srv), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -318,7 +318,7 @@ func TestSSMRefusesStandardInput(t *testing.T) {
 func TestSSHScriptTimeoutEndsTheRun(t *testing.T) {
 	t.Parallel()
 	srv := sshtest.New(t)
-	r, err := New(sshFleet(srv, "fleet-admin"), nil)
+	r, err := New(sshFleet(srv), nil)
 	if err != nil {
 		t.Fatal(err)
 	}

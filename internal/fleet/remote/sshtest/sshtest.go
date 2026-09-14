@@ -269,4 +269,3 @@ func (s *Server) run(ctx context.Context, command string, ch ssh.Channel, stdinD
 		return 255
 	}
 }
-

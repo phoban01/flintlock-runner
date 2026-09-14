@@ -105,7 +105,7 @@ func TestFanContinuesPastFailuresAndSummarisesEach(t *testing.T) {
 	if want := []string{"i-0", "i-1", "i-2", "i-3", "i-4"}; !reflect.DeepEqual(ran, want) {
 		t.Errorf("ran %v, want every instance %v", ran, want)
 	}
-	if len(res) != 5 || res[1].Err != errDevice || res[4].Instance.ID != "i-4" {
+	if len(res) != 5 || !errors.Is(res[1].Err, errDevice) || res[4].Instance.ID != "i-4" {
 		t.Errorf("results %+v", res)
 	}
 	var failures Failures

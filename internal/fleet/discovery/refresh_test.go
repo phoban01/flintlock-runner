@@ -2,6 +2,7 @@ package discovery
 
 import (
 	"context"
+	"errors"
 	"reflect"
 	"slices"
 	"testing"
@@ -108,7 +109,7 @@ func TestRefresherPicksUpNewHostsAtTheInterval(t *testing.T) {
 		}
 	}
 	cancel()
-	if err := <-done; err != context.Canceled {
+	if err := <-done; !errors.Is(err, context.Canceled) {
 		t.Errorf("Run = %v, want context.Canceled", err)
 	}
 }

@@ -380,4 +380,3 @@ func TestSecurityGroupRulesAreDocumentedAndNeverModified(t *testing.T) {
 		}
 	}
 }
-

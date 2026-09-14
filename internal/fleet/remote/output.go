@@ -76,7 +76,8 @@ func (l *linePrefixer) Flush() error {
 	if len(l.buf) == 0 {
 		return nil
 	}
-	line := append(l.buf, '\n')
+	l.buf = append(l.buf, '\n')
+	line := l.buf
 	l.buf = nil
 	return l.emit(line)
 }

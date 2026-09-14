@@ -157,10 +157,12 @@ func (r *Refresher) Run(ctx context.Context) error {
 // that happens to be a full fleet.EC2 still cannot be asked for more.
 type describeOnly struct{ d Describer }
 
+// DescribeInstances implements fleet.EC2 by calling the Describer.
 func (d describeOnly) DescribeInstances(ctx context.Context, f fleet.DescribeFilter) ([]fleet.Instance, error) {
 	return d.d.DescribeInstances(ctx, f)
 }
 
+// TerminateInstances implements fleet.EC2 by refusing.
 func (d describeOnly) TerminateInstances(context.Context, []string) error {
 	return errors.New("discovery: the Runner may not terminate instances")
 }
