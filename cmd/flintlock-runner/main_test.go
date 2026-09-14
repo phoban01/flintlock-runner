@@ -85,7 +85,7 @@ func TestNotImplementedExitCode(t *testing.T) {
 	app := newApp()
 	app.Writer = &bytes.Buffer{}
 	app.ErrWriter = &bytes.Buffer{}
-	err := app.Run([]string{"flintlock-runner", "fleet", "verify"})
+	err := app.Run([]string{"flintlock-runner", "fleet", "emit-userdata"})
 	if !errors.Is(err, ErrNotImplemented) && !strings.Contains(err.Error(), ErrNotImplemented.Error()) {
 		t.Fatalf("error = %v, want not implemented", err)
 	}
