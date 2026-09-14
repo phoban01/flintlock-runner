@@ -49,8 +49,8 @@ func fullInput() fleet.RenderInput {
 	profiles := []config.Profile{
 		{
 			Name: "go-arm", Arch: config.ArchARM64,
-			Kernel: config.Kernel{Image: "ghcr.io/example/kernel:6.1-arm64"},
-			RootFS: "ghcr.io/example/rootfs-go:1.25@sha256:0000000000000000000000000000000000000000000000000000000000000000",
+			Kernel:            config.Kernel{Image: "ghcr.io/example/kernel:6.1-arm64"},
+			RootFS:            "ghcr.io/example/rootfs-go:1.25@sha256:0000000000000000000000000000000000000000000000000000000000000000",
 			AdditionalVolumes: []config.Volume{{ID: "tools", Image: "ghcr.io/example/tools:1"}},
 			Transport:         config.Transport{Kind: config.TransportExec},
 		},

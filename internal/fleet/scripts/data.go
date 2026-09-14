@@ -200,9 +200,9 @@ type services struct {
 	CacheDevice string
 	CacheDir    string
 	// Root is where Host Service storage lives: the mounted cache volume.
-	Root string
-	CacheBytes  int64
-	CacheMB     int64
+	Root       string
+	CacheBytes int64
+	CacheMB    int64
 
 	Buildkit      bool
 	BuildkitPort  int
