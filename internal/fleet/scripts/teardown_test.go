@@ -45,9 +45,7 @@ func installedUnits(t *testing.T) []string {
 			}
 		}
 	}
-	// The pool agent is added to verify_active's list at run time, when
-	// the pinned release ships it.
-	if len(units) < 8 || !slices.Contains(units, "poolmgr-hostagent") || !slices.Contains(units, "flintlockd") {
+	if len(units) < 8 || !slices.Contains(units, "containerd") || !slices.Contains(units, "flintlockd") {
 		t.Fatalf("installed units = %v; the provisioning steps changed shape and this test has to follow", units)
 	}
 	return units

@@ -11,10 +11,7 @@
 //	fleet verify        check Hosts, Pools and Host Services
 //	fleet drain         remove a Host from every Pool and wait for its Leases
 //	fleet teardown      delete Pools, stop services, remove the Inventory
-//	fleet emit-userdata print the launch-template user-data script
-//
-// A subcommand, or a dependency of one, whose work package has not landed
-// exits with ErrNotImplemented naming that package (docs/PLAN.md).
+//	fleet emit-userdata print the launch-template user-data, gzip-compressed
 package main
 
 import (
@@ -34,13 +31,6 @@ import (
 
 	"github.com/phoban01/flintlock-runner/internal/config"
 )
-
-// ErrNotImplemented is returned by every subcommand whose work package has
-// not landed yet.
-var ErrNotImplemented = errors.New("flintlock-runner: not implemented yet")
-
-// exitNotImplemented is the exit status of a not-yet-implemented subcommand.
-const exitNotImplemented = 3
 
 func main() {
 	if err := newApp().Run(os.Args); err != nil {
@@ -137,15 +127,6 @@ func loadConfig(c *cli.Context) (*config.Config, error) {
 		return nil, cli.NewExitError(err.Error(), exitInvalidConfig)
 	}
 	return cfg, nil
-}
-
-// notImplemented is the action of every subcommand whose work package has
-// not landed. It names the work package from docs/PLAN.md.
-func notImplemented(command, workPackage string) error {
-	return cli.NewExitError(
-		fmt.Sprintf("%v: %q lands with the %q work package (docs/PLAN.md)", ErrNotImplemented, command, workPackage),
-		exitNotImplemented,
-	)
 }
 
 //= docs/requirements/01-gitlab-protocol.md#library-basis

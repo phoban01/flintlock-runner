@@ -80,21 +80,6 @@ func TestSubcommandsAreRegistered(t *testing.T) {
 	}
 }
 
-func TestNotImplementedExitCode(t *testing.T) {
-	t.Parallel()
-	app := newApp()
-	app.Writer = &bytes.Buffer{}
-	app.ErrWriter = &bytes.Buffer{}
-	err := app.Run([]string{"flintlock-runner", "fleet", "emit-userdata"})
-	if !errors.Is(err, ErrNotImplemented) && !strings.Contains(err.Error(), ErrNotImplemented.Error()) {
-		t.Fatalf("error = %v, want not implemented", err)
-	}
-	var exitErr cli.ExitCoder
-	if !errors.As(err, &exitErr) || exitErr.ExitCode() != exitNotImplemented {
-		t.Errorf("exit code = %v, want %d", err, exitNotImplemented)
-	}
-}
-
 // writeConfig writes a configuration file into a new temporary directory and
 // returns its path.
 func writeConfig(t *testing.T, content string) string {

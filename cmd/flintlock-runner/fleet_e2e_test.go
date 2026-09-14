@@ -130,9 +130,11 @@ func (s *standInScripts) renderedFor(step fleet.Step) []recordedScript {
 
 func shellQuote(s string) string { return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'" }
 
-// detectReport is what the detect step reports for a Host that already has
-// the pinned flintlock components and its thin pool.
-const detectReport = "::version:: flintlock v0.9.0\n::version:: firecracker v1.10.0\n" +
+// detectReport is what the detect step reports for a Host with a usable
+// /dev/kvm, 48 vCPU and 96 GiB of memory, the pinned flintlock components
+// and its thin pool.
+const detectReport = "::kvm:: ok\n::capacity:: vcpu 48\n::capacity:: memory_mb 98304\n" +
+	"::version:: flintlock v0.9.0\n::version:: firecracker v1.10.0\n" +
 	"::version:: cloud_hypervisor none\n::version:: containerd v1.7.0\n::thinpool:: present\n"
 
 func reportFor(step fleet.Step) string {
@@ -347,8 +349,8 @@ func TestFleetProvisionOverSSMContinuesPastFailuresAndExitsNonZero(t *testing.T)
 		t.Fatalf("Inventory = %v, want only i-2", got)
 	}
 	h := inv.Hosts[0]
-	if h.Endpoint != "10.0.1.2:9090" || h.VCPU != 62 || h.MemoryMB != 131072-4096 {
-		t.Errorf("i-2 entry = endpoint %s, %d vCPU, %d MB; want 10.0.1.2:9090 with 64-2 vCPU and 131072-4096 MB", h.Endpoint, h.VCPU, h.MemoryMB)
+	if h.Endpoint != "10.0.1.2:9090" || h.VCPU != 48-2 || h.MemoryMB != 98304-4096 {
+		t.Errorf("i-2 entry = endpoint %s, %d vCPU, %d MB; want 10.0.1.2:9090 with the measured 48-2 vCPU and 98304-4096 MB", h.Endpoint, h.VCPU, h.MemoryMB)
 	}
 	if h.TLS.CAFile != supplied.CAFile || h.Versions.Flintlock != "v0.9.0" || h.Labels[inventory.LabelInstanceID] != "i-2" {
 		t.Errorf("i-2 entry = %+v, want the supplied CA, the detected versions and its instance id", h)
@@ -457,12 +459,12 @@ func TestFleetOverSSHStaticNeedsNoAWSAndTearsDown(t *testing.T) {
 		t.Fatalf("Inventory = %v, want host-1", hostNames(inv.Hosts))
 	}
 	h := inv.Hosts[0]
-	if h.Name != "host-1" || h.Endpoint != stack.Inventory[0].Endpoint || h.VCPU != 62 || h.MemoryMB != 131072-4096 || !h.TLS.Insecure {
-		t.Errorf("host-1 entry = %+v, want its flintlockd endpoint and 64-2 vCPU", h)
+	if h.Name != "host-1" || h.Endpoint != stack.Inventory[0].Endpoint || h.VCPU != 48-2 || h.MemoryMB != 98304-4096 || !h.TLS.Insecure {
+		t.Errorf("host-1 entry = %+v, want its flintlockd endpoint and the measured capacity less the reserve", h)
 	}
 	// Each Host step that detect did not rule out went over SSH: an upload
 	// and a run each, as the configured user.
-	want := []fleet.Step{fleet.StepDetect, fleet.StepNetworking, fleet.StepFlintlockd, fleet.StepPoolAgent,
+	want := []fleet.Step{fleet.StepDetect, fleet.StepNetworking, fleet.StepFlintlockd,
 		fleet.StepHostServices, fleet.StepPrepull, fleet.StepPrewarm, fleet.StepVerifyActive}
 	var steps []fleet.Step
 	for _, r := range std.rendered {
@@ -519,7 +521,7 @@ func TestFleetOverSSHStaticNeedsNoAWSAndTearsDown(t *testing.T) {
 		if len(td) != map[bool]int{false: 1, true: 2}[purge] || last.Instance != "host-1" {
 			t.Fatalf("teardown scripts = %d, last for %q", len(td), last.Instance)
 		}
-		for _, u := range []string{"flintlockd", "containerd", "dnsmasq", "flintlock-runner-network", "poolmgr-hostagent"} {
+		for _, u := range []string{"flintlockd", "containerd", "dnsmasq", "flintlock-runner-network", "nginx"} {
 			if !strings.Contains(last.Content, " "+u+" ") && !strings.Contains(last.Content, " "+u+";") {
 				t.Errorf("fleet %v: the teardown script does not disable %s", args, u)
 			}

@@ -399,6 +399,12 @@ func completeEntry(cfg *config.Config, res fleet.HostResult) (config.HostEntry, 
 	if err != nil {
 		return entry, err
 	}
+	return withFleetAccess(cfg, entry), nil
+}
+
+// withFleetAccess gives an entry the TLS material the Runner verifies the
+// Host with and the fleet's flintlockd token, where it has none.
+func withFleetAccess(cfg *config.Config, entry config.HostEntry) config.HostEntry {
 	switch {
 	case cfg.Fleet.Flintlockd.Insecure:
 		entry.TLS = config.ClientTLS{Insecure: true}
@@ -412,7 +418,7 @@ func completeEntry(cfg *config.Config, res fleet.HostResult) (config.HostEntry, 
 	if entry.Token == "" {
 		entry.Token = cfg.Fleet.Flintlockd.Token
 	}
-	return entry, nil
+	return entry
 }
 
 // writeRunnerConfig writes the Runner configuration (FL-062). It is

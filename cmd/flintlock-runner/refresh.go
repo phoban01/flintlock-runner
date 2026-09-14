@@ -82,23 +82,34 @@ func (l *liveInventory) hostsLocked() []config.HostEntry {
 
 // discoveredEntry is the Inventory entry of an instance that provisioned
 // itself from the launch template's user-data: named by its instance id
-// (FL-052), at its flintlockd endpoint, with its capacity less the Host
-// reserve, its tags as labels, the Host Service addresses every Host
-// serves, and the fleet's token and TLS settings, as completeEntry gives a
-// Host `fleet provision` provisioned.
+// (FL-052) and labelled with it and its tags, at its flintlockd endpoint,
+// with the Host Service addresses every Host serves and the fleet's token
+// and TLS settings, as `fleet provision` records a Host. Its capacity is
+// what EC2 reports less the Host reserve: the vCPU, and no memory, which
+// EC2 does not report and the Host measures only for the Fleet Controller
+// (FL-061). The Runner does not place by Host capacity; the Pool Manager
+// does.
 func discoveredEntry(cfg *config.Config, inst fleet.Instance) (config.HostEntry, error) {
 	svc, err := scripts.ServiceAddresses(cfg.HostServices, cfg.Fleet.GuestSubnet)
 	if err != nil {
 		return config.HostEntry{}, err
 	}
+	labels := maps.Clone(inst.Tags)
+	if labels == nil {
+		labels = map[string]string{}
+	}
+	labels[fleetinventory.LabelInstanceID] = inst.ID
+	reserve := cfg.Fleet.HostReserve
 	entry := config.HostEntry{
 		Name:     inst.ID,
 		Endpoint: discovery.Endpoint(inst, cfg.Fleet),
 		Arch:     inst.Arch,
-		Labels:   maps.Clone(inst.Tags),
+		VCPU:     max(inst.VCPU-reserve.VCPU, 0),
+		MemoryMB: max(inst.MemoryMB-reserve.MemoryMB, 0),
+		Labels:   labels,
 		Services: svc,
 	}
-	return completeEntry(cfg, fleet.HostResult{Instance: inst, Entry: &entry})
+	return withFleetAccess(cfg, entry), nil
 }
 
 // refresh is the Refresher's OnChange: insts are the supported instances
