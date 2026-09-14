@@ -1,0 +1,16 @@
+{{template "prelude" .}}
+
+{{template "installed_versions" .}}
+
+# Report what is installed (FL-029) and whether the thin pool exists, so
+# that the Provisioner can skip the steps that are already done (FL-030).
+installed_versions
+printf '::version:: flintlock %s\n' "${FLR_INSTALLED[flintlock]}"
+printf '::version:: firecracker %s\n' "${FLR_INSTALLED[firecracker]}"
+printf '::version:: cloud_hypervisor %s\n' "${FLR_INSTALLED[cloud_hypervisor]}"
+printf '::version:: containerd %s\n' "${FLR_INSTALLED[containerd]}"
+if lvs --noheadings -o lv_attr {{q (printf "%s/thinpool" .ThinPool)}} 2>/dev/null | grep -q '^ *t'; then
+  echo '::thinpool:: present'
+else
+  echo '::thinpool:: absent'
+fi

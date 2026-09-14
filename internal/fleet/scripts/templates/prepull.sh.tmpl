@@ -1,0 +1,32 @@
+{{template "prelude" .}}
+
+ctr_ns=(ctr --address {{q .ContainerdSocket}} --namespace {{q .ContainerdNamespace}})
+
+# pull_image ARCH REF pulls REF into flintlock's containerd namespace unless
+# it is there already. Images of Profiles for another architecture are
+# skipped (FL-027).
+pull_image() {
+  local arch=$1 ref=$2 full
+  [ -z "$arch" ] || [ "$arch" = "$FLR_ARCH" ] || return 0
+  full=$ref
+  case "${full%%/*}" in
+  *.* | *:* | localhost) ;;
+  *) full=docker.io/$full ;;
+  esac
+  case "${full#*/}" in
+  */*) ;;
+  *) full=${full%%/*}/library/${full#*/} ;;
+  esac
+  if "${ctr_ns[@]}" images ls -q | grep -qxF "$full"; then
+    return 0
+  fi
+  "${ctr_ns[@]}" images pull --platform "linux/$FLR_ARCH" "$full" >&2
+  changed "pulled $full"
+}
+
+# FL-028: the kernel, initrd, root filesystem and volume images of every
+# Profile.
+{{- range .Images}}
+pull_image {{q .Arch}} {{q .Ref}}
+{{- end}}
+log "images present"

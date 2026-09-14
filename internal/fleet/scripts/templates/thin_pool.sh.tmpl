@@ -1,0 +1,47 @@
+{{template "prelude" .}}
+
+# The containerd devicemapper thin pool (FL-022). It is created here, before
+# the flintlock host provisioner runs, so that containerd starts with its
+# pool present and the provisioner finds nothing left to create.
+vg={{q .ThinPool}}
+dev={{q .ThinPoolDevice}}
+[ -n "$dev" ] || die "fleet.thin_pool_device is not configured"
+
+# FL-023: an existing pool is never recreated and its device never wiped.
+# lv_attr starting with "t" is a thin pool.
+if lvs --noheadings -o lv_attr "$vg/thinpool" 2>/dev/null | grep -q '^ *t'; then
+  log "thin pool $vg/thinpool exists; leaving it and its device untouched"
+  exit 0
+fi
+
+ensure_packages lvm2 thin-provisioning-tools
+[ -b "$dev" ] || die "thin pool device $dev is not a block device"
+
+if ! pvs "$dev" >/dev/null 2>&1; then
+  # Only a blank device becomes a physical volume: anything carrying a
+  # filesystem, partition table or other signature is refused, not wiped.
+  if [ -n "$(blkid -p -o value -s TYPE "$dev" 2>/dev/null || true)" ] ||
+    [ -n "$(blkid -p -o value -s PTTYPE "$dev" 2>/dev/null || true)" ] ||
+    findmnt -rn -S "$dev" >/dev/null 2>&1; then
+    die "$dev is not blank; refusing to create a thin pool on it"
+  fi
+  pvcreate -q "$dev"
+  changed "physical volume $dev"
+fi
+if ! vgs "$vg" >/dev/null 2>&1; then
+  vgcreate -q "$vg" "$dev"
+  changed "volume group $vg"
+fi
+lvs "$vg/thinpool" >/dev/null 2>&1 || lvcreate -q -n thinpool "$vg" -l 95%VG
+lvs "$vg/thinpoolmeta" >/dev/null 2>&1 || lvcreate -q -n thinpoolmeta "$vg" -l 1%VG
+lvconvert -q -y --zero n -c 512K --thinpool "$vg/thinpool" --poolmetadata "$vg/thinpoolmeta"
+changed "thin pool $vg/thinpool on $dev"
+
+write_file "/etc/lvm/profile/$vg-thinpool.profile" 0644 <<'FLR_EOF' || true
+activation {
+  thin_pool_autoextend_threshold=80
+  thin_pool_autoextend_percent=20
+}
+FLR_EOF
+lvchange -q --metadataprofile "$vg-thinpool" "$vg/thinpool"
+lvs -o+seg_monitor "$vg/thinpool" >&2

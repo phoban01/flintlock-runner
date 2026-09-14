@@ -1,0 +1,456 @@
+{{template "prelude" .}}
+{{- $s := .Services}}
+
+read_secrets
+root={{q $s.Root}}
+opt=/opt/flintlock-runner
+mkdir -p "$opt"
+work=$(mktemp -d)
+trap 'rm -rf "$work"' EXIT
+ensure_packages ca-certificates curl nftables
+
+# retire UNIT stops and disables a Host Service that the configuration now
+# disables (FL-111).
+retire() {
+  if systemctl cat "$1.service" >/dev/null 2>&1; then
+    if systemctl is-enabled --quiet "$1" || systemctl is-active --quiet "$1"; then
+      systemctl disable --now --quiet "$1"
+      changed "disabled $1"
+    fi
+  fi
+}
+
+# FL-107: all Host Service storage lives on one volume whose filesystem is
+# created at the configured size cap, so the services together can never
+# use more. An existing filesystem is kept as it is.
+cap_mb={{$s.CacheMB}}
+{{- if $s.CacheDevice}}
+backing={{q $s.CacheDevice}}
+mount_opts=defaults,nofail
+[ -b "$backing" ] || die "cache volume device $backing is not a block device"
+if [ -z "$(blkid -p -o value -s TYPE "$backing" 2>/dev/null || true)" ]; then
+  [ -z "$(blkid -p -o value -s PTTYPE "$backing" 2>/dev/null || true)" ] || die "$backing carries a partition table; refusing to format it"
+  mkfs.ext4 -q -L flr-cache "$backing" "${cap_mb}M"
+  changed "cache volume filesystem on $backing capped at ${cap_mb}MiB"
+fi
+{{- else}}
+backing="${root%/}.img"
+mount_opts=defaults,nofail,loop
+if [ ! -f "$backing" ]; then
+  mkdir -p "$(dirname "$backing")"
+  fallocate -l "${cap_mb}M" "$backing"
+  mkfs.ext4 -q -F -L flr-cache "$backing"
+  changed "cache volume image $backing capped at ${cap_mb}MiB"
+fi
+{{- end}}
+mkdir -p "$root"
+if ! grep -qsF "$backing $root ext4" /etc/fstab; then
+  printf '%s %s ext4 %s 0 2\n' "$backing" "$root" "$mount_opts" >>/etc/fstab
+  changed "fstab entry for $root"
+fi
+if ! mountpoint -q "$root"; then
+  mount "$root"
+  changed "mounted $root"
+fi
+
+# Every Host Service binds the bridge gateway, so each unit below requires
+# the bridge (FL-101).
+
+{{- if $s.Buildkit}}
+
+# ---- buildkitd (FL-102, FL-103, SE-050) ----
+ensure_packages uidmap
+ensure_user buildkit /var/lib/flintlock-runner/buildkit-home
+if ! grep -q '^buildkit:' /etc/subuid; then
+  usermod --add-subuids 200000-265535 --add-subgids 200000-265535 buildkit
+  changed "subordinate ids for buildkit"
+fi
+bk_dir="$opt/buildkit-{{.BuildkitVersion}}"
+if [ ! -x "$bk_dir/bin/buildkitd" ]; then
+  download "https://github.com/moby/buildkit/releases/download/{{.BuildkitVersion}}/buildkit-{{.BuildkitVersion}}.linux-$FLR_ARCH.tar.gz" "$work/buildkit.tar.gz"
+  mkdir -p "$bk_dir"
+  tar -xzf "$work/buildkit.tar.gz" -C "$bk_dir"
+  changed "buildkit {{.BuildkitVersion}}"
+fi
+rk_dir="$opt/rootlesskit-{{.RootlesskitVersion}}"
+if [ ! -x "$rk_dir/rootlesskit" ]; then
+  uname_arch=x86_64
+  [ "$FLR_ARCH" = arm64 ] && uname_arch=aarch64
+  download "https://github.com/rootless-containers/rootlesskit/releases/download/{{.RootlesskitVersion}}/rootlesskit-$uname_arch.tar.gz" "$work/rootlesskit.tar.gz"
+  mkdir -p "$rk_dir"
+  tar -xzf "$work/rootlesskit.tar.gz" -C "$rk_dir"
+  changed "rootlesskit {{.RootlesskitVersion}}"
+fi
+install -d -o buildkit -g buildkit -m 0700 "$root/buildkit"
+bk_restart=0
+# FL-102: the overlayfs snapshotter, rootless, and garbage collection
+# bounded by the configured storage limit. FL-103: images resolve through
+# the Host's registry mirror first.
+if write_file "$FLR_ETC/buildkit/buildkitd.toml" 0644 <<FLR_EOF
+root = "$root/buildkit"
+
+[grpc]
+  address = ["tcp://{{.Gateway}}:{{$s.BuildkitPort}}"]
+
+[worker.oci]
+  enabled = true
+  rootless = true
+  snapshotter = "overlayfs"
+  gc = true
+{{- if $s.BuildkitGCMB}}
+  gckeepstorage = {{$s.BuildkitGCMB}}
+{{- end}}
+{{- if $s.BuildkitGC}}
+
+[[worker.oci.gcpolicy]]
+{{- range $s.BuildkitGC}}
+  {{.Key}} = {{.Value}}
+{{- end}}
+{{- end}}
+
+[worker.containerd]
+  enabled = false
+{{- if $s.Mirror}}
+{{- range $s.Registries}}
+
+[registry."{{if eq .Host "registry-1.docker.io"}}docker.io{{else}}{{.Host}}{{end}}"]
+  mirrors = ["{{$.Gateway}}:{{$s.MirrorPort}}"]
+{{- end}}
+
+[registry."{{.Gateway}}:{{$s.MirrorPort}}"]
+  http = true
+{{- end}}
+FLR_EOF
+then
+  bk_restart=1
+fi
+# Builds run with the Host's network namespace, so the guest egress rules
+# are repeated for the buildkit user (SE-030, SE-031).
+if write_file "$FLR_ETC/buildkit/firewall.nft" 0644 <<'FLR_EOF'
+table inet flintlock_runner_buildkit
+delete table inet flintlock_runner_buildkit
+table inet flintlock_runner_buildkit {
+	chain output {
+		type filter hook output priority filter - 10; policy accept;
+		meta skuid "buildkit" ip daddr {{.MetadataAddress}} drop
+		meta skuid "buildkit" ip6 daddr {{.MetadataAddressV6}} drop
+		meta skuid "buildkit" tcp dport { {{range $i, $p := .ControlPorts}}{{if $i}}, {{end}}{{$p}}{{end}} } drop
+{{- if .Peers}}
+		meta skuid "buildkit" ip daddr { {{join .Peers ", "}} } drop
+{{- end}}
+	}
+}
+FLR_EOF
+then
+  bk_restart=1
+fi
+# SE-050: buildkitd runs as the unprivileged buildkit user inside
+# rootlesskit; only the firewall load runs as root.
+if write_file /etc/systemd/system/flintlock-runner-buildkitd.service 0644 <<FLR_EOF
+[Unit]
+Description=flintlock-runner rootless buildkitd
+Requires=flintlock-runner-network.service
+After=flintlock-runner-network.service
+
+[Service]
+User=buildkit
+Group=buildkit
+Environment=XDG_RUNTIME_DIR=/run/flintlock-runner-buildkit
+RuntimeDirectory=flintlock-runner-buildkit
+Delegate=yes
+ExecStartPre=+/usr/sbin/nft -f $FLR_ETC/buildkit/firewall.nft
+ExecStart=$rk_dir/rootlesskit --net=host --copy-up=/etc --state-dir=/run/flintlock-runner-buildkit/rootlesskit $bk_dir/bin/buildkitd --rootless --config=$FLR_ETC/buildkit/buildkitd.toml --oci-worker-snapshotter=overlayfs
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
+FLR_EOF
+then
+  FLR_DAEMON_RELOAD=1
+  bk_restart=1
+fi
+ensure_service flintlock-runner-buildkitd "$bk_restart"
+{{- else}}
+retire flintlock-runner-buildkitd
+{{- end}}
+
+{{- if $s.GoProxy}}
+
+# ---- Go module proxy (FL-105, FL-113 to FL-115, SE-052, SE-055, SE-057) ----
+ensure_packages git
+ensure_user athens /var/lib/flintlock-runner/athens-home
+go_dir="$opt/go-{{.GoToolchainVersion}}"
+if [ ! -x "$go_dir/bin/go" ]; then
+  download "https://go.dev/dl/go{{.GoToolchainVersion}}.linux-$FLR_ARCH.tar.gz" "$work/go.tar.gz"
+  mkdir -p "$go_dir"
+  tar -xzf "$work/go.tar.gz" -C "$go_dir" --strip-components=1
+  changed "go {{.GoToolchainVersion}}"
+fi
+athens_dir="$opt/athens-{{.AthensVersion}}"
+if [ ! -x "$athens_dir/athens" ]; then
+  download "https://github.com/gomods/athens/releases/download/{{.AthensVersion}}/athens_{{trimv .AthensVersion}}_linux_$FLR_ARCH.tar.gz" "$work/athens.tar.gz"
+  mkdir -p "$athens_dir"
+  tar -xzf "$work/athens.tar.gz" -C "$athens_dir" athens
+  changed "athens {{.AthensVersion}}"
+fi
+install -d -o athens -g athens -m 0700 "$root/goproxy"
+athens_restart=0
+{{- if $s.Private}}
+# FL-113, SE-052: the read-only credential for the private patterns, from
+# its Systems Manager parameter, readable only by the proxy's user.
+go_cred=$(secret go_proxy_credential {{q $s.CredParam}})
+[ -n "$go_cred" ] || die "the Go module proxy credential is empty"
+# SE-055: the credential has to be read-only and reach no project outside
+# the private module patterns. GitLab reports both; anything else fails the
+# step. The credential travels in a header file, never on a command line.
+printf 'PRIVATE-TOKEN: %s\n' "$go_cred" >"$work/auth-header"
+chmod 0600 "$work/auth-header"
+api="https://{{line $s.PrivateVCS}}/api/v4"
+scopes=$(curl --proto '=https' -fsS -H @"$work/auth-header" "$api/personal_access_tokens/self" | grep -o '"scopes":\[[^]]*\]' || true)
+[ -n "$scopes" ] || die "could not read the Go module proxy credential's scopes from $api"
+for scope in $(printf '%s' "$scopes" | sed 's/"scopes":\[//; s/\]//; s/[",]/ /g'); do
+  case "$scope" in
+  read_repository | read_api) ;;
+  *) die "the Go module proxy credential has scope $scope; only read_repository and read_api are allowed" ;;
+  esac
+done
+page=1
+while :; do
+  paths=$(curl --proto '=https' -fsS -H @"$work/auth-header" \
+    "$api/projects?membership=true&simple=true&per_page=100&page=$page" |
+    grep -o '"path_with_namespace":"[^"]*"' | sed 's/.*:"//; s/"$//' || true)
+  [ -n "$paths" ] || break
+  while read -r p; do
+    m="{{line $s.PrivateVCS}}/$p"
+    ok=0
+{{- range $s.Private}}
+    # shellcheck disable=SC2053
+    if [[ $m == {{line .}} || $m == {{line .}}/* ]]; then ok=1; fi
+{{- end}}
+    [ "$ok" = 1 ] || die "the Go module proxy credential reaches $m, outside the private module patterns"
+  done <<<"$paths"
+  page=$((page + 1))
+done
+if printf 'machine %s login oauth2 password %s\n' {{q $s.PrivateVCS}} "$go_cred" |
+  write_file /var/lib/flintlock-runner/athens-home/.netrc 0600 athens:athens; then
+  athens_restart=1
+fi
+{{- end}}
+# FL-105: modules are stored on the cache volume and fetched from the public
+# proxy, except the private patterns, which come from the version control
+# host. FL-114: the private patterns skip the checksum database; everything
+# else is verified against the public one. SE-057: the proxy's only
+# credential is the fleet's; no Job token is configured or forwarded.
+if write_file "$FLR_ETC/athens/config.toml" 0644 <<FLR_EOF
+GoBinary = "$go_dir/bin/go"
+GoEnv = "production"
+GoGetWorkers = 10
+Port = "127.0.0.1:{{$s.AthensPort}}"
+StorageType = "disk"
+NetworkMode = "strict"
+SumDBs = ["https://sum.golang.org"]
+GoBinaryEnvVars = [
+  "GOPROXY={{line $s.GoUpstream}}",
+  "GOSUMDB=sum.golang.org",
+{{- if $s.Private}}
+  "GOPRIVATE={{line (join $s.Private ",")}}",
+  "GONOSUMDB={{line (join $s.Private ",")}}",
+  "NETRC=/var/lib/flintlock-runner/athens-home/.netrc",
+{{- end}}
+]
+{{- if $s.Private}}
+NoSumPatterns = [{{range $i, $p := $s.Private}}{{if $i}}, {{end}}"{{line $p}}"{{end}}]
+{{- end}}
+
+[Storage]
+  [Storage.Disk]
+    RootPath = "$root/goproxy"
+FLR_EOF
+then
+  athens_restart=1
+fi
+if write_file /etc/systemd/system/flintlock-runner-athens.service 0644 <<FLR_EOF
+[Unit]
+Description=flintlock-runner Go module proxy (Athens)
+Requires=flintlock-runner-network.service
+After=flintlock-runner-network.service
+
+[Service]
+User=athens
+Group=athens
+Environment=HOME=/var/lib/flintlock-runner/athens-home
+Environment=PATH=$go_dir/bin:/usr/bin:/bin
+ExecStart=$athens_dir/athens -config_file=$FLR_ETC/athens/config.toml
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
+FLR_EOF
+then
+  FLR_DAEMON_RELOAD=1
+  athens_restart=1
+fi
+ensure_service flintlock-runner-athens "$athens_restart"
+{{- else}}
+retire flintlock-runner-athens
+{{- end}}
+
+{{- if $s.Mirror}}
+
+# ---- registry mirror (FL-104, SE-052) ----
+ensure_user zot /var/lib/flintlock-runner/zot-home
+zot_bin="$opt/zot-{{.ZotVersion}}"
+if [ ! -x "$zot_bin" ]; then
+  download "https://github.com/project-zot/zot/releases/download/{{.ZotVersion}}/zot-linux-$FLR_ARCH" "$work/zot"
+  install -m 0755 "$work/zot" "$zot_bin"
+  changed "zot {{.ZotVersion}}"
+fi
+install -d -o zot -g zot -m 0700 "$root/registry"
+zot_restart=0
+# FL-104: a pull-through cache of every configured upstream.
+if write_file "$FLR_ETC/zot/config.json" 0644 <<'FLR_EOF'
+{{$s.ZotConfig}}
+FLR_EOF
+then
+  zot_restart=1
+fi
+# FL-104, SE-052: upstream credentials from their Systems Manager
+# parameters ("user:password"), readable only by the mirror's user.
+creds=()
+{{- range $s.Registries}}
+{{- if .Param}}
+cred=$(secret {{q (printf "registry_credential_%d" .Index)}} {{q .Param}})
+creds+=("$(json_str {{q .Host}}): {\"username\": $(json_str "${cred%%:*}"), \"password\": $(json_str "${cred#*:}")}")
+{{- end}}
+{{- end}}
+(
+  IFS=,
+  printf '{%s}\n' "${creds[*]}"
+) >"$work/credentials.json"
+if write_file "$FLR_ETC/zot/credentials.json" 0600 zot:zot <"$work/credentials.json"; then
+  zot_restart=1
+fi
+if write_file /etc/systemd/system/flintlock-runner-zot.service 0644 <<FLR_EOF
+[Unit]
+Description=flintlock-runner registry mirror (zot)
+Requires=flintlock-runner-network.service
+After=flintlock-runner-network.service
+
+[Service]
+User=zot
+Group=zot
+ExecStart=$zot_bin serve $FLR_ETC/zot/config.json
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
+FLR_EOF
+then
+  FLR_DAEMON_RELOAD=1
+  zot_restart=1
+fi
+ensure_service flintlock-runner-zot "$zot_restart"
+{{- else}}
+retire flintlock-runner-zot
+{{- end}}
+
+{{- if or $s.HTTPCache $s.GoProxy}}
+
+# ---- nginx: the HTTP cache (FL-106) and the Go module proxy's front ----
+ensure_packages nginx
+nginx_restart=0
+if [ -e /etc/nginx/sites-enabled/default ]; then
+  rm -f /etc/nginx/sites-enabled/default
+  changed "removed nginx default site"
+  nginx_restart=1
+fi
+{{- range $s.HTTPUpstreams}}
+install -d -o www-data -g www-data -m 0700 "$root/http/{{line .Name}}"
+{{- end}}
+{{- if $s.Private}}
+install -d -o www-data -g www-data -m 0700 "$root/goproxy-lists"
+{{- end}}
+if write_file /etc/nginx/conf.d/flintlock-runner.conf 0644 <<FLR_EOF
+{{- if $s.HTTPCache}}
+# FL-106: one cache path per upstream, each with its own size limit and
+# time-to-live.
+{{- range $s.HTTPUpstreams}}
+proxy_cache_path $root/http/{{line .Name}} levels=1:2 keys_zone=flr_http_{{line .Name}}:10m{{if .MaxBytes}} max_size={{.MaxBytes}}{{end}} inactive={{.TTLSec}}s use_temp_path=off;
+{{- end}}
+
+server {
+    # FL-101: the guest bridge gateway only.
+    listen {{.Gateway}}:{{$s.HTTPCachePort}};
+    proxy_set_header Authorization "";
+{{- range $s.HTTPUpstreams}}
+
+    location /{{line .Name}}/ {
+        proxy_pass {{line .URL}}/;
+        proxy_set_header Host {{line .Host}};
+        proxy_ssl_server_name on;
+        proxy_ssl_verify on;
+        proxy_ssl_trusted_certificate /etc/ssl/certs/ca-certificates.crt;
+        proxy_cache flr_http_{{line .Name}};
+        proxy_cache_valid 200 301 302 {{.TTLSec}}s;
+        proxy_cache_use_stale error timeout updating;
+    }
+{{- end}}
+}
+{{- end}}
+{{- if $s.GoProxy}}
+{{- if $s.Private}}
+
+# FL-115: private module listings are answered from cache until the
+# revalidation interval elapses, so the version control host is not asked
+# again before then.
+proxy_cache_path $root/goproxy-lists levels=1:2 keys_zone=flr_goproxy_private:10m inactive={{$s.RevalidateSec}}s use_temp_path=off;
+{{- end}}
+
+server {
+    # FL-101: the guest bridge gateway only.
+    listen {{.Gateway}}:{{$s.GoProxyPort}};
+    # SE-057: whatever credential a Job sends is dropped here; the proxy
+    # fetches with the fleet's credential only.
+    proxy_set_header Authorization "";
+    proxy_set_header Cookie "";
+{{- if $s.Private}}
+
+    location ~ "{{heredoc $s.PrivateRegex}}" {
+        proxy_pass http://127.0.0.1:{{$s.AthensPort}};
+        proxy_cache flr_goproxy_private;
+        proxy_cache_key \$uri;
+        proxy_cache_valid 200 404 410 {{$s.RevalidateSec}}s;
+        proxy_cache_use_stale error timeout updating;
+    }
+{{- end}}
+
+    location / {
+        proxy_pass http://127.0.0.1:{{$s.AthensPort}};
+    }
+}
+{{- end}}
+FLR_EOF
+then
+  nginx_restart=1
+fi
+if write_file /etc/systemd/system/nginx.service.d/flintlock-runner.conf 0644 <<FLR_EOF
+[Unit]
+Requires=flintlock-runner-network.service
+After=flintlock-runner-network.service
+FLR_EOF
+then
+  FLR_DAEMON_RELOAD=1
+  nginx_restart=1
+fi
+nginx -t -q
+ensure_service nginx "$nginx_restart"
+{{- else}}
+if [ -f /etc/nginx/conf.d/flintlock-runner.conf ]; then
+  rm -f /etc/nginx/conf.d/flintlock-runner.conf
+  changed "removed the nginx Host Service configuration"
+  retire nginx
+fi
+{{- end}}

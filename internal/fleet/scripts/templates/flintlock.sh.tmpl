@@ -1,0 +1,84 @@
+{{template "prelude" .}}
+
+{{template "installed_versions" .}}
+{{template "flintlockd_config" .}}
+read_secrets
+
+# The versions pinned in the configuration (FL-020). The flintlock host
+# provisioner reads them from these variables.
+export FLINTLOCK={{q .Versions.Flintlock}}
+export CONTAINERD={{q .Versions.Containerd}}
+export FIRECRACKER={{q .Versions.Firecracker}}
+export CLOUD_HYPERVISOR={{q .Versions.CloudHypervisor}}
+for v in FLINTLOCK CONTAINERD FIRECRACKER CLOUD_HYPERVISOR; do
+  [ -n "${!v}" ] || die "fleet.versions pins no $v version"
+done
+
+# FL-030: nothing to do when every component is at its pinned version.
+installed_versions
+if [ "${FLR_INSTALLED[flintlock]}" = "$FLINTLOCK" ] &&
+  [ "${FLR_INSTALLED[containerd]}" = "$CONTAINERD" ] &&
+  [ "${FLR_INSTALLED[firecracker]}" = "$FIRECRACKER" ] &&
+  [ "${FLR_INSTALLED[cloud_hypervisor]}" = "$CLOUD_HYPERVISOR" ]; then
+  log "flintlock $FLINTLOCK, containerd $CONTAINERD, firecracker $FIRECRACKER and cloud-hypervisor $CLOUD_HYPERVISOR are installed"
+  exit 0
+fi
+
+work=$(mktemp -d)
+trap 'rm -rf "$work"' EXIT
+ensure_packages ca-certificates curl
+
+# flintlockd's configuration is in place before the provisioner starts it,
+# so that it never starts without TLS and the token (FL-024, FL-026). The
+# listen address travels as flags instead: provision.sh cannot merge a
+# value containing a colon.
+flintlockd_config "$work/flintlockd-full.yaml"
+log "staged flintlockd configuration (TLS material changed: $FLR_FLINTLOCKD_CHANGED)"
+grep -v '^grpc-endpoint:' "$work/flintlockd-full.yaml" >"$work/flintlockd.yaml"
+chmod 0600 "$work/flintlockd.yaml"
+
+# FL-021: flintlock-provision when the pinned release ships it for this
+# architecture (FL-027), otherwise provision.sh from the same release. Only
+# a 404 means "not shipped"; any other failure stops the step.
+release="https://github.com/liquidmetal-dev/flintlock/releases/download/$FLINTLOCK"
+status=$(curl --proto '=https' --tlsv1.2 -sSL --retry 3 -o "$work/flintlock-provision" \
+  -w '%{http_code}' "$release/flintlock-provision_$FLR_ARCH" || true)
+case "$status" in
+200)
+  chmod 0755 "$work/flintlock-provision"
+  provisioner=("$work/flintlock-provision")
+  log "using flintlock-provision from $FLINTLOCK"
+  ;;
+404)
+  download "https://raw.githubusercontent.com/liquidmetal-dev/flintlock/$FLINTLOCK/hack/scripts/provision.sh" "$work/provision.sh"
+  provisioner=(bash "$work/provision.sh")
+  log "flintlock $FLINTLOCK ships no flintlock-provision; using its provision.sh"
+  ;;
+*)
+  die "downloading flintlock-provision from $release failed with HTTP status ${status:-none}"
+  ;;
+esac
+
+# FL-020: the host provisioner in unattended mode installs containerd,
+# Firecracker, Cloud Hypervisor and flintlockd at the pinned versions. The
+# thin pool step has already created the pool on the configured device, so
+# the provisioner's direct-lvm stage finds it and changes nothing (FL-023).
+"${provisioner[@]}" all --unattended \
+  --disk {{q .ThinPoolDevice}} \
+  --thinpool {{q .ThinPool}} \
+  --grpc-address "$FLR_ADDRESS" \
+  --grpc-port {{q .Port}} \
+  --bridge {{q .Bridge}} \
+  --flintlock-config-file "$work/flintlockd.yaml"
+changed "flintlock $FLINTLOCK, containerd $CONTAINERD, firecracker $FIRECRACKER, cloud-hypervisor $CLOUD_HYPERVISOR"
+
+installed_versions
+for c in flintlock containerd firecracker cloud_hypervisor; do
+  want=$FLINTLOCK
+  case "$c" in
+  containerd) want=$CONTAINERD ;;
+  firecracker) want=$FIRECRACKER ;;
+  cloud_hypervisor) want=$CLOUD_HYPERVISOR ;;
+  esac
+  [ "${FLR_INSTALLED[$c]}" = "$want" ] || die "$c is ${FLR_INSTALLED[$c]} after provisioning, want $want"
+done

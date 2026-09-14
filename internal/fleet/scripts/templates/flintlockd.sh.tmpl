@@ -1,0 +1,24 @@
+{{template "prelude" .}}
+
+{{template "flintlockd_config" .}}
+read_secrets
+
+# flintlockd's configuration, written whole so that nothing the provisioner
+# generated survives (FL-024 to FL-026, FL-040), and the daemon restarted
+# only when it changed (FL-030).
+command -v flintlockd >/dev/null || die "flintlockd is not installed; the flintlock step has not run"
+flintlockd_config /etc/opt/flintlockd/config.yaml
+if write_file /etc/systemd/system/flintlockd.service.d/flintlock-runner.conf 0644 <<'FLR_EOF'
+[Unit]
+Requires=flintlock-runner-network.service containerd.service
+After=flintlock-runner-network.service containerd.service
+
+[Service]
+ExecStart=
+ExecStart=/usr/local/bin/flintlockd run
+FLR_EOF
+then
+  FLR_DAEMON_RELOAD=1
+  FLR_FLINTLOCKD_CHANGED=1
+fi
+ensure_service flintlockd "$FLR_FLINTLOCKD_CHANGED"

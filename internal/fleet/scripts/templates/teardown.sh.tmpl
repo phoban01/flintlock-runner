@@ -1,0 +1,30 @@
+{{template "prelude" .}}
+
+# Teardown stops and disables every service the Fleet Controller installed.
+# The thin pool and its device are removed only with the purge flag.
+for u in poolmgr-hostagent flintlock-runner-buildkitd flintlock-runner-athens flintlock-runner-zot flintlockd; do
+  if systemctl cat "$u.service" >/dev/null 2>&1 &&
+    { systemctl is-enabled --quiet "$u" || systemctl is-active --quiet "$u"; }; then
+    systemctl disable --now --quiet "$u"
+    changed "disabled $u"
+  fi
+done
+if [ -f /etc/nginx/conf.d/flintlock-runner.conf ]; then
+  rm -f /etc/nginx/conf.d/flintlock-runner.conf
+  systemctl reload-or-restart nginx || true
+  changed "removed the nginx Host Service configuration"
+fi
+{{- if eq (index .Options "purge") "true"}}
+vg={{q .ThinPool}}
+if vgs "$vg" >/dev/null 2>&1; then
+  systemctl stop containerd || true
+  pvs_of_vg=$(pvs --noheadings -o pv_name -S vg_name="$vg" | xargs)
+  vgremove -f -y "$vg"
+  for pv in $pvs_of_vg; do
+    pvremove -y "$pv"
+  done
+  changed "purged thin pool $vg"
+fi
+{{- else}}
+log "thin pool {{.ThinPool}} kept; pass the purge flag to remove it"
+{{- end}}
