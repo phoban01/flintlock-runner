@@ -20,21 +20,21 @@ const DefaultTimeout = 30 * time.Minute
 // templateFor names the template that renders each Step. Every Step has one,
 // so that All can hand CI the full list (TD-043).
 var templateFor = map[fleet.Step]string{
-	fleet.StepDetect:       "detect.sh.tmpl",
-	fleet.StepFlintlock:    "flintlock.sh.tmpl",
-	fleet.StepThinPool:     "thin_pool.sh.tmpl",
-	fleet.StepNetworking:   "networking.sh.tmpl",
-	fleet.StepFlintlockd:   "flintlockd.sh.tmpl",
-	fleet.StepPoolAgent:    "pool_agent.sh.tmpl",
-	fleet.StepHostServices: "host_services.sh.tmpl",
-	fleet.StepPrepull:      "prepull.sh.tmpl",
-	fleet.StepPrewarm:      "prewarm.sh.tmpl",
-	fleet.StepVerifyActive: "verify_active.sh.tmpl",
-	fleet.StepControlNode:  "control_node.sh.tmpl",
-	fleet.StepDrain:        "drain.sh.tmpl",
-	fleet.StepTeardown:     "teardown.sh.tmpl",
-	fleet.StepUserData:     "user_data.sh.tmpl",
-	fleet.StepGuestVerify:  "guest_verify.sh.tmpl",
+	fleet.StepDetect:       detectTemplate,
+	fleet.StepFlintlock:    flintlockTemplate,
+	fleet.StepThinPool:     thinPoolTemplate,
+	fleet.StepNetworking:   networkingTemplate,
+	fleet.StepFlintlockd:   flintlockdTemplate,
+	fleet.StepPoolAgent:    poolAgentTemplate,
+	fleet.StepHostServices: hostServicesTemplate,
+	fleet.StepPrepull:      prepullTemplate,
+	fleet.StepPrewarm:      prewarmTemplate,
+	fleet.StepVerifyActive: verifyActiveTemplate,
+	fleet.StepControlNode:  controlNodeTemplate,
+	fleet.StepDrain:        drainTemplate,
+	fleet.StepTeardown:     teardownTemplate,
+	fleet.StepUserData:     userDataTemplate,
+	fleet.StepGuestVerify:  guestVerifyTemplate,
 }
 
 // allSteps is every Step in the order the Provisioner runs the host steps,
@@ -78,6 +78,10 @@ func New() (*Set, error) {
 	}
 	return &Set{tmpl: t}, nil
 }
+
+//= docs/requirements/10-test-doubles.md#fake-aws
+//# Every provisioning script the Fleet Controller sends to a Host
+//# SHALL pass `bash -n` and `shellcheck` in continuous integration.
 
 // All lists every Step, so that CI renders each and runs `bash -n` and
 // shellcheck over the result (TD-043).
