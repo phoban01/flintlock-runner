@@ -1,0 +1,22 @@
+{{- define "installed_versions" -}}
+# installed_versions fills FLR_INSTALLED with the installed version of each
+# flintlock component, "v"-prefixed, or "none".
+declare -A FLR_INSTALLED=()
+flr_v() {
+  local v=${1:-}
+  v=${v%%[[:space:]]*}
+  [ -z "$v" ] && { echo none; return 0; }
+  case "$v" in v*) echo "$v" ;; *) echo "v$v" ;; esac
+}
+installed_versions() {
+  local out
+  out=$(flintlockd version --short 2>/dev/null || true)
+  FLR_INSTALLED[flintlock]=$(flr_v "$(printf '%s\n' "$out" | grep -Eo '[0-9]+\.[0-9]+\.[0-9]+[^ ]*' | head -n1)")
+  out=$(firecracker --version 2>/dev/null | head -n1 || true)
+  FLR_INSTALLED[firecracker]=$(flr_v "$(printf '%s\n' "$out" | grep -Eo '[0-9]+\.[0-9]+\.[0-9]+[^ ]*' | head -n1)")
+  out=$({ cloud-hypervisor-static --version || cloud-hypervisor --version; } 2>/dev/null | head -n1 || true)
+  FLR_INSTALLED[cloud_hypervisor]=$(flr_v "$(printf '%s\n' "$out" | grep -Eo '[0-9]+\.[0-9]+(\.[0-9]+)?[^ ]*' | head -n1)")
+  out=$(containerd --version 2>/dev/null || true)
+  FLR_INSTALLED[containerd]=$(flr_v "$(printf '%s\n' "$out" | grep -Eo 'v?[0-9]+\.[0-9]+\.[0-9]+[^ ]*' | head -n1)")
+}
+{{- end -}}

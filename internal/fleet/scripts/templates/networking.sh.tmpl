@@ -1,0 +1,145 @@
+{{template "prelude" .}}
+
+ensure_packages nftables dnsmasq iproute2
+reload_net=0
+reload_dns=0
+
+# FL-042: IPv4 forwarding, persistently.
+if write_file /etc/sysctl.d/90-flintlock-runner.conf 0644 <<'FLR_EOF'
+net.ipv4.ip_forward = 1
+FLR_EOF
+then
+  sysctl -q -p /etc/sysctl.d/90-flintlock-runner.conf
+fi
+[ "$(sysctl -n net.ipv4.ip_forward)" = 1 ] || sysctl -q -w net.ipv4.ip_forward=1
+
+# The primary interface carries the default route; guests are NATed out of
+# it (FL-043).
+primary=$(ip -o -4 route show default | awk '{for (i = 1; i < NF; i++) if ($i == "dev") { print $(i + 1); exit }}')
+[ -n "$primary" ] || die "no IPv4 default route"
+
+# The guest firewall. The table is replaced as a whole, so rerunning the
+# step leaves exactly one copy of each rule.
+if write_file "$FLR_ETC/guest-firewall.nft" 0644 <<FLR_EOF
+table inet flintlock_runner
+delete table inet flintlock_runner
+table inet flintlock_runner {
+	# FL-046, SE-031: the private addresses of the other Hosts.
+	set peers {
+		type ipv4_addr
+{{- if .Peers}}
+		elements = { {{join .Peers ", "}} }
+{{- end}}
+	}
+{{- if .EgressAllow}}
+	# SE-032: the only destinations guests may reach.
+	set egress_allow {
+		type ipv4_addr
+		flags interval
+		elements = { {{join .EgressAllow ", "}} }
+	}
+{{- end}}
+
+	# Traffic from guests to the Host itself.
+	chain input {
+		type filter hook input priority filter - 10; policy accept;
+		# FL-041: DHCP and DNS from the bridge's own service.
+		iifname "{{.Bridge}}" udp dport 67 accept
+		iifname "{{.Bridge}}" ip daddr {{.Gateway}} udp dport 53 accept
+		iifname "{{.Bridge}}" ip daddr {{.Gateway}} tcp dport 53 accept
+{{- if .Services.Ports}}
+		# FL-108: the Host Service ports on the gateway, and nothing else.
+		iifname "{{.Bridge}}" ip daddr {{.Gateway}} tcp dport { {{range $i, $p := .Services.Ports}}{{if $i}}, {{end}}{{$p}}{{end}} } accept
+		# SE-051: the Host Services answer only the guest subnet and the
+		# Host itself.
+		iifname != { "{{.Bridge}}", "lo" } ip daddr {{.Gateway}} tcp dport { {{range $i, $p := .Services.Ports}}{{if $i}}, {{end}}{{$p}}{{end}} } drop
+{{- end}}
+		# FL-045, SE-031: flintlockd, the Pool Manager agent and metrics.
+		iifname "{{.Bridge}}" tcp dport { {{range $i, $p := .ControlPorts}}{{if $i}}, {{end}}{{$p}}{{end}} } drop
+		# FL-108: every other port on the gateway, and the Host's other
+		# addresses, are closed to guests.
+		iifname "{{.Bridge}}" drop
+	}
+
+	# Traffic from guests leaving the Host.
+	chain forward {
+		type filter hook forward priority filter - 10; policy accept;
+		# FL-044, SE-030: the instance metadata service.
+		iifname "{{.Bridge}}" ip daddr {{.MetadataAddress}} drop
+		iifname "{{.Bridge}}" ip6 daddr {{.MetadataAddressV6}} drop
+		# FL-046, SE-031: the other Hosts in the Inventory.
+		iifname "{{.Bridge}}" ip daddr @peers drop
+{{- if .EgressAllow}}
+		# SE-032: everything outside the allow-list.
+		iifname "{{.Bridge}}" ip daddr != @egress_allow drop
+{{- end}}
+		iifname "{{.Bridge}}" oifname "$primary" accept
+		iifname "$primary" oifname "{{.Bridge}}" ct state established,related accept
+		oifname "{{.Bridge}}" drop
+	}
+}
+
+# FL-043: source NAT from the guest subnet out of the primary interface.
+table ip flintlock_runner_nat
+delete table ip flintlock_runner_nat
+table ip flintlock_runner_nat {
+	chain postrouting {
+		type nat hook postrouting priority srcnat; policy accept;
+		ip saddr {{.Subnet}} oifname "$primary" masquerade
+	}
+}
+FLR_EOF
+then
+  reload_net=1
+fi
+
+# FL-040: the guest bridge, brought up with the gateway address and the
+# firewall at every boot.
+if write_file /etc/systemd/system/flintlock-runner-network.service 0644 <<'FLR_EOF'
+[Unit]
+Description=flintlock-runner guest bridge {{.Bridge}} and guest firewall
+Wants=network-online.target
+After=network-online.target nftables.service
+Before=containerd.service flintlockd.service dnsmasq.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/bin/sh -c 'ip link show {{.Bridge}} >/dev/null 2>&1 || ip link add {{.Bridge}} type bridge'
+ExecStart=/usr/sbin/ip addr replace {{.Gateway}}/{{.PrefixLen}} dev {{.Bridge}}
+ExecStart=/usr/sbin/ip link set {{.Bridge}} up
+ExecStart=/usr/sbin/nft -f /etc/flintlock-runner/guest-firewall.nft
+
+[Install]
+WantedBy=multi-user.target
+FLR_EOF
+then
+  FLR_DAEMON_RELOAD=1
+  reload_net=1
+fi
+ensure_service flintlock-runner-network "$reload_net"
+
+# FL-041: DHCP and DNS bound to the bridge, handing guests an address, the
+# gateway as router and the gateway as resolver.
+if write_file /etc/dnsmasq.d/flintlock-runner.conf 0644 <<'FLR_EOF'
+interface={{.Bridge}}
+bind-dynamic
+except-interface=lo
+dhcp-authoritative
+dhcp-range={{.DHCPStart}},{{.DHCPEnd}},{{.Netmask}},12h
+dhcp-option=option:router,{{.Gateway}}
+dhcp-option=option:dns-server,{{.Gateway}}
+FLR_EOF
+then
+  reload_dns=1
+fi
+if write_file /etc/systemd/system/dnsmasq.service.d/flintlock-runner.conf 0644 <<'FLR_EOF'
+[Unit]
+Requires=flintlock-runner-network.service
+After=flintlock-runner-network.service
+FLR_EOF
+then
+  FLR_DAEMON_RELOAD=1
+  reload_dns=1
+fi
+ensure_service dnsmasq "$reload_dns"

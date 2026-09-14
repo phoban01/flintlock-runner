@@ -1,0 +1,46 @@
+{{- define "flintlockd_config" -}}
+# flintlockd_config PATH writes flintlockd's configuration to PATH and
+# installs its TLS material, setting FLR_FLINTLOCKD_CHANGED=1 when anything
+# changed. The token and the key come from the secrets and land only in
+# files readable by root.
+FLR_FLINTLOCKD_CHANGED=0
+flintlockd_config() {
+  local token
+{{- if not .Insecure}}
+  local ca cert key
+  ca=$(secret tls_ca {{q .Params.TLSCA}})
+  cert=$(secret tls_cert {{q .Params.TLSCert}})
+  key=$(secret tls_key {{q .Params.TLSKey}})
+  if printf '%s\n' "$ca" | write_file {{q .TLSDir}}/ca.pem 0644; then FLR_FLINTLOCKD_CHANGED=1; fi
+  if printf '%s\n' "$cert" | write_file {{q .TLSDir}}/host.pem 0644; then FLR_FLINTLOCKD_CHANGED=1; fi
+  if printf '%s\n' "$key" | write_file {{q .TLSDir}}/host.key 0600; then FLR_FLINTLOCKD_CHANGED=1; fi
+{{- end}}
+  token=$(secret flintlockd_token {{q .Params.HostToken}})
+  [ -n "$token" ] || die "the flintlockd token is empty"
+  if {
+    echo '---'
+    echo 'containerd-socket: {{line .ContainerdSocket}}'
+    # FL-024: the private address and the configured port only.
+    echo "grpc-endpoint: \"$FLR_ADDRESS:{{.Port}}\""
+    # FL-040: TAP interfaces are attached to the guest bridge.
+    echo 'bridge-name: {{line .Bridge}}'
+    # FL-024: the configured basic auth token is required of every client.
+    printf "basic-auth-token: '%s'\n" "${token//\'/\'\'}"
+{{- if .Insecure}}
+    # FL-026: insecure only because fleet.flintlockd.insecure asks for it.
+    echo 'insecure: true'
+{{- else}}
+    # FL-024, FL-026: TLS with the configured certificates, never insecure.
+    echo 'insecure: false'
+    echo 'tls-cert: {{line .TLSDir}}/host.pem'
+    echo 'tls-key: {{line .TLSDir}}/host.key'
+{{- end}}
+    # FL-025: the exec API always; the SSH proxy API only for ssh Profiles.
+    echo 'enable-exec-api: true'
+    echo 'enable-ssh-proxy-api: {{.SSHProxy}}'
+  } | write_file "$1" 0600; then
+    FLR_FLINTLOCKD_CHANGED=1
+  fi
+  return 0
+}
+{{- end -}}
