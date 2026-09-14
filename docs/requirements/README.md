@@ -17,7 +17,7 @@ the coverage report.
 | `03-scheduler.md` | `SC` | The scheduling component: capacity, profiles, claims, placement, leases |
 | `04-pool-manager.md` | `PL` | Integration with the flintlock warm pool manager (battery) |
 | `05-hosts.md` | `HO` | The flintlock host client used for the guest transport and placement lookup |
-| `06-fleet.md` | `FL` | Standing up and operating a fleet of EC2 bare-metal hosts |
+| `06-fleet.md` | `FL` | Standing up and operating a fleet of EC2 hosts |
 | `07-configuration.md` | `CF` | The configuration surface |
 | `08-observability.md` | `OB` | Logging, metrics, health, job-log annotations |
 | `09-security.md` | `SE` | Isolation, secrets, transport security |
