@@ -475,6 +475,17 @@ func (f *fakeAdmin) ListPools(context.Context, string) ([]*poolmgr.Pool, error) 
 	return nil, nil
 }
 
+//= docs/requirements/06-fleet.md#pool-manager-install
+//= type=test
+//# The Fleet Controller SHALL verify after installation that the
+//# Pool Manager daemon answers `ListPools`
+
+//= docs/requirements/06-fleet.md#pool-manager-install
+//= type=test
+//# The Fleet Controller SHALL install the pinned Pool Manager daemon
+//# on the Control Node with a host list generated from the Inventory that
+//# names every Host with its `flintlockd` endpoint, token and TLS settings.
+
 func TestControlNodeInstallsAndWaitsForListPools(t *testing.T) {
 	t.Parallel()
 	sc, err := scripts.New()
