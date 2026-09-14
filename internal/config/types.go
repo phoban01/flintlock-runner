@@ -482,6 +482,9 @@ type SSHRemote struct {
 	User    string `yaml:"user"`
 	KeyFile string `yaml:"key_file"`
 	Port    int    `yaml:"port,omitempty"`
+	// KnownHostsFile holds the Host keys SSH verifies against; empty means
+	// ~/.ssh/known_hosts. There is no option to skip verification.
+	KnownHostsFile string `yaml:"known_hosts_file,omitempty"`
 }
 
 // PinnedVersions are the component versions the Fleet Controller installs
