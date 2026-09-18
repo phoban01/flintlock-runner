@@ -14,12 +14,22 @@ for v in FLINTLOCK CONTAINERD FIRECRACKER CLOUD_HYPERVISOR; do
   [ -n "${!v}" ] || die "fleet.versions pins no $v version"
 done
 
+# cloud-hypervisor's own --version output carries one more version
+# component than its release tag (tag v41.0 installs and self-reports as
+# v41.0.0), so the pinned tag can never equal it by exact string match.
+# Tolerate exactly that difference without masking a genuine mismatch.
+ch_at_pin() {
+  [ "$1" = "$2" ] && return 0
+  [ "$1" = "$2.0" ] && return 0
+  return 1
+}
+
 # FL-030: nothing to do when every component is at its pinned version.
 installed_versions
 if [ "${FLR_INSTALLED[flintlock]}" = "$FLINTLOCK" ] &&
   [ "${FLR_INSTALLED[containerd]}" = "$CONTAINERD" ] &&
   [ "${FLR_INSTALLED[firecracker]}" = "$FIRECRACKER" ] &&
-  [ "${FLR_INSTALLED[cloud_hypervisor]}" = "$CLOUD_HYPERVISOR" ]; then
+  ch_at_pin "${FLR_INSTALLED[cloud_hypervisor]}" "$CLOUD_HYPERVISOR"; then
   log "flintlock $FLINTLOCK, containerd $CONTAINERD, firecracker $FIRECRACKER and cloud-hypervisor $CLOUD_HYPERVISOR are installed"
   exit 0
 fi
@@ -80,5 +90,9 @@ for c in flintlock containerd firecracker cloud_hypervisor; do
   firecracker) want=$FIRECRACKER ;;
   cloud_hypervisor) want=$CLOUD_HYPERVISOR ;;
   esac
-  [ "${FLR_INSTALLED[$c]}" = "$want" ] || die "$c is ${FLR_INSTALLED[$c]} after provisioning, want $want"
+  if [ "$c" = cloud_hypervisor ]; then
+    ch_at_pin "${FLR_INSTALLED[$c]}" "$want" || die "$c is ${FLR_INSTALLED[$c]} after provisioning, want $want"
+  else
+    [ "${FLR_INSTALLED[$c]}" = "$want" ] || die "$c is ${FLR_INSTALLED[$c]} after provisioning, want $want"
+  fi
 done

@@ -428,8 +428,17 @@ func (p *Provisioner) reachable(ctx context.Context, endpoint string) error {
 func atPinned(have config.InstalledVersions, want config.PinnedVersions) bool {
 	return have.Flintlock != "" && have.Flintlock == want.Flintlock &&
 		have.Firecracker == want.Firecracker &&
-		have.CloudHypervisor == want.CloudHypervisor &&
+		cloudHypervisorAtPin(have.CloudHypervisor, want.CloudHypervisor) &&
 		have.Containerd == want.Containerd
+}
+
+// cloudHypervisorAtPin reports whether the installed Cloud Hypervisor
+// version matches the pinned one. Its own --version output carries one
+// more version component than its release tag (tag v41.0 installs and
+// self-reports as v41.0.0), so an exact match would never be true; this
+// tolerates exactly that difference without masking a genuine mismatch.
+func cloudHypervisorAtPin(have, want string) bool {
+	return have == want || have == want+".0"
 }
 
 func lastLine(s string) string {
