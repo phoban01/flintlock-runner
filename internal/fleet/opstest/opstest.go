@@ -38,6 +38,9 @@ type Options struct {
 	// ExecDisabled names Hosts whose ServerInfo reports the exec service
 	// disabled.
 	ExecDisabled map[string]bool
+	// ServerInfoUnimplemented names Hosts whose ServerInfo answers
+	// UNIMPLEMENTED, as a Host that predates the RPC would (HO-013).
+	ServerInfoUnimplemented map[string]bool
 	// PoolSize is the size of the one Profile's Pool; zero means one per
 	// Host.
 	PoolSize int
@@ -99,12 +102,13 @@ func Start(t testing.TB, opts Options) *Stack {
 	for i := 1; i <= opts.Hosts; i++ {
 		name := fmt.Sprintf("host-%d", i)
 		h := hostfake.New(flintlock.FakeHostConfig{
-			Name:        name,
-			Listen:      "127.0.0.1:0",
-			SandboxRoot: filepath.Join(root, name),
-			Version:     "v0.0.0-fleet-test",
-			ExecEnabled: !opts.ExecDisabled[name],
-			Token:       Token,
+			Name:                    name,
+			Listen:                  "127.0.0.1:0",
+			SandboxRoot:             filepath.Join(root, name),
+			Version:                 "v0.0.0-fleet-test",
+			ExecEnabled:             !opts.ExecDisabled[name],
+			ServerInfoUnimplemented: opts.ServerInfoUnimplemented[name],
+			Token:                   Token,
 		})
 		d := make(chan error, 1)
 		hostDone = append(hostDone, d)
