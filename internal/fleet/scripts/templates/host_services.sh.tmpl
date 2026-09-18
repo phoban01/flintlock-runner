@@ -72,6 +72,11 @@ if [ ! -x "$bk_dir/bin/buildkitd" ]; then
   tar -xzf "$work/buildkit.tar.gz" -C "$bk_dir"
   changed "buildkit {{.BuildkitVersion}}"
 fi
+# buildkitd's runc executor looks up a binary literally named "runc" on
+# PATH; the release tarball ships its vendored build as buildkit-runc so
+# it never collides with a system-installed runc, which otherwise fails
+# with "failed to find runc binary".
+[ -e "$bk_dir/bin/runc" ] || ln -s buildkit-runc "$bk_dir/bin/runc"
 rk_dir="$opt/rootlesskit-{{.RootlesskitVersion}}"
 if [ ! -x "$rk_dir/rootlesskit" ]; then
   uname_arch=x86_64
@@ -80,6 +85,26 @@ if [ ! -x "$rk_dir/rootlesskit" ]; then
   mkdir -p "$rk_dir"
   tar -xzf "$work/rootlesskit.tar.gz" -C "$rk_dir"
   changed "rootlesskit {{.RootlesskitVersion}}"
+fi
+# Ubuntu 23.10+ restricts unprivileged user namespaces via AppArmor by
+# default, which blocks rootlesskit's self-reexec ("fork/exec
+# /proc/self/exe: permission denied"). Scoped to this one binary rather
+# than disabling the restriction system-wide.
+if command -v apparmor_parser >/dev/null 2>&1; then
+  rk_profile="/etc/apparmor.d/opt.flintlock-runner.rootlesskit-{{.RootlesskitVersion}}.rootlesskit"
+  if write_file "$rk_profile" 0644 <<FLR_EOF
+abi <abi/4.0>,
+include <tunables/global>
+
+$rk_dir/rootlesskit flags=(unconfined) {
+  userns,
+  include if exists <local/opt.flintlock-runner.rootlesskit-{{.RootlesskitVersion}}.rootlesskit>
+}
+FLR_EOF
+  then
+    apparmor_parser -r "$rk_profile"
+    changed "apparmor profile for rootlesskit"
+  fi
 fi
 install -d -o buildkit -g buildkit -m 0700 "$root/buildkit"
 bk_restart=0
@@ -156,6 +181,7 @@ After=flintlock-runner-network.service
 User=buildkit
 Group=buildkit
 Environment=XDG_RUNTIME_DIR=/run/flintlock-runner-buildkit
+Environment=PATH=$bk_dir/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 RuntimeDirectory=flintlock-runner-buildkit
 Delegate=yes
 ExecStartPre=+/usr/sbin/nft -f $FLR_ETC/buildkit/firewall.nft
@@ -250,6 +276,17 @@ Port = "127.0.0.1:{{$s.AthensPort}}"
 StorageType = "disk"
 NetworkMode = "strict"
 SumDBs = ["https://sum.golang.org"]
+# Required by athens v0.15.4's config validation (validator "required"/
+# "required_without" tags on pkg/config.Config); CloudRuntime satisfies
+# required_without=LogFormat since LogFormat is left unset.
+Timeout = 300
+ProtocolWorkers = 30
+LogLevel = "info"
+CloudRuntime = "none"
+# mode.NewFile (pkg/download/mode) explicitly rejects an empty DownloadMode
+# ("download mode is not set"), unlike IndexType/SingleFlightType which
+# both treat "" the same as their default.
+DownloadMode = "sync"
 GoBinaryEnvVars = [
   "GOPROXY={{line $s.GoUpstream}}",
   "GOSUMDB=sum.golang.org",
