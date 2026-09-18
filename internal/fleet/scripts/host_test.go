@@ -125,10 +125,18 @@ func TestThinPoolStepNeverRecreatesOrWipes(t *testing.T) {
 //= docs/requirements/06-fleet.md#host-provisioning
 //= type=test
 //# The Fleet Controller SHALL configure `flintlockd` to listen on
-//# the instance's private address on the configured port, to require the
-//# configured basic auth token and to serve TLS with the configured
-//# certificates.
+//# the instance's private address on the configured port.
 
+//= docs/requirements/06-fleet.md#host-provisioning
+//= type=test
+//# in insecure mode it SHALL instead require the configured basic auth
+//# token.
+
+// TestFlintlockdListensOnPrivateAddressWithTokenAndTLS covers TLS with a
+// self-generated (not supplied) certificate: fullInput's Fleet.Flintlockd.TLS
+// is unset, so MutualTLS is false and flintlockd still needs the token,
+// because a self-generated certificate is unique per Host and the Pool
+// Manager cannot present the same one everywhere.
 func TestFlintlockdListensOnPrivateAddressWithTokenAndTLS(t *testing.T) {
 	t.Parallel()
 	in := fullInput()
@@ -146,8 +154,33 @@ func TestFlintlockdListensOnPrivateAddressWithTokenAndTLS(t *testing.T) {
 		"key=$(secret tls_key '/flr/tls-key')",
 		"flintlockd_config /etc/opt/flintlockd/config.yaml",
 	)
+	mustNotContain(t, s, "tls-client-validate", "tls-client-ca")
 	// The token itself never appears in the script (SE-014).
 	mustNotContain(t, s, string(in.Fleet.Flintlockd.Token))
+}
+
+//= docs/requirements/06-fleet.md#host-provisioning
+//= type=test
+//# Unless `fleet.flintlockd.insecure` is set, it SHALL serve TLS with the
+//# configured certificates and require every client to present a
+//# certificate from the same CA (mutual TLS) rather than a basic auth
+//# token, because the Pool Manager has no way to send one.
+
+func TestFlintlockdRequiresMutualTLSWithASuppliedCertificate(t *testing.T) {
+	t.Parallel()
+	in := fullInput()
+	in.Fleet.Flintlockd.TLS = config.ServerTLSFiles{
+		CAFile: "/etc/flintlock-runner/tls/ca.pem", CertFile: "/etc/flintlock-runner/tls/host.pem", KeyFile: "/etc/flintlock-runner/tls/host.key",
+	}
+	s := render(t, fleet.StepFlintlockd, in)
+	mustContain(t, s,
+		"echo 'insecure: false'",
+		"echo 'tls-cert: /etc/flintlock-runner/tls/host.pem'",
+		"echo 'tls-key: /etc/flintlock-runner/tls/host.key'",
+		"echo 'tls-client-validate: true'",
+		"echo 'tls-client-ca: /etc/flintlock-runner/tls/ca.pem'",
+	)
+	mustNotContain(t, s, "basic-auth-token:", "flintlockd_token", "the flintlockd token is empty")
 }
 
 //= docs/requirements/06-fleet.md#host-provisioning

@@ -152,6 +152,12 @@ type data struct {
 	Port    int
 	// Insecure starts flintlockd without TLS (FL-026).
 	Insecure bool
+	// MutualTLS authenticates flintlockd's clients by certificate instead
+	// of basic-auth-token (FL-024): only possible with a supplied CA/cert/
+	// key, since battery (the Pool Manager) has to present the same
+	// client certificate on every Host and self-generated certificates
+	// are unique per Host.
+	MutualTLS bool
 	// SSHProxy enables the SSH proxy API (FL-025).
 	SSHProxy bool
 
@@ -312,6 +318,8 @@ func newData(step fleet.Step, in fleet.RenderInput, atBoot bool) (*data, error) 
 	d.ThinPoolDevice = f.ThinPoolDevice
 	d.Port = f.Flintlockd.Port
 	d.Insecure = f.Flintlockd.Insecure
+	d.MutualTLS = !f.Flintlockd.Insecure &&
+		f.Flintlockd.TLS.CAFile != "" && f.Flintlockd.TLS.CertFile != "" && f.Flintlockd.TLS.KeyFile != ""
 	if f.LaunchTemplate != nil {
 		d.Params = f.LaunchTemplate.Parameters
 	}
