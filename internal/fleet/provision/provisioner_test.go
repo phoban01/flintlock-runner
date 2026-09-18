@@ -392,6 +392,34 @@ func TestProvisionEntry(t *testing.T) {
 	if e.TLS.CAFile != "/pki/ca.pem" || e.Labels["tier"] != "general" || e.Token != "" {
 		t.Errorf("tls %+v labels %v token %q", e.TLS, e.Labels, e.Token)
 	}
+	// Self-generated certificate: unique per Host, so entry.TLS carries no
+	// client identity for the Runner to present (FL-024).
+	if e.TLS.CertFile != "" || e.TLS.KeyFile != "" {
+		t.Errorf("tls = %+v, want no client certificate with a self-generated one", e.TLS)
+	}
+}
+
+//= docs/requirements/06-fleet.md#host-provisioning
+//= type=test
+//# Unless `fleet.flintlockd.insecure` is set, it SHALL serve TLS with the
+//# configured certificates and require every client to present a
+//# certificate from the same CA (mutual TLS) rather than a basic auth
+//# token, because the Pool Manager has no way to send one.
+
+func TestProvisionEntryGetsAClientCertificateWithASuppliedCA(t *testing.T) {
+	t.Parallel()
+	r := &recordingRemote{answers: map[fleet.Step]fleet.RunResult{fleet.StepDetect: {Stdout: pinnedDetect}}}
+	p := newTestProvisioner(t, r, func(o *Options) {
+		o.Fleet.Flintlockd.TLS = config.ServerTLSFiles{CAFile: "/pki/ca.pem", CertFile: "/pki/i-0aaa.pem", KeyFile: "/pki/i-0aaa.key"}
+	})
+	res := p.Provision(context.Background(), testInstance)
+	if res.Err != nil {
+		t.Fatal(res.Err)
+	}
+	e := res.Entry
+	if e.TLS.CertFile != "/pki/i-0aaa.pem" || e.TLS.KeyFile != "/pki/i-0aaa.key" {
+		t.Errorf("tls = %+v, want the Runner to present the same certificate flintlockd requires by mutual TLS", e.TLS)
+	}
 }
 
 // TestProvisionPassesSecretsOnStdin checks that the token, the TLS

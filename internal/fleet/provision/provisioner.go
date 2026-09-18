@@ -390,6 +390,20 @@ func (p *Provisioner) entry(inst fleet.Instance, versions config.InstalledVersio
 	}
 	if !p.o.Fleet.Flintlockd.Insecure && p.o.Certs != nil {
 		e.TLS.CAFile = p.o.Certs.CAFile
+		// With a supplied certificate, flintlockd authenticates every
+		// client by mutual TLS rather than a basic auth token (FL-024):
+		// the Runner needs to present the same certificate it verifies
+		// flintlockd with, not just trust the CA. Self-generated
+		// certificates are unique per Host, so there is no single one
+		// for the Runner to present, and flintlockd there still accepts
+		// the token instead.
+		f := p.o.Fleet.Flintlockd.TLS
+		if f.CAFile != "" && f.CertFile != "" && f.KeyFile != "" {
+			if hc, ok := p.o.Certs.Hosts[inst.ID]; ok {
+				e.TLS.CertFile = hc.CertFile
+				e.TLS.KeyFile = hc.KeyFile
+			}
+		}
 	} else {
 		e.TLS.Insecure = true
 	}
