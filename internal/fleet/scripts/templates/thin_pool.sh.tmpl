@@ -16,6 +16,7 @@ fi
 
 ensure_packages lvm2 thin-provisioning-tools
 [ -b "$dev" ] || die "thin pool device $dev is not a block device"
+dev=$(resolve_thin_pool_device "$dev")
 
 if ! pvs "$dev" >/dev/null 2>&1; then
   # Only a blank device becomes a physical volume: anything carrying a

@@ -137,6 +137,48 @@ host_arch() {
   esac
 }
 
+# resolve_thin_pool_device DEV prints the block device the thin pool
+# should use. AWS does not guarantee that NVMe device naming matches
+# attachment order on Nitro instances: the same launch configuration can
+# enumerate its data volume as nvme0n1 on one instance and nvme1n1 on
+# another, so DEV - fixed in the configuration - can land on the root disk
+# instead. Every step that touches the thin pool device (thin_pool,
+# flintlock) calls this instead of trusting DEV directly, so they always
+# agree on the same disk. Detect exactly that case - DEV is the one
+# backing / - and substitute the other whole NVMe disk when there is
+# exactly one unambiguous candidate; anything less clear-cut still dies
+# rather than guessing which disk is safe to use.
+resolve_thin_pool_device() {
+  local dev=$1 root_src root_pk root_disk d candidates="" ncandidates=0 resolved
+  root_src=$(findmnt -no SOURCE / 2>/dev/null || true)
+  root_disk=""
+  if [ -n "$root_src" ]; then
+    root_pk=$(lsblk -no PKNAME "$root_src" 2>/dev/null || true)
+    [ -n "$root_pk" ] && root_disk="/dev/$root_pk"
+  fi
+  if [ -z "$root_disk" ] || [ "$dev" != "$root_disk" ]; then
+    printf '%s' "$dev"
+    return 0
+  fi
+  for d in /dev/nvme*n1; do
+    [ -b "$d" ] || continue
+    [ "$d" = "$root_disk" ] && continue
+    [ "$(lsblk -no TYPE "$d" 2>/dev/null)" = "disk" ] || continue
+    candidates="$candidates $d"
+    ncandidates=$((ncandidates + 1))
+  done
+  case "$ncandidates" in
+  1)
+    resolved=${candidates# }
+    log "fleet.thin_pool_device $dev is this instance's root disk (AWS does not guarantee NVMe device naming matches attachment order); using $resolved instead"
+    printf '%s' "$resolved"
+    ;;
+  *)
+    die "fleet.thin_pool_device $dev is this instance's root disk and $ncandidates other whole NVMe disk(s) exist; refusing to guess which one is the data volume"
+    ;;
+  esac
+}
+
 # FLR_ARCH is the instance architecture the Fleet Controller discovered
 # (FL-027); a Host whose kernel disagrees is refused rather than given
 # binaries for the wrong architecture.
