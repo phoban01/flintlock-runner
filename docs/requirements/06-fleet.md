@@ -64,9 +64,12 @@ therefore made on the host itself, before anything else is installed there.
 - **FL-023** If the configured thin pool already exists on an instance, then
   the Fleet Controller SHALL NOT recreate it or wipe its device.
 - **FL-024** The Fleet Controller SHALL configure `flintlockd` to listen on
-  the instance's private address on the configured port, to require the
-  configured basic auth token and to serve TLS with the configured
-  certificates.
+  the instance's private address on the configured port. Unless
+  `fleet.flintlockd.insecure` is set, it SHALL serve TLS with the
+  configured certificates and require every client to present a
+  certificate from the same CA (mutual TLS) rather than a basic auth
+  token, because the Pool Manager has no way to send one; in insecure mode
+  it SHALL instead require the configured basic auth token.
 - **FL-025** The Fleet Controller SHALL enable the `flintlockd` exec API on
   every Host and SHALL enable the SSH proxy API where any Profile uses the
   proxied `ssh` Guest Transport.

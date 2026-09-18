@@ -22,14 +22,15 @@ func TestControlNodeInstallsPinnedDaemonWithHostList(t *testing.T) {
 		`release="https://github.com/liquidmetal-dev/battery/releases/download/$version"`,
 		`sha256sum -c --quiet -`,
 		`host_tls="{\"ca_file\": $(json_str '/etc/flintlock-runner/pki/ca.pem')}"`,
-		`token=$(secret flintlockd_token '/flr/host-token')`,
-		`"$(json_str "$token")" "$host_tls"`,
 		`printf '  "api_server": {"addr": %s, "tls": %s}\n' "$(json_str '10.0.0.5:9443')"`,
 		`write_file "$etc/config.json" 0600 poolmgrd:poolmgrd`,
 		`ExecStart=$bin -config $etc/config.json -db $db_dir/poolmgr.db`,
 	)
+	// No basic_auth_token: battery's own HostConfig has no field for one
+	// (FL-051), so there was never anything to send.
+	mustNotContain(t, s, "basic_auth_token", "flintlockd_token")
 	for _, h := range fullInput().Inventory.Hosts {
-		mustContain(t, s, `"$(json_str '`+h.Name+`')" "$(json_str '`+h.Endpoint+`')"`)
+		mustContain(t, s, `"$(json_str '`+h.Name+`')" "$(json_str '`+h.Endpoint+`')" "$host_tls"`)
 	}
 	mustNotContain(t, s, string(fullInput().Fleet.Flintlockd.Token))
 }

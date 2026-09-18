@@ -473,6 +473,13 @@ func withFleetAccess(cfg *config.Config, entry config.HostEntry) config.HostEntr
 	case entry.TLS.CAFile == "":
 		if cfg.Fleet.Flintlockd.TLS.CAFile != "" {
 			entry.TLS.CAFile = cfg.Fleet.Flintlockd.TLS.CAFile
+			// A supplied CA/cert/key means flintlockd authenticates every
+			// client by mutual TLS rather than a basic auth token
+			// (FL-024): battery (the Pool Manager) needs to present the
+			// same client certificate everywhere, which only a supplied,
+			// shared certificate can do, so the Runner presents it too.
+			entry.TLS.CertFile = cfg.Fleet.Flintlockd.TLS.CertFile
+			entry.TLS.KeyFile = cfg.Fleet.Flintlockd.TLS.KeyFile
 		} else {
 			entry.TLS.CAFile = filepath.Join(tlsDir(cfg), "ca.pem")
 		}

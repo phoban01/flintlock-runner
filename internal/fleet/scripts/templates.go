@@ -102,9 +102,14 @@ const networkingTemplate = "networking.sh.tmpl"
 
 //= docs/requirements/06-fleet.md#host-provisioning
 //# The Fleet Controller SHALL configure `flintlockd` to listen on
-//# the instance's private address on the configured port, to require the
-//# configured basic auth token and to serve TLS with the configured
-//# certificates.
+//# the instance's private address on the configured port.
+
+//= docs/requirements/06-fleet.md#host-provisioning
+//# Unless `fleet.flintlockd.insecure` is set, it SHALL serve TLS with the
+//# configured certificates and require every client to present a
+//# certificate from the same CA (mutual TLS) rather than a basic auth
+//# token, because the Pool Manager has no way to send one; in insecure mode
+//# it SHALL instead require the configured basic auth token.
 
 //= docs/requirements/06-fleet.md#host-provisioning
 //# The Fleet Controller SHALL NOT start `flintlockd` in insecure

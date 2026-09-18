@@ -41,15 +41,19 @@ if [ ! -x "$bin" ]; then
   restart=1
 fi
 
-# FL-051: every Inventory Host with its flintlockd endpoint, TLS settings
-# and token. FL-052: under exactly its Inventory name, because the Runner
-# joins Placement to the Inventory by name.
-token=''
-if has_secret flintlockd_token {{q .Params.HostToken}}; then
-  token=$(secret flintlockd_token {{q .Params.HostToken}})
-fi
+# FL-051: every Inventory Host with its flintlockd endpoint and TLS
+# settings. FL-052: under exactly its Inventory name, because the Runner
+# joins Placement to the Inventory by name. No token: battery's own
+# HostConfig has no field for one, so it has never had a way to send one -
+# authentication is TLS-only (FL-024).
 {{- if .Insecure}}
 host_tls='{"insecure": true}'
+{{- else if and .HostCAFile .MutualTLS}}
+# flintlockd authenticates the Pool Manager by certificate, not a token
+# (FL-024) - it has no other way to send one - so it presents the same
+# certificate the Runner does (PMCert/PMKey, already the Control Node's
+# own identity for the Pool Manager's own API server).
+host_tls="{\"ca_file\": $(json_str {{q .HostCAFile}}), \"cert_file\": $(json_str {{q .PMCert}}), \"key_file\": $(json_str {{q .PMKey}})}"
 {{- else if .HostCAFile}}
 host_tls="{\"ca_file\": $(json_str {{q .HostCAFile}})}"
 {{- else}}
@@ -61,8 +65,8 @@ new_config=$(mktemp)
   echo '  "hosts": ['
   sep=' '
 {{- range .PoolManagerHosts}}
-  printf '   %s{"name": %s, "address": %s, "basic_auth_token": %s, "tls": %s}\n' "$sep" \
-    "$(json_str {{q .Name}})" "$(json_str {{q .Endpoint}})" "$(json_str "$token")" "$host_tls"
+  printf '   %s{"name": %s, "address": %s, "tls": %s}\n' "$sep" \
+    "$(json_str {{q .Name}})" "$(json_str {{q .Endpoint}})" "$host_tls"
   sep=','
 {{- end}}
   echo '  ],'

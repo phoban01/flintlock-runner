@@ -430,6 +430,46 @@ func TestFleetTeardownRemovesInventory(t *testing.T) {
 	}
 }
 
+//= docs/requirements/06-fleet.md#host-provisioning
+//= type=test
+//# Unless `fleet.flintlockd.insecure` is set, it SHALL serve TLS with the
+//# configured certificates and require every client to present a
+//# certificate from the same CA (mutual TLS) rather than a basic auth
+//# token, because the Pool Manager has no way to send one.
+
+func TestWithFleetAccessGivesTheRunnerAClientCertWithASuppliedCA(t *testing.T) {
+	t.Parallel()
+	cfg := &config.Config{Fleet: &config.Fleet{
+		InventoryPath: "/etc/flintlock-runner/inventory.yaml",
+		Flintlockd: config.Flintlockd{TLS: config.ServerTLSFiles{
+			CAFile: "/etc/flintlock-runner/fleet-ca.pem", CertFile: "/etc/flintlock-runner/fleet-host.pem", KeyFile: "/etc/flintlock-runner/fleet-host.key",
+		}},
+	}}
+	entry := withFleetAccess(cfg, config.HostEntry{Name: "i-0aaa"})
+	if entry.TLS.CAFile != "/etc/flintlock-runner/fleet-ca.pem" ||
+		entry.TLS.CertFile != "/etc/flintlock-runner/fleet-host.pem" ||
+		entry.TLS.KeyFile != "/etc/flintlock-runner/fleet-host.key" {
+		t.Errorf("entry.TLS = %+v, want the Runner to present the same supplied certificate flintlockd requires by mutual TLS", entry.TLS)
+	}
+}
+
+func TestWithFleetAccessGeneratedCertsCarryNoClientIdentity(t *testing.T) {
+	t.Parallel()
+	cfg := &config.Config{Fleet: &config.Fleet{InventoryPath: "/etc/flintlock-runner/inventory.yaml"}}
+	entry := withFleetAccess(cfg, config.HostEntry{Name: "i-0aaa"})
+	if entry.TLS.CAFile != filepath.Join(tlsDir(cfg), "ca.pem") {
+		t.Errorf("entry.TLS.CAFile = %q, want the generated CA", entry.TLS.CAFile)
+	}
+	// Self-generated certificates are unique per Host: there is no shared
+	// one for the Runner to present, so flintlockd here still authenticates
+	// by basic-auth-token instead (host_test.go covers that at the template
+	// level), and CertFile/KeyFile stay unset rather than naming a file
+	// that was never generated.
+	if entry.TLS.CertFile != "" || entry.TLS.KeyFile != "" {
+		t.Errorf("entry.TLS = %+v, want no client certificate: none was generated", entry.TLS)
+	}
+}
+
 func sortedCopy(s []string) []string {
 	out := slices.Clone(s)
 	slices.Sort(out)

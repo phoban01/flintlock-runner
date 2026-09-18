@@ -1,11 +1,10 @@
 {{- define "flintlockd_config" -}}
 # flintlockd_config PATH writes flintlockd's configuration to PATH and
 # installs its TLS material, setting FLR_FLINTLOCKD_CHANGED=1 when anything
-# changed. The token and the key come from the secrets and land only in
-# files readable by root.
+# changed. The key comes from the secrets and lands only in a file readable
+# by root.
 FLR_FLINTLOCKD_CHANGED=0
 flintlockd_config() {
-  local token
 {{- if not .Insecure}}
   local ca cert key
   ca=$(secret tls_ca {{q .Params.TLSCA}})
@@ -15,8 +14,11 @@ flintlockd_config() {
   if printf '%s\n' "$cert" | write_file {{q .TLSDir}}/host.pem 0644; then FLR_FLINTLOCKD_CHANGED=1; fi
   if printf '%s\n' "$key" | write_file {{q .TLSDir}}/host.key 0600; then FLR_FLINTLOCKD_CHANGED=1; fi
 {{- end}}
+{{- if or .Insecure (not .MutualTLS)}}
+  local token
   token=$(secret flintlockd_token {{q .Params.HostToken}})
   [ -n "$token" ] || die "the flintlockd token is empty"
+{{- end}}
   if {
     echo '---'
     echo 'containerd-socket: {{line .ContainerdSocket}}'
@@ -24,9 +26,10 @@ flintlockd_config() {
     echo "grpc-endpoint: \"$FLR_ADDRESS:{{.Port}}\""
     # FL-040: TAP interfaces are attached to the guest bridge.
     echo 'bridge-name: {{line .Bridge}}'
-    # FL-024: the configured basic auth token is required of every client.
-    printf "basic-auth-token: '%s'\n" "${token//\'/\'\'}"
 {{- if .Insecure}}
+    # FL-024: the configured basic auth token is required of every client
+    # when there is no TLS to authenticate them with instead.
+    printf "basic-auth-token: '%s'\n" "${token//\'/\'\'}"
     # FL-026: insecure only because fleet.flintlockd.insecure asks for it.
     echo 'insecure: true'
 {{- else}}
@@ -34,6 +37,21 @@ flintlockd_config() {
     echo 'insecure: false'
     echo 'tls-cert: {{line .TLSDir}}/host.pem'
     echo 'tls-key: {{line .TLSDir}}/host.key'
+{{- if .MutualTLS}}
+    # FL-024: authentication is mutual TLS, not basic-auth-token - battery
+    # (the Pool Manager) has no way to send a bearer token when it calls
+    # flintlockd, only TLS material, so every client (the Runner, this
+    # fleet's own tooling, and the Pool Manager) authenticates by
+    # presenting this same shared certificate instead. Only a peer whose
+    # certificate chains to this CA is accepted. Self-generated
+    # certificates can't do this: they're unique per Host, and the Pool
+    # Manager needs to present the same one everywhere, so this only
+    # applies with a supplied CA/cert/key.
+    echo 'tls-client-validate: true'
+    echo 'tls-client-ca: {{line .TLSDir}}/ca.pem'
+{{- else}}
+    printf "basic-auth-token: '%s'\n" "${token//\'/\'\'}"
+{{- end}}
 {{- end}}
     # FL-025: the exec API always; the SSH proxy API only for ssh Profiles.
     echo 'enable-exec-api: true'
