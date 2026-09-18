@@ -73,8 +73,12 @@ esac
 # Firecracker, Cloud Hypervisor and flintlockd at the pinned versions. The
 # thin pool step has already created the pool on the configured device, so
 # the provisioner's direct-lvm stage finds it and changes nothing (FL-023).
+# --disk must name the same device the thin_pool step used, not the
+# configured value verbatim: resolve_thin_pool_device may have substituted
+# it (FL-022a) and the two steps have to agree on one disk.
+thin_pool_dev=$(resolve_thin_pool_device {{q .ThinPoolDevice}})
 "${provisioner[@]}" all --unattended \
-  --disk {{q .ThinPoolDevice}} \
+  --disk "$thin_pool_dev" \
   --thinpool {{q .ThinPool}} \
   --grpc-address "$FLR_ADDRESS" \
   --grpc-port {{q .Port}} \

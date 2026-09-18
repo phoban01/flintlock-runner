@@ -95,9 +95,15 @@ func TestThinPoolStepCreatesPoolOnConfiguredDevice(t *testing.T) {
 		`vgcreate -q "$vg" "$dev"`,
 		`--thinpool "$vg/thinpool" --poolmetadata "$vg/thinpoolmeta"`,
 	)
-	// The provisioner is pointed at the same device and pool name.
+	// The provisioner is pointed at the same device and pool name: resolved
+	// through resolve_thin_pool_device so the two steps agree even when the
+	// configured device turns out to be this instance's root disk (FL-022a).
 	f := render(t, fleet.StepFlintlock, fullInput())
-	mustContain(t, f, "--disk '/dev/nvme1n1'", "--thinpool 'flintlock'")
+	mustContain(t, f,
+		"thin_pool_dev=$(resolve_thin_pool_device '/dev/nvme1n1')",
+		`--disk "$thin_pool_dev"`,
+		"--thinpool 'flintlock'",
+	)
 }
 
 //= docs/requirements/06-fleet.md#host-provisioning

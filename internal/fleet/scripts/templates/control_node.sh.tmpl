@@ -13,6 +13,19 @@ db_dir=/var/lib/poolmgrd
 restart=0
 ensure_user poolmgrd "$db_dir"
 
+{{- if and .PMCert .PMKey}}
+# The Pool Manager daemon serves TLS from the same certificate and key
+# every Host uses (FL-051), written 0600 root:root because until now only
+# flintlockd, running as root, needed to read them. poolmgrd runs as its
+# own unprivileged system user, so grant that user's group read access
+# rather than widen the file to everyone.
+if [ -e {{q .PMKey}} ] && [ "$(stat -c '%G:%a' {{q .PMKey}})" != "poolmgrd:640" ]; then
+  chgrp poolmgrd {{q .PMKey}}
+  chmod 0640 {{q .PMKey}}
+  changed "poolmgrd read access to {{q .PMKey}}"
+fi
+{{- end}}
+
 if [ ! -x "$bin" ]; then
   work=$(mktemp -d)
   trap 'rm -rf "$work"' EXIT
