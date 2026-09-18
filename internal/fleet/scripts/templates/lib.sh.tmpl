@@ -163,7 +163,11 @@ resolve_thin_pool_device() {
   for d in /dev/nvme*n1; do
     [ -b "$d" ] || continue
     [ "$d" = "$root_disk" ] && continue
-    [ "$(lsblk -no TYPE "$d" 2>/dev/null)" = "disk" ] || continue
+    # -d/--nodeps: without it lsblk walks the dependency tree, so a disk
+    # already carrying the thin pool's LVM structures prints one line per
+    # holder ("disk", "lvm", "lvm", ...) instead of just "disk", and this
+    # check would wrongly exclude it on every call after the first.
+    [ "$(lsblk -dno TYPE "$d" 2>/dev/null)" = "disk" ] || continue
     candidates="$candidates $d"
     ncandidates=$((ncandidates + 1))
   done
