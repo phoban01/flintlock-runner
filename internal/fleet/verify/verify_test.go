@@ -106,6 +106,31 @@ func TestVerifyChecksServerInfoExecAndPoolSize(t *testing.T) {
 	noLeasesLeft(t, s)
 }
 
+//= docs/requirements/05-hosts.md#inventory
+//= type=test
+//# If `ServerInfo` is not implemented by a Host, then the Runner
+//# SHALL treat the Host's version as unknown and continue.
+
+func TestVerifyToleratesServerInfoUnimplemented(t *testing.T) {
+	t.Parallel()
+	s := opstest.Start(t, opstest.Options{Hosts: 1, ServerInfoUnimplemented: map[string]bool{"host-1": true}})
+	s.Declare(t)
+	s.WaitAvailable(t, 1)
+
+	report, err := newVerifier(t, s, 2*time.Second).Verify(context.Background(), &fleet.Inventory{Hosts: s.Inventory})
+	if err != nil {
+		t.Fatalf("Verify: %v", err)
+	}
+
+	if f := failuresFor(report, "host-1"); len(f) != 0 {
+		t.Errorf("host-1 failures = %v, want none: a Host predating ServerInfo is not a failure", f)
+	}
+	h1 := report.Hosts[0]
+	if h1.Info == nil || h1.Info.Version != "" {
+		t.Errorf("host-1 = %+v, want a version-unknown HostInfo", h1)
+	}
+}
+
 func TestVerifyReportsUndeclaredPool(t *testing.T) {
 	t.Parallel()
 	s := opstest.Start(t, opstest.Options{Hosts: 1})

@@ -170,6 +170,16 @@ func (r *run) checkHost(ctx context.Context, h *config.HostEntry) {
 	}
 	r.clients[h.Name] = client
 	info, err := client.ServerInfo(ctx)
+	if errors.Is(err, flintlock.ErrUnimplemented) {
+		// HO-013: a Host that predates the ServerInfo RPC has its version
+		// treated as unknown, not as a failure - exec-enabled is unknowable
+		// too, so that check is skipped rather than failed. The exercise
+		// step later is a far more meaningful liveness check than anything
+		// this method could do instead.
+		hv.Info = &flintlock.HostInfo{Name: h.Name}
+		fmt.Fprintf(r.v.cfg.Out, "ok   %s %s: flintlock version unknown (ServerInfo not implemented by this Host)\n", h.Name, StepServerInfo)
+		return
+	}
 	if err != nil {
 		r.fail(h.Name, StepServerInfo, fmt.Errorf("ServerInfo at %s: %w", h.Endpoint, err))
 		return
