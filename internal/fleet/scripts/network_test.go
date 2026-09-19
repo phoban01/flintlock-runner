@@ -46,19 +46,40 @@ func TestNetworkingCreatesBridgeOnGuestSubnet(t *testing.T) {
 func TestNetworkingServesDHCPAndDNSOnBridge(t *testing.T) {
 	t.Parallel()
 	s := render(t, fleet.StepNetworking, fullInput())
-	conf := section(t, s, "/etc/dnsmasq.d/flintlock-runner.conf", "FLR_EOF\nthen")
+	conf := section(t, s, "echo 'interface=flbr0'", "} | write_file /etc/dnsmasq.d/flintlock-runner.conf 0644")
 	mustContain(t, conf,
-		"interface=flbr0",
-		"bind-dynamic",
-		"dhcp-range=172.31.0.10,172.31.255.254,255.255.0.0,12h",
-		"dhcp-option=option:router,172.31.0.1",
-		"dhcp-option=option:dns-server,172.31.0.1",
+		"echo 'interface=flbr0'",
+		"echo 'bind-dynamic'",
+		"echo 'dhcp-range=172.31.0.10,172.31.255.254,255.255.0.0,12h'",
+		"echo 'dhcp-option=option:router,172.31.0.1'",
+		"echo 'dhcp-option=option:dns-server,172.31.0.1'",
 	)
 	mustContain(t, s, "ensure_packages nftables dnsmasq", `ensure_service dnsmasq "$reload_dns"`)
 	input, _ := chains(t, s)
 	mustContain(t, input, `iifname "flbr0" udp dport 67 accept`, `iifname "flbr0" ip daddr 172.31.0.1 udp dport 53 accept`)
 	// The DHCP and DNS accepts come before the final drop.
 	before(t, input, "udp dport 53 accept", "iifname \"flbr0\" drop")
+}
+
+//= docs/requirements/06-fleet.md#host-networking
+//= type=test
+//# The Fleet Controller SHALL install and configure a DHCP and DNS
+//# service bound to the bridge so that guests obtain an address, gateway and
+//# resolver without static configuration.
+
+func TestNetworkingPointsDnsmasqAtTheRealResolverOnSystemdResolved(t *testing.T) {
+	t.Parallel()
+	s := render(t, fleet.StepNetworking, fullInput())
+	conf := section(t, s, "echo 'interface=flbr0'", "} | write_file /etc/dnsmasq.d/flintlock-runner.conf 0644")
+	// systemd-resolved leaves /etc/resolv.conf pointing at its own loopback
+	// stub, which dnsmasq refuses to use as an upstream server - guests get
+	// DHCP fine but every DNS query is REFUSED. dnsmasq needs the real
+	// upstream file instead, and only when it actually exists, so a Host
+	// without systemd-resolved still gets dnsmasq's own default behavior.
+	mustContain(t, conf,
+		"if [ -e /run/systemd/resolve/resolv.conf ]; then",
+		"echo 'resolv-file=/run/systemd/resolve/resolv.conf'",
+	)
 }
 
 //= docs/requirements/06-fleet.md#host-networking

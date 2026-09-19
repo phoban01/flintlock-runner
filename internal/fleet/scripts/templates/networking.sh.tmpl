@@ -121,15 +121,24 @@ ensure_service flintlock-runner-network "$reload_net"
 
 # FL-041: DHCP and DNS bound to the bridge, handing guests an address, the
 # gateway as router and the gateway as resolver.
-if write_file /etc/dnsmasq.d/flintlock-runner.conf 0644 <<'FLR_EOF'
-interface={{.Bridge}}
-bind-dynamic
-except-interface=lo
-dhcp-authoritative
-dhcp-range={{.DHCPStart}},{{.DHCPEnd}},{{.Netmask}},12h
-dhcp-option=option:router,{{.Gateway}}
-dhcp-option=option:dns-server,{{.Gateway}}
-FLR_EOF
+if {
+  echo 'interface={{.Bridge}}'
+  echo 'bind-dynamic'
+  echo 'except-interface=lo'
+  echo 'dhcp-authoritative'
+  echo 'dhcp-range={{.DHCPStart}},{{.DHCPEnd}},{{.Netmask}},12h'
+  echo 'dhcp-option=option:router,{{.Gateway}}'
+  echo 'dhcp-option=option:dns-server,{{.Gateway}}'
+  # systemd-resolved (Ubuntu's default) leaves /etc/resolv.conf pointing at
+  # its own loopback stub (127.0.0.53), which dnsmasq refuses to use as an
+  # upstream server - forwarding then REFUSEs every guest query (EDE 14,
+  # "Not Ready"), a real fleet outage found live. The actual upstream
+  # nameserver lives in this file instead; a Host not running
+  # systemd-resolved falls back to dnsmasq's own /etc/resolv.conf default.
+  if [ -e /run/systemd/resolve/resolv.conf ]; then
+    echo 'resolv-file=/run/systemd/resolve/resolv.conf'
+  fi
+} | write_file /etc/dnsmasq.d/flintlock-runner.conf 0644
 then
   reload_dns=1
 fi
