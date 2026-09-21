@@ -14,6 +14,17 @@ pattern = "internal/**/*.go"
 [[source]]
 pattern = "pkg/**/*.go"
 
+# The Host Image (11-host-image.md) and the Fleet Manifests
+# (12-cluster-fleet.md) are not Go. Containerfiles, systemd units, shell and
+# YAML all take `#` comments, so they cite requirements with `#=` and `#/`.
+[[source]]
+pattern = "image/**/*"
+comment-style = { meta = "#=", content = "#/" }
+
+[[source]]
+pattern = "deploy/**/*.yaml"
+comment-style = { meta = "#=", content = "#/" }
+
 [[specification]]
 source = "docs/requirements/01-gitlab-protocol.md"
 format = "markdown"
@@ -52,6 +63,14 @@ format = "markdown"
 
 [[specification]]
 source = "docs/requirements/10-test-doubles.md"
+format = "markdown"
+
+[[specification]]
+source = "docs/requirements/11-host-image.md"
+format = "markdown"
+
+[[specification]]
+source = "docs/requirements/12-cluster-fleet.md"
 format = "markdown"
 
 [report.html]

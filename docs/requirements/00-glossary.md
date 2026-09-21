@@ -26,6 +26,22 @@ directory. It contains no requirements.
   Manager and Host Services, and generate the Runner configuration from the
   resulting inventory.
 
+- **Host Image** — the bootc container image, and the AMI made from it, from
+  which a Host of a cluster fleet boots. It carries `flintlockd`, containerd,
+  the hypervisors, the kubelet and the systemd units that prepare the thin
+  pool, the guest bridge and the firewall.
+- **Fleet Operator** — the `flr fleet operator` process that runs in a
+  cluster fleet's workload cluster, publishes the Inventory and the Pool
+  Manager's host list from the cluster's Nodes and holds a Node's drain open
+  while the Host still has Leases. It defines no custom resources.
+- **Host Agent** — the DaemonSet pod on each Host of a cluster fleet. It runs
+  the Host Services, delivers the Host certificate to `flintlockd`, pre-pulls
+  Profile images and reports whether the Host is ready.
+- **Fleet Manifests** — the Kubernetes manifests in this repository that
+  deploy a cluster fleet: the Host pool's Cluster API objects, the Host
+  Agent, the Runner, the Pool Manager daemon, the Fleet Operator and the
+  cert-manager objects.
+
 ## External systems {#external-systems}
 
 - **GitLab** — the GitLab instance the Runner takes Jobs from, via the Runner

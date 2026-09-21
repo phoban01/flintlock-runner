@@ -98,6 +98,29 @@ Only when an account exists. The `ec2` discovery provider and the `ssm`
 remote against real services, the launch-template path, and a metal
 instance in the hardware tier.
 
+### Phase 4: cluster fleet
+
+Decided 2026-09-21: the fleet moves to Kubernetes as its management plane,
+specified in `11-host-image.md` and `12-cluster-fleet.md`. Hosts are nodes
+of an existing workload cluster made by a Cluster API MachineDeployment from
+a bootc Host Image; jobs stay on the battery path and are never pods. The
+constraints of this phase still hold, so every package below is done against
+fakes: a container build for the image, an API server test environment for
+the operator.
+
+| Key | Package | Owns | Depends on | Done when |
+|-----|---------|------|------------|-----------|
+| `image` | `image/` (Containerfile, units, versions file, check stage) | HI | nothing | the check stage of HI-008 passes in CI |
+| `inventory-watch` | `internal/config` | KF-027 | nothing | Runner reloads a changed Inventory file in the harness |
+| `operator` | `internal/fleet/operator`, `cmd/flr fleet operator` | KF-012, KF-020..KF-026, KF-060..KF-065, KF-080, KF-090, KF-091 | `inventory-watch` | KF-091 scenario passes |
+| `host-agent` | `internal/fleet/hostagent`, `deploy/host-agent` | KF-010, KF-011, KF-031, KF-040..KF-047, KF-083 | `image` | agent reports ready against the fake Host |
+| `manifests` | `deploy/` | KF-001..KF-005, KF-028, KF-030, KF-032..KF-034, KF-050..KF-054, KF-070, KF-071, KF-081, KF-082 | `operator`, `host-agent` | manifests render and pass a schema check |
+
+`image` and `inventory-watch` start immediately and do not touch each other.
+Push provisioning (`06-fleet.md`) keeps working throughout; its packages are
+retired, with their requirements, only after a cluster fleet has passed the
+hardware tier.
+
 ## Running agents
 
 From a Claude Code session: one agent per work package, each with
