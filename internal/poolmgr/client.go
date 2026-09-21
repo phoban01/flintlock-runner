@@ -25,9 +25,12 @@ import (
 // Defaults for the connection settings a ClientConfig leaves zero. The
 // keepalive values are the ones a long-lived control-plane connection
 // wants: often enough to notice a dead peer well inside a Job, rare enough
-// not to trip a server's minimum ping interval.
+// not to trip a server's minimum ping interval. battery's poolmgrd sets no
+// keepalive.EnforcementPolicy, so it runs grpc-go's default
+// MinTime of 5 minutes; a client ping more frequent than that eventually
+// gets GOAWAY ENHANCE_YOUR_CALM ("too_many_pings") and has to reconnect.
 const (
-	defaultKeepaliveTime    = 30 * time.Second
+	defaultKeepaliveTime    = 6 * time.Minute
 	defaultKeepaliveTimeout = 10 * time.Second
 	defaultReconnectBase    = time.Second
 	defaultReconnectMax     = 30 * time.Second
