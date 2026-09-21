@@ -98,6 +98,33 @@ Only when an account exists. The `ec2` discovery provider and the `ssm`
 remote against real services, the launch-template path, and a metal
 instance in the hardware tier.
 
+### Phase 4: cluster fleet
+
+Decided 2026-09-21: the fleet moves to Kubernetes, specified in
+`11-host-image.md` and `12-cluster-fleet.md`. Hosts are nodes of an existing
+workload cluster made by a Cluster API MachineDeployment from a bootc Host
+Image. Every MicroVM is a pod on a per-Host Virtual Node served by a virtual
+kubelet Pod Provider in front of the local `flintlockd`; a Pool is a
+ReplicaSet and a claim is a label update, so battery, the Inventory and Host
+mutual TLS drop out of a cluster fleet. The constraints of this phase still
+hold, so every package below is done against fakes: a container build for
+the image, an API server test environment and the fake Host for the rest.
+
+| Key | Package | Owns | Depends on | Done when |
+|-----|---------|------|------------|-----------|
+| `image` | `image/` (Containerfile, units, versions file, check stage) | HI | nothing | the check stage of HI-008 passes in CI on an x86_64 runner |
+| `kube-pool` | `internal/poolmgr/kube` | KF-040..KF-052, KF-110, KF-121, KF-123 | nothing (the `poolmgr.Client` interface exists) | claim race and template rollout pass against the test environment |
+| `provider` | `internal/kubelet`, `cmd/flr kubelet` | KF-010..KF-018, KF-020..KF-032, KF-090..KF-094, KF-111, KF-120, KF-124, KF-125 | nothing (the fake Host exists) | adopt-on-restart and cordon scenarios pass |
+| `kube-exec` | `internal/transport` | KF-060..KF-063 | `provider` (exec endpoint) | the `exec` transport's test suite passes over `kube-exec` |
+| `manifests` | `deploy/` | KF-001..KF-005, KF-070..KF-076, KF-080..KF-082, KF-112, KF-113 | `provider` | manifests render and pass a schema check |
+| `kube-verify` | `internal/fleet/verify` | KF-100..KF-102 | `kube-exec` | verification passes in the harness |
+| `kube-harness` | `internal/testing/harness` | KF-122 | `kube-pool`, `provider`, `kube-exec` | every TD-051 scenario green over the cluster stack |
+
+`image`, `kube-pool` and `provider` start immediately and do not touch each
+other. The battery client, the Host client and push provisioning keep working
+throughout; they are retired, with their requirements, only after a cluster
+fleet has passed the hardware tier.
+
 ## Running agents
 
 From a Claude Code session: one agent per work package, each with
