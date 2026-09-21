@@ -982,6 +982,15 @@ func TestFleetSection(t *testing.T) {
 		},
 		{"relative inventory path", func(c *Config) { c.Fleet.InventoryPath = "inventory.yaml" }, "fleet.inventory_path", "absolute path"},
 		{"no runner config path", func(c *Config) { c.Fleet.RunnerConfigPath = "" }, "fleet.runner_config_path", "is required"},
+		{"blank dns zone", func(c *Config) { c.Fleet.DNSZone = "   " }, "fleet.dns_zone", "must not be blank"},
+	})
+
+	t.Run("dns zone set to a normal name passes", func(t *testing.T) {
+		t.Parallel()
+		cfg := fullWith(t, func(c *Config) { c.Fleet.DNSZone = "fleet.internal" })
+		if errs := fieldErrors(t, cfg); errs != nil {
+			t.Errorf("errors = %v, want none", errs)
+		}
 	})
 
 	t.Run("explicit instance ids replace the tag", func(t *testing.T) {

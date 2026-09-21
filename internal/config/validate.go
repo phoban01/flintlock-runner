@@ -591,6 +591,9 @@ func (v *validator) fleet(f *Fleet) {
 			break
 		}
 	}
+	if f.DNSZone != "" && strings.TrimSpace(f.DNSZone) == "" {
+		v.errorf("fleet.dns_zone", "must not be blank")
+	}
 	v.launchTemplate(f)
 	for i, e := range f.EgressAllowList {
 		v.required(fmt.Sprintf("fleet.egress_allow_list[%d]", i), e)

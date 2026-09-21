@@ -437,6 +437,14 @@ type Fleet struct {
 	// EndpointOverrides maps an instance id to the Host address to use
 	// instead of the private IP (FL-005).
 	EndpointOverrides map[string]string `yaml:"endpoint_overrides,omitempty"`
+	// DNSZone is a Route53 private hosted zone name (e.g. fleet.internal)
+	// that Hosts and the Control Node are registered under by stable Name
+	// tag (see docs/fleet/create-fleet-dns-zone.sh and
+	// generate-fleet-pki.sh's DNS_ZONE support), so cert SANs survive a
+	// Host being replaced without regeneration. Not yet consumed for Host
+	// dial-address resolution - that's a separate, not-yet-implemented
+	// step (see the Route53 fleet DNS plan).
+	DNSZone string `yaml:"dns_zone,omitempty"`
 	// LaunchTemplate enables launch template mode (CF-061, FL-090).
 	LaunchTemplate *LaunchTemplate `yaml:"launch_template,omitempty"`
 	// EgressAllowList restricts guest outbound traffic when set (SE-032).
