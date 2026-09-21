@@ -1,23 +1,29 @@
 # Cluster fleet {#cluster-fleet}
 
-This document specifies how a fleet is run from a Kubernetes cluster. Hosts
-are nodes of an existing workload cluster, created by a Cluster API
-MachineDeployment from the Host Image (`11-host-image.md`); the Runner and
-the Pool Manager daemon are Deployments; the Host Services are a DaemonSet;
-cert-manager is the fleet certificate authority. Kubernetes is the
-management plane only. Jobs are never pods: the Scheduler still claims warm
-MicroVMs from the Pool Manager, the Pool Manager still places them, and the
-Guest Transport still reaches them through `flintlockd` on the Host, exactly
-as `02-executor.md` to `05-hosts.md` specify.
+This document specifies how a fleet is run from a Kubernetes cluster, with
+every MicroVM visible to the cluster as a pod. Hosts are nodes of an existing
+workload cluster, created by a Cluster API MachineDeployment from the Host
+Image (`11-host-image.md`). On each Host a Pod Provider, built on virtual
+kubelet, registers a second Node, the Virtual Node, and realises every pod
+bound to it as one flintlock MicroVM through the `flintlockd` on that Host.
 
-The design adds one process, the Fleet Operator, and no custom resources.
-Its whole job is to turn the cluster's view of the Hosts into the two files
-the rest of the system already reads, the Inventory and the Pool Manager's
-host list, and to hold a node drain open while jobs finish.
+A Pool is then a ReplicaSet of idle MicroVM pods, and the Kubernetes API
+does the work that `04-pool-manager.md` asks of battery: the ReplicaSet
+controller keeps the Pool at size and replaces a claimed MicroVM at once,
+the scheduler places MicroVMs on Hosts against their real capacity, and a
+claim is a compare-and-swap on a pod label. The Runner keeps its Scheduler
+and Executor unchanged above the `poolmgr.Client` interface; this document
+specifies a second implementation of that interface and a Guest Transport
+that reaches the guest through the pod's exec subresource.
 
-This mode is an alternative to the push provisioning of `06-fleet.md`, which
-stays in force for fleets that are not run from a cluster. The table at the
-end maps each part of that document to its counterpart here.
+Nothing here runs a Job in a container. The pod is the cluster's handle on a
+MicroVM: it carries the MicroVM's resource requests, its placement, its
+lifecycle and its claim state, so that quotas, metrics, drains and
+`kubectl get pods` all tell the truth about what a Host is doing.
+
+This mode is an alternative to `04-pool-manager.md`, `05-hosts.md` and
+`06-fleet.md`, which stay in force for fleets that are not run from a
+cluster. The table at the end maps each of them to its counterpart here.
 
 ## Host pool {#host-pool}
 
@@ -26,7 +32,7 @@ end maps each part of that document to its counterpart here.
   explicit id.
 - **KF-002** The Fleet Manifests SHALL join every Host with the taint
   `gitlab-runner.flintlock.dev/host=true:NoSchedule`, so that only pods that
-  tolerate it run on a Host.
+  tolerate it run on a Host's own Node.
 - **KF-003** The Fleet Manifests SHALL write the Host configuration file of
   HI-050 through the bootstrap configuration of the MachineDeployment.
 - **KF-004** The Fleet Manifests SHALL set no node drain timeout shorter than
@@ -37,210 +43,311 @@ end maps each part of that document to its counterpart here.
 
 One instance type per pool keeps capacity arithmetic trivial today and is
 what a snapshot compatibility class will need later. The number of Hosts is
-the replica count of the MachineDeployment; nothing in this design scales it
-automatically, because MicroVMs are not pods and no cluster autoscaler can
-see demand for them.
+the replica count of the MachineDeployment. Because MicroVMs are now pods
+with requests, pending Pool pods are a real demand signal that an autoscaler
+could act on, but nothing in this document requires one.
 
-## Host readiness {#host-readiness}
+## Virtual Node {#virtual-node}
 
-- **KF-010** The Host Agent SHALL report ready only while `flintlockd` on its
-  Host answers `ServerInfo` over mutual TLS with the exec service enabled
+- **KF-010** The Pod Provider SHALL register one Virtual Node for its Host,
+  named after the Host's Node with the suffix `-microvms`, and SHALL renew
+  its node lease while it runs.
+- **KF-011** The Pod Provider SHALL set the Host's Node as the owner of the
+  Virtual Node, so that the Virtual Node is removed when the Host's Node is.
+- **KF-012** The Pod Provider SHALL advertise as the Virtual Node's capacity
+  the Host's CPU and memory minus the configured Host reserve, and a pod
+  limit equal to the configured maximum number of MicroVMs per Host.
+- **KF-013** The Pod Provider SHALL copy the architecture and the
+  `gitlab-runner.flintlock.dev` labels of the Host's Node to the Virtual
+  Node and SHALL add the label `gitlab-runner.flintlock.dev/virtual-node`
+  set to `true` and the label `gitlab-runner.flintlock.dev/host-node` set to
+  the name of the Host's Node.
+- **KF-014** The Pod Provider SHALL taint the Virtual Node with
+  `gitlab-runner.flintlock.dev/microvm=true:NoSchedule`, so that only pods
+  meant to be MicroVMs are bound to it.
+- **KF-015** The Pod Provider SHALL report the Virtual Node ready only while
+  the local `flintlockd` answers `ServerInfo` with the exec service enabled
   and every enabled Host Service accepts connections on the bridge gateway
   address.
-- **KF-011** If a unit of the Host Image reports a not ready reason, then the
-  Host Agent SHALL report not ready and SHALL expose that reason in its
-  status.
-- **KF-012** The Fleet Operator SHALL treat a Node as an eligible Host only
-  while the Node carries the Host label of HI-060, is ready, is schedulable
-  and runs a ready Host Agent.
+- **KF-016** If a unit of the Host Image reports a not ready reason, then the
+  Pod Provider SHALL report the Virtual Node not ready with that reason in
+  the condition's message.
+- **KF-017** The Pod Provider SHALL publish the address and port of each
+  enabled Host Service as annotations on the Virtual Node.
+- **KF-018** The Pod Provider SHALL reach `flintlockd` only through the
+  local endpoint of HI-042.
 
-## Inventory publication {#inventory-publication}
+A Virtual Node per Host, rather than one for the fleet, is what lets the
+scheduler place MicroVMs: each Virtual Node has the real capacity of one
+machine, so bin-packing, spreading and selectors mean what they usually
+mean. The Host's own Node keeps only the Host reserve as allocatable
+(HI-061), which is where the Host Agent's pods run, so the two Nodes never
+promise the same core twice.
 
-- **KF-020** The Fleet Operator SHALL publish an Inventory of the eligible
-  Hosts as a ConfigMap in its own namespace, in the Inventory file format of
-  `07-configuration.md`.
-- **KF-021** The Fleet Operator SHALL name each Host in the Inventory after
-  its Node and SHALL use the Node's internal address as the Host endpoint
+## MicroVM pods {#microvm-pods}
+
+- **KF-020** When a pod is bound to the Virtual Node, the Pod Provider SHALL
+  create one MicroVM for it through `flintlockd`, using the image of the
+  pod's only container as the root filesystem image, the container's CPU
+  and memory limits as the MicroVM's vCPU count and memory, and the pod's
+  `gitlab-runner.flintlock.dev` annotations for the kernel image, the
+  kernel command line and the hypervisor.
+- **KF-021** The Pod Provider SHALL label the MicroVM with the pod's UID,
+  namespace and name and SHALL set `allow_guest_agent` on it.
+- **KF-022** If a pod has more than one container, an init container, a
+  volume, a host namespace or a mounted service account token, then the Pod
+  Provider SHALL mark the pod failed with a reason naming the unsupported
+  field and SHALL NOT create a MicroVM for it.
+- **KF-023** Where the pod names a cloud-init ConfigMap in its annotations,
+  the Pod Provider SHALL pass that ConfigMap's user data to the MicroVM.
+- **KF-024** The Pod Provider SHALL report the pod running and ready only
+  when `flintlockd` reports the MicroVM created and a command run through
+  `MicroVMExec` in the guest succeeds.
+- **KF-025** The Pod Provider SHALL report the Host's internal address as
+  the pod's host address and the guest's bridge address as the pod's
   address.
-- **KF-022** The Fleet Operator SHALL compute each Host's capacity as the
-  Node's allocatable CPU and memory minus the configured Host reserve.
-- **KF-023** The Fleet Operator SHALL copy the Node's architecture and its
-  `gitlab-runner.flintlock.dev` labels into the Host's Inventory entry, and
-  SHALL record the Host Service addresses the Host Agent reports.
-- **KF-024** The Fleet Operator SHALL publish the Pool Manager's host list as
-  a second object generated from the same set of eligible Hosts, naming each
-  Host identically in both.
-- **KF-025** When the set of eligible Hosts changes, the Fleet Operator SHALL
-  update both objects within the configured publication delay.
-- **KF-026** If the Fleet Operator cannot list Nodes, then it SHALL leave
-  both published objects unchanged and SHALL report the failure in its
-  health status.
-- **KF-027** When the mounted Inventory file changes on disk, the Runner
-  SHALL reload it as it does on `SIGHUP`.
-- **KF-028** When the published host list changes, the Fleet Manifests SHALL
-  make the Pool Manager daemon reload it without interrupting existing
-  Leases.
+- **KF-026** If the MicroVM fails or disappears from `flintlockd`, then the
+  Pod Provider SHALL mark its pod failed with the reason `flintlockd`
+  gives.
+- **KF-027** When a pod is deleted, the Pod Provider SHALL delete its
+  MicroVM and SHALL report the pod terminated only after `flintlockd`
+  no longer lists the MicroVM.
+- **KF-028** When starting, the Pod Provider SHALL adopt every MicroVM whose
+  labelled pod still exists and is bound to its Virtual Node, without
+  restarting it, and SHALL delete every MicroVM in its namespace whose pod
+  does not.
+- **KF-029** The Pod Provider SHALL NOT delete or restart a MicroVM because
+  the Pod Provider itself stops, restarts or loses its connection to the
+  Kubernetes API.
+- **KF-030** The Pod Provider SHALL serve the pod exec endpoint of the
+  kubelet API by relaying the streams to `MicroVMExec.ExecCommand` on the
+  local `flintlockd` and SHALL return the command's exit status.
+- **KF-031** The Pod Provider SHALL serve its kubelet API over TLS and SHALL
+  reject every request that does not authenticate with a client certificate
+  issued by the cluster's kubelet client certificate authority.
+- **KF-032** If a claimed pod's lease annotation is older than the
+  configured lease duration, then the Pod Provider SHALL delete that pod.
 
-Publishing files rather than teaching the Runner to watch Nodes keeps the
-Runner ignorant of Kubernetes: the same binary runs against a hand-written
-Inventory on a single KVM machine and against a published one in a cluster.
-KF-026 matters because an empty Inventory is not a safe failure; it would
-make the Scheduler empty every Pool's host list. A mounted ConfigMap takes
-up to a minute to reach a pod, which is acceptable for adding Hosts and is
-covered for removing them by the drain guard below.
+The provider only has to support the pods this project creates, which is why
+KF-022 refuses everything else rather than approximating it. A MicroVM is a
+machine with its own root filesystem and kernel, not a sandbox around
+containers, so there is nowhere for a second container or a projected volume
+to go. KF-029 is the counterpart of HI-040: a job outlives a restart of
+every component between it and the cluster. KF-031 matters more than it
+looks, because the exec endpoint is a shell in every job on the Host.
 
-## Certificates {#cluster-certificates}
+Pods on a Virtual Node have no cluster networking. Guests stay on the
+Host-local NAT'd bridge of `11-host-image.md`, which is all a CI job needs,
+and the address of KF-025 is informational.
 
-- **KF-030** The Fleet Manifests SHALL obtain each Host's `flintlockd`
-  serving certificate from a cert-manager Issuer that acts as the fleet
-  certificate authority, with the Host's Inventory endpoint address as a
-  subject alternative name.
-- **KF-031** The Host Agent SHALL write the Host certificate, its key and the
-  certificate authority certificate to the path `flintlockd` reads them
-  from, readable by `flintlockd` only.
-- **KF-032** The Fleet Manifests SHALL issue client certificates for the
-  Runner, the Pool Manager daemon and the Fleet Operator from the same
-  Issuer and SHALL mount each only into the workload it belongs to.
-- **KF-033** The Fleet Manifests SHALL NOT place any Host private key in an
-  object that a workload other than that Host's Host Agent can read.
-- **KF-034** The Fleet Manifests SHALL configure every workload so that it
-  presents a renewed certificate without operator action.
+## Pools {#kube-pools}
 
-These replace the certificate authority the Fleet Controller generates under
-SE-023 and the distribution of its output by FL-024 and FL-051. The
-cert-manager CSI driver is the expected mechanism for KF-030 and KF-033,
-because it generates the key on the node and never stores it in a Secret;
-whether it can put a host-network pod's node address in the certificate has
-to be confirmed when this is built, and the fallback is a name the clients
-verify instead of an address.
+- **KF-040** Where the Kubernetes pool backend is configured, the Scheduler
+  SHALL create or update one ReplicaSet per Profile in the Runner's
+  namespace, with the Pool size as its replica count and a pod template
+  derived from the Profile as KF-020 expects.
+- **KF-041** The Scheduler SHALL give every Pool pod a toleration for the
+  taint of KF-014 and a node selector built from the Profile's architecture
+  and Host selector and the label `gitlab-runner.flintlock.dev/virtual-node`.
+- **KF-042** The Scheduler SHALL give every Pool pod a topology spread
+  constraint over Virtual Nodes, so that a Pool's warm MicroVMs are spread
+  across Hosts.
+- **KF-043** The Scheduler SHALL label every Pool pod with the Runner name,
+  the Profile name and `gitlab-runner.flintlock.dev/state` set to `idle`,
+  and SHALL select the ReplicaSet's pods by all three.
+- **KF-044** When claiming from a Pool, the Scheduler SHALL choose a ready
+  idle pod of that Pool's current template and SHALL set its state label to
+  `claimed`, its lease annotation to the current time and its active
+  deadline to the Job timeout in one update conditioned on the pod's
+  resource version.
+- **KF-045** If the claim update is rejected because the pod changed, then
+  the Scheduler SHALL try another ready idle pod, and SHALL treat the Pool
+  as exhausted only when none is left.
+- **KF-046** The Scheduler SHALL return the claimed pod's name as the Lease
+  id and the pod's Virtual Node as the Placement.
+- **KF-047** When a Lease heartbeat is due, the Scheduler SHALL update the
+  pod's lease annotation.
+- **KF-048** When a Lease is released, the Scheduler SHALL delete the pod.
+- **KF-049** The Scheduler SHALL derive each Pool's available count from a
+  watch on the Pool's ready idle pods and SHALL wake Jobs waiting on an
+  exhausted Pool when that count rises.
+- **KF-050** When a Profile's pod template changes, the Scheduler SHALL
+  delete the idle pods of the previous template at no more than the
+  configured rate and SHALL NOT delete or modify a claimed pod.
+- **KF-051** When a Profile is removed by a configuration reload, the
+  Scheduler SHALL NOT delete its ReplicaSet and SHALL log that the Pool is
+  no longer referenced.
+- **KF-052** The Kubernetes pool backend SHALL implement the same
+  `poolmgr.Client` interface as the battery client, so that the Scheduler's
+  requirements in `03-scheduler.md` hold unchanged over either.
 
-## Host Services {#cluster-host-services}
+Changing the state label takes the pod out of the ReplicaSet's selector. The
+ReplicaSet controller sees one pod too few and creates a replacement
+immediately, which is battery's immediate-on-lease replenishment with no
+code. The resource version makes the claim atomic: of two Runners racing for
+one pod exactly one update succeeds. The active deadline is the backstop for
+a Runner that dies without releasing, and KF-032 is the prompt path for the
+same failure.
 
-- **KF-040** The Fleet Manifests SHALL run the Host Services of FL-100 in the
-  Host Agent, a DaemonSet that tolerates the Host taint and selects the Host
-  label.
-- **KF-041** The Host Agent SHALL run in the Host's network namespace and
+## Guest Transport {#kube-exec-transport}
+
+- **KF-060** Where the `kube-exec` Guest Transport is configured, the
+  Executor SHALL run each Stage by opening the exec subresource of the
+  claimed pod through the Kubernetes API, with the Stage script on standard
+  input.
+- **KF-061** The `kube-exec` Guest Transport SHALL meet every requirement
+  that `02-executor.md` places on the `exec` Guest Transport for output
+  streaming, exit status, cancellation and timeouts.
+- **KF-062** The Executor SHALL read the Host Service addresses for a Job
+  from the annotations of the Virtual Node named in the Placement.
+- **KF-063** Where the `kube-exec` Guest Transport is configured, the Runner
+  SHALL NOT open any connection to a Host.
+
+With this transport the Runner needs no Inventory, no Host certificates and
+no route to the Hosts: its only dependency is the API server. Job output
+passes through the API server and the Pod Provider's kubelet endpoint, the
+same path the GitLab Kubernetes executor uses.
+
+## Host Agent {#cluster-host-agent}
+
+- **KF-070** The Fleet Manifests SHALL run the Host Agent as a DaemonSet that
+  tolerates the Host taint, selects the Host label and contains the Pod
+  Provider and the Host Services of FL-100.
+- **KF-071** The Host Agent SHALL run in the Host's network namespace and
   SHALL bind every Host Service only to the guest bridge gateway address.
-- **KF-042** The Host Agent SHALL keep all Host Service storage in the Host
+- **KF-072** The Host Agent SHALL keep all Host Service storage in the Host
   Service cache directory of HI-024, so that it outlives the pod and a
   reboot of the Host.
-- **KF-043** The Fleet Manifests SHALL supply the registry mirror's upstream
+- **KF-073** The Fleet Manifests SHALL supply the registry mirror's upstream
   credentials and the Go module proxy's private module credential from
   Kubernetes Secrets mounted only into the Host Agent.
-- **KF-044** The Host Agent SHALL configure each Host Service as FL-102 to
+- **KF-074** The Host Agent SHALL configure each Host Service as FL-102 to
   FL-107, FL-114 and FL-115 require.
-- **KF-045** Where a Host Service is disabled in the configuration, the Host
+- **KF-075** Where a Host Service is disabled in the configuration, the Host
   Agent SHALL NOT run it.
-- **KF-046** Before reporting ready for the first time on a Host, the Host
-  Agent SHALL pull the kernel and root filesystem images of every Profile
-  into the flintlock containerd namespace.
-- **KF-047** After reporting ready, the Host Agent SHALL pre-warm the Go
-  module proxy and the registry mirror with the modules and images listed in
-  the configuration.
+- **KF-076** The Host Agent SHALL pre-warm the Go module proxy and the
+  registry mirror with the modules and images listed in the configuration.
 
-## Runner and Pool Manager {#cluster-workloads}
+Pre-pulling Profile images needs no requirement of its own any more: a Pool
+pod on every Host pulls its root filesystem and kernel images when it is
+created, and KF-042 puts one there.
 
-- **KF-050** The Fleet Manifests SHALL run the Runner as a Deployment that
-  mounts the published Inventory and reads the Profiles from a ConfigMap and
-  the GitLab runner token from a Secret.
-- **KF-051** The Fleet Manifests SHALL run the Pool Manager daemon as a
-  Deployment of one replica that is replaced by recreation, never by a
-  rolling update that would run two daemons at once.
-- **KF-052** The Fleet Manifests SHALL give the Runner's pod a termination
+## Runner {#cluster-runner}
+
+- **KF-080** The Fleet Manifests SHALL run the Runner as a Deployment that
+  reads the Profiles from a ConfigMap and the GitLab runner token from a
+  Secret.
+- **KF-081** The Fleet Manifests SHALL give the Runner's pod a termination
   grace period no shorter than the configured job timeout, so that a rollout
   does not cut running Jobs short.
-- **KF-053** The Fleet Manifests SHALL NOT schedule the Runner, the Pool
-  Manager daemon or the Fleet Operator onto Hosts.
-- **KF-054** The Fleet Manifests SHALL restrict ingress to the Pool Manager
-  daemon to the Runner and the Fleet Operator with a NetworkPolicy.
+- **KF-082** The Fleet Manifests SHALL NOT schedule the Runner onto Hosts.
 
 ## Drain {#cluster-drain}
 
-- **KF-060** When a Host's Node becomes unschedulable, the Fleet Operator
-  SHALL remove the Host from both published objects, so that the Scheduler
-  removes it from every Pool's `flintlock_hosts` and the Pool Manager places
-  nothing new there.
-- **KF-061** While the Pool Manager reports a leased MicroVM on a Host, the
-  Fleet Operator SHALL prevent an eviction-based drain of that Host's Node
-  from completing.
-- **KF-062** When the Pool Manager reports no leased MicroVM on an
-  unschedulable Host, the Fleet Operator SHALL let the drain of its Node
-  complete.
-- **KF-063** If the configured drain timeout elapses while leased MicroVMs
-  remain on an unschedulable Host, then the Fleet Operator SHALL let the
-  drain complete and SHALL log each Lease it abandoned.
-- **KF-064** While a removed Host still runs a Job, the Runner SHALL keep
-  serving that Job as HO-014 requires.
-- **KF-065** If the Fleet Operator cannot reach the Pool Manager, then it
-  SHALL keep holding every drain it holds until the drain timeout elapses.
+- **KF-090** When the Host's Node becomes unschedulable, the Pod Provider
+  SHALL mark the Virtual Node unschedulable and SHALL delete the idle pods
+  bound to it, so that their ReplicaSets replace them on other Hosts.
+- **KF-091** While a claimed pod is bound to the Virtual Node, the Pod
+  Provider SHALL prevent an eviction-based drain of the Host's Node from
+  completing.
+- **KF-092** When no claimed pod remains on an unschedulable Host, the Pod
+  Provider SHALL let the drain of the Host's Node complete.
+- **KF-093** If the configured drain timeout elapses while claimed pods
+  remain, then the Pod Provider SHALL let the drain complete and SHALL log
+  each pod it abandoned.
+- **KF-094** When the Host's Node becomes schedulable again, the Pod
+  Provider SHALL mark the Virtual Node schedulable.
 
-Cordoning is the trigger because every way of removing a node starts with
-it: a MachineDeployment rollout or scale-down, a MachineHealthCheck
-remediation and an operator's `kubectl drain` alike. The expected mechanism
-for KF-061 is a guard pod per Host, covered by a PodDisruptionBudget that
-allows no disruption, which the Fleet Operator deletes when the Host has no
-Leases; a drain cannot finish while the guard is there. This works entirely
-inside the workload cluster. Cluster API's pre-drain hook annotation does
-the same job more directly, but the Machine objects live in the management
-cluster and the Fleet Operator would need credentials for it.
+Draining a Host's Node does not touch the pods of its Virtual Node, which is
+a different Node object, so something has to tie the two together. The
+expected mechanism for KF-091 is a guard pod that the Pod Provider keeps on
+the Host's own Node while claimed pods exist, covered by a
+PodDisruptionBudget that allows no disruption; a drain cannot finish while
+it is there. Cordoning is the trigger because a MachineDeployment rollout or
+scale-down, a MachineHealthCheck remediation and an operator's
+`kubectl drain` all begin with it. Cluster API's pre-drain hook would do the
+same, but Machines live in the management cluster and the Pod Provider
+would need credentials for it.
 
 ## Verification {#cluster-verification}
 
-- **KF-070** The verification command of FL-070 to FL-073 and FL-109 SHALL
-  accept the published Inventory as its input and SHALL run unchanged
-  against a cluster fleet.
-- **KF-071** The Fleet Manifests SHALL include a Job that runs the
-  verification command in the cluster with the Runner's client certificate.
+- **KF-100** Where the Kubernetes pool backend is configured, the
+  verification command SHALL create one verification pod bound by name to
+  each ready Virtual Node, run a trivial command in it through the
+  `kube-exec` Guest Transport, report the time from creation to readiness
+  per Host and delete the pod.
+- **KF-101** The verification command SHALL perform the Host Service checks
+  of FL-109 from inside each verification pod.
+- **KF-102** If a Virtual Node is not ready or its verification pod does not
+  become ready within the verification timeout, then the verification
+  command SHALL exit with a non-zero status naming the Host and the
+  reason.
 
 ## Least privilege {#cluster-least-privilege}
 
-- **KF-080** The Fleet Operator SHALL operate with a Role limited to reading
-  Nodes and pods, writing the two published objects, and creating and
-  deleting its guard pods.
-- **KF-081** The Runner and the Pool Manager daemon SHALL NOT require any
-  Kubernetes API permission.
-- **KF-082** The Fleet Manifests SHALL NOT grant any workload an AWS
+- **KF-110** The Runner SHALL operate with a Role in its own namespace
+  limited to managing ReplicaSets, reading, updating and deleting pods and
+  creating pod exec sessions, and with read access to Nodes.
+- **KF-111** The Pod Provider SHALL operate with permissions limited to its
+  own Virtual Node and node lease, the pods bound to that Virtual Node, the
+  ConfigMaps those pods name, reading its Host's Node and managing its guard
+  pod.
+- **KF-112** The Fleet Manifests SHALL NOT grant any workload an AWS
   permission.
-- **KF-083** The Host Agent SHALL hold only the privileges it needs to bind
-  to the bridge gateway, to write the Host certificate path and the cache
-  directory, and to reach the Host's flintlock containerd socket.
+- **KF-113** The Host Agent SHALL hold only the privileges it needs to bind
+  to the bridge gateway, to write the cache directory and to reach the
+  local `flintlockd` endpoint.
 
 ## Test doubles {#cluster-test-doubles}
 
-- **KF-090** The Fleet Operator SHALL be tested against a Kubernetes API
-  server test environment and the fake Pool Manager, with no cluster nodes
-  and no AWS.
-- **KF-091** The harness SHALL include a scenario in which a Host
-  is cordoned while it runs a Job, and SHALL assert that the Job finishes,
-  that no new MicroVM is placed on the Host and that the drain completes
-  afterwards.
+- **KF-120** The Pod Provider SHALL be tested against a Kubernetes API
+  server test environment and the fake Host, with no kubelet, no KVM and no
+  AWS.
+- **KF-121** The Kubernetes pool backend SHALL be tested against a
+  Kubernetes API server test environment, with a test reconciler standing in
+  for the ReplicaSet controller where no controller manager runs.
+- **KF-122** The harness SHALL run every scenario of TD-051 over the
+  Kubernetes pool backend, the `kube-exec` Guest Transport, the Pod Provider
+  and the fake Host.
+- **KF-123** The harness SHALL include a scenario in which two Runners claim
+  from a Pool of one, and SHALL assert that exactly one obtains the pod.
+- **KF-124** The harness SHALL include a scenario in which a Host's Node is
+  cordoned while it runs a Job, and SHALL assert that the Job finishes, that
+  the idle pods leave the Host and that the drain completes afterwards.
+- **KF-125** The harness SHALL include a scenario in which the Pod Provider
+  restarts while a Job runs, and SHALL assert that the Job's MicroVM is
+  adopted and the Job finishes.
 
-## Relation to push provisioning {#relation-to-push-provisioning}
+## Relation to the other documents {#relation-to-other-documents}
 
 This section is not normative.
 
-| `06-fleet.md` | Cluster fleet |
-|---------------|---------------|
-| Discovery, FL-001 to FL-006, FL-116 | Node watch, KF-012 |
-| KVM check, FL-117 | HI-011 |
+| Elsewhere | Cluster fleet |
+|-----------|---------------|
+| Pool declaration, PL-010 to PL-017 | ReplicaSets, KF-040 to KF-043, KF-050, KF-051 |
+| Claim, heartbeat, release and lease expiry in `04-pool-manager.md` | KF-044 to KF-048, KF-032 |
+| Pool availability and events in `04-pool-manager.md` | pod watch, KF-049 |
+| Placement resolution in `03-scheduler.md` | the claimed pod's Virtual Node, KF-046 |
+| Host client and Inventory, `05-hosts.md` | none; the Runner reaches no Host, KF-063 |
+| `exec` Guest Transport in `02-executor.md` | `kube-exec`, KF-060, KF-061 |
+| Discovery, FL-001 to FL-006, FL-116 | the Virtual Nodes |
+| KVM check, FL-117 | HI-011, KF-016 |
 | Remote execution, FL-010 to FL-014 | none; nothing is pushed to a Host |
-| Host provisioning, FL-020 to FL-027, FL-029, FL-030 | Host Image, HI-001 to HI-024 and HI-040 to HI-045 |
-| Pre-pull, FL-028 | KF-046 |
+| Host provisioning, FL-020 to FL-027, FL-029, FL-030 | Host Image, `11-host-image.md` |
+| Pre-pull, FL-028 | Pool pods pull their own images |
 | Host networking, FL-040 to FL-046 | HI-030 to HI-037 |
-| Reachability check, FL-047 | KF-010 |
-| Pool Manager install, FL-051 to FL-055 | KF-024, KF-028, KF-051 |
-| Inventory, FL-060 to FL-064 | KF-020 to KF-026 |
-| Verification, FL-070 to FL-073, FL-109 | unchanged, KF-070 |
-| Drain, FL-080, FL-084 | KF-060 to KF-065 |
-| Teardown, FL-081 to FL-083 | deleting the MachineDeployment and the manifests |
+| Pool Manager install, FL-051 to FL-055 | none; there is no Pool Manager daemon |
+| Inventory, FL-060 to FL-064 | none; Virtual Nodes carry capacity, KF-012 |
+| Verification, FL-070 to FL-073, FL-109 | KF-100 to KF-102 |
+| Drain, FL-080, FL-084 | KF-090 to KF-094 |
+| Teardown, FL-081 to FL-083 | deleting the manifests and the MachineDeployment |
 | Launch template mode, FL-090 to FL-092 | the MachineDeployment, KF-001 to KF-005 |
-| One-shot operation, FL-118 to FL-124 | applying the manifests, then KF-071 |
-| Host services, FL-100 to FL-115 | KF-040 to KF-047, HI-036 |
-| Certificate authority, SE-023 | KF-030 to KF-034 |
-| IAM policy, SE-040 to SE-042 | KF-080 to KF-082 |
+| Host services, FL-100 to FL-115 | KF-070 to KF-076, HI-036 |
+| Certificate authority and Host mutual TLS, SE-023, FL-024 | none; `flintlockd` is local, KF-018, KF-031 |
+| IAM policy, SE-040 to SE-042 | KF-110 to KF-112 |
 
-No FL requirement is withdrawn by this document. Once a cluster fleet has
-passed the hardware tier, the packages that only push provisioning needs
-(`remote`, `scripts`, `provision`, `launchtemplate`, `ca`, `awsclient`) can
-be retired together with their requirements, in the change that deletes
-them, because a withdrawn requirement cannot keep its citations.
+No existing requirement is withdrawn by this document. Once a cluster fleet
+has passed the hardware tier, the battery client, the Host client, push
+provisioning and their requirements can be retired together, in the change
+that deletes the code, because a withdrawn requirement cannot keep its
+citations.

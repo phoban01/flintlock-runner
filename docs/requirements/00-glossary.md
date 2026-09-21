@@ -30,17 +30,22 @@ directory. It contains no requirements.
   which a Host of a cluster fleet boots. It carries `flintlockd`, containerd,
   the hypervisors, the kubelet and the systemd units that prepare the thin
   pool, the guest bridge and the firewall.
-- **Fleet Operator** — the `flr fleet operator` process that runs in a
-  cluster fleet's workload cluster, publishes the Inventory and the Pool
-  Manager's host list from the cluster's Nodes and holds a Node's drain open
-  while the Host still has Leases. It defines no custom resources.
-- **Host Agent** — the DaemonSet pod on each Host of a cluster fleet. It runs
-  the Host Services, delivers the Host certificate to `flintlockd`, pre-pulls
-  Profile images and reports whether the Host is ready.
+- **Pod Provider** — the `flr kubelet` process on each Host of a cluster
+  fleet, built on virtual kubelet. It registers the Host's Virtual Node,
+  realises each pod bound to it as one MicroVM through the local
+  `flintlockd`, relays pod exec to the guest and holds the Host's drain open
+  while claimed pods remain.
+- **Virtual Node** — the Kubernetes Node object a Pod Provider registers for
+  its Host, carrying the Host's MicroVM capacity. Every pod bound to it is a
+  MicroVM on that Host.
+- **Kubernetes pool backend** — the implementation of the `poolmgr.Client`
+  interface in which a Pool is a ReplicaSet of idle MicroVM pods and a Lease
+  is a claimed pod, used in place of the battery client in a cluster fleet.
+- **Host Agent** — the DaemonSet pod on each Host of a cluster fleet, which
+  contains the Pod Provider and the Host Services.
 - **Fleet Manifests** — the Kubernetes manifests in this repository that
   deploy a cluster fleet: the Host pool's Cluster API objects, the Host
-  Agent, the Runner, the Pool Manager daemon, the Fleet Operator and the
-  cert-manager objects.
+  Agent, the Runner and their access rules.
 
 ## External systems {#external-systems}
 

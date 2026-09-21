@@ -96,7 +96,7 @@ cold. HI-023 restates the fix of pull request #43 as a requirement.
 - **HI-033** The Host Image SHALL drop traffic from the guest subnet to the
   EC2 instance metadata service address.
 - **HI-034** The Host Image SHALL drop traffic from the guest subnet to the
-  Host's own `flintlockd`, kubelet and metrics ports.
+  Host's own kubelet, Pod Provider and metrics ports.
 - **HI-035** The Host Image SHALL drop traffic from the guest subnet to every
   protected CIDR listed in the Host configuration file.
 - **HI-036** The Host Image SHALL allow traffic from the guest subnet to the
@@ -118,16 +118,18 @@ cluster, and anything else a job has no business reaching.
   hypervisor process they start as systemd services outside the cgroup of
   any Kubernetes pod.
 - **HI-041** The Host Image SHALL start `flintlockd` only after the thin
-  pool, the bridge and the Host certificate of KF-030 are present.
-- **HI-042** The Host Image SHALL configure `flintlockd` to listen on the
-  Host's primary private address on the configured port, to serve TLS with
-  the Host certificate and to require every client to present a certificate
-  issued by the fleet certificate authority.
+  pool and the bridge are present.
+- **HI-042** The Host Image SHALL configure `flintlockd` to listen only on a
+  local endpoint, a unix socket or a loopback address, that the Pod Provider
+  of `12-cluster-fleet.md` can reach and a guest cannot.
 - **HI-043** The Host Image SHALL enable the `flintlockd` exec API.
-- **HI-044** The Host Image SHALL NOT start `flintlockd` in insecure mode.
-- **HI-045** When the Host certificate files change, the Host Image SHALL
-  restart `flintlockd` only at a moment when it holds no MicroVM, or reload
-  the certificate without a restart where `flintlockd` supports that.
+- **HI-044** The Host Image SHALL NOT expose `flintlockd` on any address
+  reachable from outside the Host.
+
+Because its only client is the Pod Provider on the same Host, `flintlockd`
+needs no certificate and no token here, and the fleet certificate authority
+of SE-023 has nothing left to sign. The authenticated network surface of a
+Host is the Pod Provider's kubelet endpoint (KF-031) instead.
 
 HI-040 is the one place where this design refuses to be Kubernetes-native.
 Firecracker processes are children of `flintlockd`; inside a pod they would
@@ -139,8 +141,8 @@ MicroVMs.
 
 - **HI-050** The Host Image SHALL read per-Host settings from one Host
   configuration file that cloud-init writes at first boot, containing the
-  guest subnet, the thin pool device, the protected CIDRs and the
-  `flintlockd` port.
+  guest subnet, the thin pool device, the protected CIDRs and the Host
+  reserve.
 - **HI-051** If the Host configuration file is absent, then the Host Image
   SHALL boot with its defaults for every setting.
 - **HI-052** The Host Image SHALL NOT read any secret from the Host
@@ -152,9 +154,10 @@ MicroVMs.
   `gitlab-runner.flintlock.dev/host` set to `true`,
   `gitlab-runner.flintlock.dev/image` set to a value derived from the image
   digest and one label per hypervisor carrying its pinned version.
-- **HI-061** The Host Image SHALL reserve for the kubelet and the Host's own
-  services the CPU and memory that the Inventory excludes from the Host's
-  capacity, so that pods and MicroVMs are not promised the same resources.
+- **HI-061** The Host Image SHALL configure the kubelet to reserve all CPU
+  and memory beyond the configured Host reserve, so that the Host's Node
+  offers only the Host reserve to pods and the Virtual Node of KF-012 offers
+  the rest to MicroVMs.
 - **HI-062** The Host Image SHALL disable automatic bootc updates, so that
   an operating system update is applied only to a drained Host.
 
