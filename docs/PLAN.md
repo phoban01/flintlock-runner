@@ -112,18 +112,34 @@ the image, an API server test environment and the fake Host for the rest.
 
 | Key | Package | Owns | Depends on | Done when |
 |-----|---------|------|------------|-----------|
-| `image` | `image/` (Containerfile, units, versions file, check stage) | HI | nothing | the check stage of HI-008 passes in CI on an x86_64 runner |
-| `kube-pool` | `internal/poolmgr/kube` | KF-040..KF-052, KF-110, KF-121, KF-123 | nothing (the `poolmgr.Client` interface exists) | claim race and template rollout pass against the test environment |
-| `provider` | `internal/kubelet`, `cmd/flr kubelet` | KF-010..KF-018, KF-020..KF-032, KF-090..KF-094, KF-111, KF-120, KF-124, KF-125 | nothing (the fake Host exists) | adopt-on-restart and cordon scenarios pass |
-| `kube-exec` | `internal/transport` | KF-060..KF-063 | `provider` (exec endpoint) | the `exec` transport's test suite passes over `kube-exec` |
-| `manifests` | `deploy/` | KF-001..KF-005, KF-070..KF-076, KF-080..KF-082, KF-112, KF-113 | `provider` | manifests render and pass a schema check |
+| `image` | `image/` (Containerfile, units, versions file, check stage) | HI-001..HI-062 | nothing | PR #52 |
+| `kube-pool` | `internal/poolmgr/kube` | KF-040..KF-052, KF-110, KF-121, KF-123 | nothing | PR #51 |
+| `provider` | `internal/kubelet`, `cmd/flr kubelet` | KF-010..KF-018, KF-020..KF-032, KF-090..KF-094, KF-111, KF-120, KF-124, KF-125 | nothing | PR #53 |
+| `kube-alloc` (lead) | `internal/scheduler`, `internal/scheduler/interfaces.go` | KF-126, KF-127 | `kube-pool` | a Job allocates on the Kubernetes pool backend with no Inventory, and its pod's active deadline is the Job's timeout |
+| `kube-exec` | `internal/transport`, `internal/executor`, `internal/config` | KF-060..KF-063, KF-128 | `provider` (exec endpoint), `kube-alloc` | the `exec` transport's test suite passes over `kube-exec` |
+| `provider-hardening` | `internal/kubelet`, `deploy/host-agent`, `image/` (firewall) | KF-130..KF-134, KF-136, KF-137, HI-063 | `provider`, `image` | an identity the review refuses runs nothing; one Host's identity cannot touch another Host's objects |
+| `manifests` | `deploy/` | KF-001..KF-005, KF-070..KF-076, KF-080..KF-082, KF-112, KF-113, KF-135, KF-144 | `provider`, `provider-hardening` (RBAC and policy files) | manifests render and pass a schema check |
+| `packaging` | `.goreleaser.yaml`, release workflow, `docs/RELEASING.md` | KF-140..KF-143, KF-145 | `manifests` for KF-143 | a packaging dry run on the PR builds every image and the manifests asset |
+| `hardening-2` | `image/` (firewall, SELinux), `deploy/host-agent/admission-policy.yaml`, `internal/kubelet` (default listen) | HI-064, HI-065, KF-138 | `provider-hardening`, `manifests` (the Host Service user ids) | the Host Service user ids cannot reach the metadata service or the control ports; the Host Agent can read the Host environment file and write the cache under enforcing SELinux; a Pod Provider cannot touch another Host's Lease |
 | `kube-verify` | `internal/fleet/verify` | KF-100..KF-102 | `kube-exec` | verification passes in the harness |
 | `kube-harness` | `internal/testing/harness` | KF-122 | `kube-pool`, `provider`, `kube-exec` | every TD-051 scenario green over the cluster stack |
 
-`image`, `kube-pool` and `provider` start immediately and do not touch each
-other. The battery client, the Host client and push provisioning keep working
-throughout; they are retired, with their requirements, only after a cluster
-fleet has passed the hardware tier.
+`image`, `kube-pool` and `provider` are done. `kube-alloc` is the lead's
+change to the Scheduler and its interfaces; `kube-exec` and
+`provider-hardening` start as soon as their dependencies are on `main`, then
+`manifests`, then `packaging`, `kube-verify` and `kube-harness`. The battery
+client, the Host client and push provisioning keep working throughout; they
+are retired, with their requirements, only after a cluster fleet has passed
+the hardware tier.
+
+#### Release readiness
+
+A cluster fleet is releasable when every KF and HI requirement has an
+implementation and a test citation, the harness passes over the cluster
+stack, and a release candidate's images and manifests have been built by the
+release workflow. The version it ships in is decided when the candidate is
+cut. Nothing in this phase has run on a real Host or a real kubelet; a
+release candidate is where the hardware tier (`TD-052`) first applies to it.
 
 ## Running agents
 
