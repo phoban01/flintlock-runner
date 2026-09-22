@@ -1,8 +1,10 @@
 name: release
 
 # A tag vX.Y.Z-rc.N publishes a release candidate as a GitHub pre-release; a
-# tag vX.Y.Z publishes a release. docs/RELEASING.md is the procedure. The same
-# workflow dry-runs the packaging on any pull request that changes it.
+# tag vX.Y.Z publishes a release. Either publishes the flr image, the Host
+# Image and the two manifests assets as well as the archives.
+# docs/RELEASING.md is the procedure. The same workflow dry-runs all of the
+# packaging, pushing nothing, on any pull request that changes it.
 on:
   push:
     tags: ["v*"]
@@ -10,6 +12,8 @@ on:
     paths:
       - .goreleaser.yaml
       - .github/workflows/release.yml
+      - hack/release/**
+      - deploy/**
   workflow_dispatch:
 
 permissions:
@@ -23,6 +27,9 @@ env:
   GOTOOLCHAIN: auto
   DUVET_VERSION: 0.4.3
   GORELEASER_VERSION: v2.18.1
+  KUSTOMIZE_VERSION: v5.8.1
+  FLR_REPOSITORY: ghcr.io/phoban01/flintlock-runner/flr
+  HOST_REPOSITORY: ghcr.io/phoban01/flintlock-runner/host
 
 jobs:
   # Decide what the tag is, and refuse anything that is not a clean candidate
@@ -84,12 +91,109 @@ jobs:
       - name: end-to-end harness
         run: make e2e
 
+  # The Host Image (KF-142), built exactly as CI's image job builds it: `make
+  # image` runs the check stage inside the build, and `make image-check` runs
+  # it again and compares the labels. On a tag it is pushed to ghcr.io as
+  # VERSION and VERSION-k8s-<KUBERNETES_VERSION of image/versions.env>. On a
+  # pull request it is pushed to a registry that lives only inside this job,
+  # so that the push and the tag checks run too, and nothing leaves the
+  # runner. The job runs on pull requests as well as tags, hence the
+  # condition: on a tag it waits for the tests, on a pull request there are
+  # none to wait for. It holds packages: write because on a tag it pushes;
+  # on a pull request it logs in nowhere.
+  host-image:
+    name: host image
+    needs: [tag, verify]
+    if: >-
+      !cancelled() &&
+      (!startsWith(github.ref, 'refs/tags/') || needs.verify.result == 'success')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    services:
+      registry:
+        image: docker.io/library/registry:3.0.0@sha256:6c5666b861f3505b116bb9aa9b25175e71210414bd010d92035ff64018f9457e
+        ports: ["5000:5000"]
+    outputs:
+      digest: ${{ steps.push.outputs.digest }}
+    env:
+      HOST_IMAGE: localhost/flintlock-runner-host:release
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+      - name: where the image goes
+        id: target
+        run: |
+          if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
+            {
+              echo "repository=$HOST_REPOSITORY"
+              echo "version=${GITHUB_REF_NAME#v}"
+              echo "tls_verify=true"
+            } >>"$GITHUB_OUTPUT"
+          else
+            # A version of the release form, so that the tag checks apply
+            # exactly as on a tag.
+            {
+              echo "repository=localhost:5000/flintlock-runner/host"
+              echo "version=0.0.0-rc.${GITHUB_RUN_NUMBER}"
+              echo "tls_verify=false"
+            } >>"$GITHUB_OUTPUT"
+          fi
+      - name: tools
+        run: |
+          podman --version
+          skopeo --version
+      - name: build the image, check stage included
+        run: make image CONTAINER_ENGINE=podman HOST_IMAGE="$HOST_IMAGE"
+      - name: run the checks again and compare the labels
+        run: make image-check CONTAINER_ENGINE=podman HOST_IMAGE="$HOST_IMAGE"
+      - name: log in to ghcr.io
+        if: startsWith(github.ref, 'refs/tags/')
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: printf '%s' "$GITHUB_TOKEN" | podman login ghcr.io --username "$GITHUB_ACTOR" --password-stdin
+      # Nothing of this version may exist yet, the flr image included, so a
+      # re-run of a half-published release fails here instead of moving a
+      # tag (KF-145). Cut the next candidate instead.
+      - name: no tag of this version exists yet
+        if: startsWith(github.ref, 'refs/tags/')
+        env:
+          VERSION: ${{ steps.target.outputs.version }}
+        run: |
+          k8s=$(sed -n 's/^KUBERNETES_VERSION=//p' image/versions.env)
+          hack/release/check-tags.sh absent \
+            "$FLR_REPOSITORY:$VERSION" \
+            "$HOST_REPOSITORY:$VERSION" \
+            "$HOST_REPOSITORY:$VERSION-k8s-$k8s"
+      - name: push
+        id: push
+        env:
+          CONTAINER_ENGINE: podman
+          REPOSITORY: ${{ steps.target.outputs.repository }}
+          VERSION: ${{ steps.target.outputs.version }}
+          REGISTRY_TLS_VERIFY: ${{ steps.target.outputs.tls_verify }}
+        run: |
+          hack/release/push-host-image.sh "$HOST_IMAGE" "$REPOSITORY" "$VERSION" host.ref
+          ref=$(cat host.ref)
+          echo "digest=${ref#*@}" >>"$GITHUB_OUTPUT"
+      - name: only this version's tags, on the pushed digest
+        env:
+          REPOSITORY: ${{ steps.target.outputs.repository }}
+          VERSION: ${{ steps.target.outputs.version }}
+          REGISTRY_TLS_VERIFY: ${{ steps.target.outputs.tls_verify }}
+        run: hack/release/check-tags.sh published --version "$VERSION" --host "$(cat host.ref)"
+
+  # Publish a tag: the archives and the flr image with goreleaser, then the
+  # manifests assets, rendered against the digests just pushed. goreleaser
+  # leaves the GitHub release a draft (.goreleaser.yaml), and the last step
+  # publishes it, so a release is never visible without its manifests.
   release:
     name: publish
-    needs: [tag, verify]
+    needs: [tag, verify, host-image]
     runs-on: ubuntu-latest
     permissions:
       contents: write
+      packages: write
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         with:
@@ -115,6 +219,18 @@ jobs:
             make duvet
             git checkout -- .duvet/snapshot.txt
           fi
+      - name: install kustomize
+        run: |
+          go install "sigs.k8s.io/kustomize/kustomize/v5@$KUSTOMIZE_VERSION"
+          echo "$(go env GOPATH)/bin" >>"$GITHUB_PATH"
+      - name: a builder for both platforms
+        run: hack/release/setup-buildx.sh
+      - name: log in to ghcr.io
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: printf '%s' "$GITHUB_TOKEN" | docker login ghcr.io --username "$GITHUB_ACTOR" --password-stdin
+      - name: the flr tag does not exist yet
+        run: hack/release/check-tags.sh absent "$FLR_REPOSITORY:${GITHUB_REF_NAME#v}"
       - uses: goreleaser/goreleaser-action@f06c13b6b1a9625abc9e6e439d9c05a8f2190e94 # v7.2.3
         with:
           distribution: goreleaser
@@ -122,6 +238,47 @@ jobs:
           args: release --clean
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - name: the published images by digest
+        env:
+          HOST_DIGEST: ${{ needs.host-image.outputs.digest }}
+        run: |
+          version=${GITHUB_REF_NAME#v}
+          flr_digest=$(jq -r --arg name "$FLR_REPOSITORY:$version" \
+            '[.[] | select(.type == "Docker Image" and .name == $name) | .extra.Digest] | unique | .[]' dist/artifacts.json)
+          for d in "$flr_digest" "$HOST_DIGEST"; do
+            if ! [[ $d =~ ^sha256:[0-9a-f]{64}$ ]]; then
+              echo "::error::not one digest: \"$d\""
+              exit 1
+            fi
+          done
+          {
+            echo "VERSION=$version"
+            echo "FLR_REF=$FLR_REPOSITORY@$flr_digest"
+            echo "HOST_REF=$HOST_REPOSITORY@$HOST_DIGEST"
+          } >>"$GITHUB_ENV"
+      - name: the flr image as published
+        run: hack/release/check-flr-image.sh --version "$VERSION" --platforms linux/amd64,linux/arm64 --pull "$FLR_REF"
+      - name: only this version's tags, on the pushed digests
+        run: hack/release/check-tags.sh published --version "$VERSION" --flr "$FLR_REF" --host "$HOST_REF"
+      - name: render the manifests assets
+        run: hack/release/render-manifests.sh --flr "$FLR_REF" --host "$HOST_REF" --out dist/manifests
+      - name: attach the manifests and publish the release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          k8s=$(sed -n 's/^KUBERNETES_VERSION=//p' image/versions.env)
+          {
+            echo "$FLR_REPOSITORY:$VERSION $FLR_REF"
+            echo "$HOST_REPOSITORY:$VERSION $HOST_REF"
+            echo "$HOST_REPOSITORY:$VERSION-k8s-$k8s $HOST_REF"
+          } >dist/manifests/images.txt
+          (cd dist/manifests && sha256sum flintlock-runner-fleet.yaml flintlock-runner-capi.yaml images.txt) >>dist/checksums.txt
+          gh release upload "$GITHUB_REF_NAME" --clobber \
+            dist/manifests/flintlock-runner-fleet.yaml \
+            dist/manifests/flintlock-runner-capi.yaml \
+            dist/manifests/images.txt \
+            dist/checksums.txt
+          gh release edit "$GITHUB_REF_NAME" --draft=false
 
   # The darwin binaries are cross-compiled on Linux, so run the unit tests on
   # macOS too, to show they work on the platform they are built for.
@@ -138,12 +295,23 @@ jobs:
       - run: go vet ./...
       - run: go test ./...
 
-  # On a pull request that changes the packaging, build every archive without
-  # publishing, so a broken configuration is caught before a tag finds it.
+  # On a pull request that changes the packaging, build everything a release
+  # builds and run every check a release runs, without publishing: the
+  # archives, the flr image for both platforms, and the manifests assets
+  # rendered against real digests. The flr image goes to a registry that
+  # lives only inside this job, and the Host Image job above does the same
+  # for the Host Image, so the digests are of real pushes; the rendered
+  # assets name them under ghcr.io, where they do not exist, and are kept
+  # only as a workflow artifact for review.
   dry-run:
     name: packaging dry run
+    needs: host-image
     if: "!startsWith(github.ref, 'refs/tags/')"
     runs-on: ubuntu-latest
+    services:
+      registry:
+        image: docker.io/library/registry:3.0.0@sha256:6c5666b861f3505b116bb9aa9b25175e71210414bd010d92035ff64018f9457e
+        ports: ["5000:5000"]
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         with:
@@ -157,10 +325,68 @@ jobs:
         with:
           version: ${{ env.DUVET_VERSION }}
       - run: make duvet && git checkout -- .duvet/snapshot.txt
+      - name: install kustomize
+        run: |
+          go install "sigs.k8s.io/kustomize/kustomize/v5@$KUSTOMIZE_VERSION"
+          echo "$(go env GOPATH)/bin" >>"$GITHUB_PATH"
+      - name: a builder for both platforms
+        run: hack/release/setup-buildx.sh
       - uses: goreleaser/goreleaser-action@f06c13b6b1a9625abc9e6e439d9c05a8f2190e94 # v7.2.3
         with:
           distribution: goreleaser
           version: ${{ env.GORELEASER_VERSION }}
           args: release --snapshot --clean
       - name: list what a release would publish
-        run: ls -l dist/*.tar.gz dist/checksums.txt
+        run: |
+          ls -l dist/*.tar.gz dist/checksums.txt
+          jq -r '.[] | select(.type == "Docker Image") | "\(.name) \(.extra.Digest)"' dist/artifacts.json
+      # A snapshot build leaves one image per platform in Docker, tagged
+      # VERSION-amd64 and VERSION-arm64; a release pushes one index tagged
+      # VERSION and nothing else.
+      - name: the flr image is tagged with the version only
+        run: |
+          version=$(jq -r .version dist/metadata.json)
+          echo "VERSION=$version" >>"$GITHUB_ENV"
+          mapfile -t images < <(jq -r '.[] | select(.type == "Docker Image") | .name' dist/artifacts.json)
+          hack/release/check-tags.sh planned --snapshot --version "$version" "${images[@]}"
+      - name: the flr image holds flr, CA certificates and time zone data, and runs as non-root
+        run: |
+          mapfile -t images < <(jq -r '.[] | select(.type == "Docker Image") | .name' dist/artifacts.json)
+          hack/release/check-flr-image.sh --version "$VERSION" --platforms linux/amd64,linux/arm64 "${images[@]}"
+      - name: push the flr image as one index, and check it as a release does
+        env:
+          REGISTRY_TLS_VERIFY: "false"
+        run: |
+          local=localhost:5000/flintlock-runner/flr
+          refs=()
+          for arch in amd64 arm64; do
+            docker tag "$FLR_REPOSITORY:$VERSION-$arch" "$local:dryrun-$arch"
+            docker push --quiet "$local:dryrun-$arch"
+            refs+=("$local:dryrun-$arch")
+          done
+          docker manifest create --insecure "$local:dryrun" "${refs[@]}"
+          docker manifest push --insecure "$local:dryrun"
+          digest=$(. hack/release/registry.sh && manifest_digest "$local:dryrun")
+          echo "FLR_DIGEST=$digest" >>"$GITHUB_ENV"
+          hack/release/check-flr-image.sh --version "$VERSION" --platforms linux/amd64,linux/arm64 --pull "$local@$digest"
+      - name: rendering and its checks
+        run: hack/release/test-render.sh
+      - name: render the manifests assets
+        env:
+          HOST_DIGEST: ${{ needs.host-image.outputs.digest }}
+        run: |
+          if [ ! -f deploy/kustomization.yaml ]; then
+            echo "::warning::deploy/kustomization.yaml does not exist yet, so there are no Fleet Manifests to render; a release would fail here"
+            exit 0
+          fi
+          hack/release/render-manifests.sh \
+            --flr "$FLR_REPOSITORY@$FLR_DIGEST" \
+            --host "$HOST_REPOSITORY@$HOST_DIGEST" \
+            --out dist/manifests
+      - name: keep the rendered assets
+        if: hashFiles('dist/manifests/*.yaml') != ''
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: manifests-dry-run
+          path: dist/manifests/*.yaml
+          if-no-files-found: error
