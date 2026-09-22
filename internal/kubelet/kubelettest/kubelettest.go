@@ -82,6 +82,12 @@ type options struct {
 	admissionPolicy string
 }
 
+//= docs/requirements/12-cluster-fleet.md#cluster-test-doubles
+//# The Fleet Manifests SHALL include a test, run against a
+//# Kubernetes API server test environment, in which the policy of KF-133
+//# admits a Pod Provider's change to its own Host's Virtual Node and pods and
+//# refuses the same change to another Host's.
+
 // WithAdmissionPolicy loads the manifest at path, which is
 // deploy/host-agent/admission-policy.yaml, after the RBAC manifest, and makes
 // Start wait until the API server enforces it.
@@ -161,8 +167,17 @@ func (e *Environment) agent(extra map[string][]string) (kubernetes.Interface, er
 	return kubernetes.NewForConfig(cfg)
 }
 
+//= docs/requirements/12-cluster-fleet.md#cluster-test-doubles
+//# The Pod Provider's authorization SHALL be tested against a
+//# Kubernetes API server test environment with one client identity that the
+//# review allows and one that it refuses, and SHALL be shown to run nothing
+//# for the second.
+
 // bindKubeletClient lets KubeletClientUser use the kubelet API of every
-// node, which is what system:kubelet-api-admin is for.
+// node, which is what system:kubelet-api-admin is for. The API server of
+// the environment answers the Pod Provider's SubjectAccessReviews with its
+// RBAC authorizer, so this binding is what the review allows, and any
+// identity a test does not bind is one it refuses.
 func bindKubeletClient(ctx context.Context, admin kubernetes.Interface) error {
 	_, err := admin.RbacV1().ClusterRoleBindings().Create(ctx, &rbacv1.ClusterRoleBinding{
 		ObjectMeta: metav1.ObjectMeta{Name: "kubelettest-kubelet-api-client"},
@@ -191,7 +206,10 @@ func (e *Environment) awaitPolicy(ctx context.Context) error {
 			return nil
 		}
 		if time.Now().After(deadline) {
-			return fmt.Errorf("kubelettest: the admission policy was not enforced within %s: the probe got %v", policyActiveTimeout, err)
+			if err == nil {
+				return fmt.Errorf("kubelettest: the admission policy was not enforced within %s: the probe was admitted", policyActiveTimeout)
+			}
+			return fmt.Errorf("kubelettest: the admission policy was not enforced within %s: the probe got %w", policyActiveTimeout, err)
 		}
 		time.Sleep(100 * time.Millisecond)
 	}
