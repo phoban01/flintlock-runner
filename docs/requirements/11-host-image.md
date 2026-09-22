@@ -58,6 +58,10 @@ operator creates once.
   Agent's containers can read them, and the Host Service cache directory so
   that they can write it, under the base image's SELinux policy and without
   changing the domain of any container or the label of any other path.
+- **HI-066** The Host Image SHALL configure the container runtime interface
+  of containerd to run every container of a Kubernetes pod under SELinux
+  confinement, in the container domain the base image's policy assigns,
+  rather than unconfined.
 
 HI-011 is the successor of FL-117: whether an instance can run MicroVMs is
 still decided on the host, but by a unit at boot rather than by a remote
@@ -65,8 +69,15 @@ command. The SELinux requirements exist because the quick fix, setting the
 whole host permissive, removes a layer of isolation between jobs' Firecracker
 processes and the Host, which is the layer this project is built on.
 
-HI-065 exists because the Host Agent's containers run in the ordinary
-container domain, which may read and write only files labelled for
+HI-066 exists because containerd applies no SELinux label to a pod unless
+its container runtime interface is told to, and an unlabelled container runs
+unconfined: an enforcing Host would then enforce nothing between its pods,
+`buildkitd` running Jobs' image builds among them, and itself. The setting
+reaches only the pods the kubelet starts; `flintlockd` drives containerd
+through its own API, so the MicroVMs keep the confinement HI-013 gives them.
+
+HI-065 exists because, with HI-066, the Host Agent's containers run in the
+ordinary container domain, which may read and write only files labelled for
 containers: without it the Host Agent cannot read the bridge gateway the
 Host Image writes at boot, nor keep its caches, and fails on every enforcing
 Host, and the Pod Provider cannot read the not ready reasons of HI-011 and
