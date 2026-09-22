@@ -8,7 +8,10 @@
 # overlayfs snapshotter and a garbage collection limit (FL-102), the
 # registry mirror first (FL-103), storage under the cache directory
 # (FL-107). The push-provisioned firewall for the buildkit user (SE-030,
-# SE-031) has no counterpart here; see deploy/README.md.
+# SE-031) is the Host Image's HI-064: it drops traffic from this
+# container's user id, and from the image's subordinate ids that build
+# steps run as, to the metadata service and the Host's control ports.
+# Change runAsUser only together with HOST_SERVICE_UIDS of the Host Image.
 apiVersion: apps/v1
 kind: DaemonSet
 metadata:
