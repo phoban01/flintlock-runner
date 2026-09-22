@@ -511,14 +511,11 @@ func (v *validator) poolManager(c *Config) {
 	// The Kubernetes pool backend has no battery endpoint to name; one that
 	// is given anyway is still checked, so that a typo does not pass
 	// silently.
-	if pm.IsKubernetes() {
-		if strings.TrimSpace(pm.Endpoint) != "" {
-			v.hostPort("pool_manager.endpoint", pm.Endpoint)
-		}
-	} else if strings.TrimSpace(pm.Endpoint) == "" {
-		v.errorf("pool_manager.endpoint", "is required; the pool_manager section has to name the battery endpoint")
-	} else {
+	switch {
+	case strings.TrimSpace(pm.Endpoint) != "":
 		v.hostPort("pool_manager.endpoint", pm.Endpoint)
+	case !pm.IsKubernetes():
+		v.errorf("pool_manager.endpoint", "is required; the pool_manager section has to name the battery endpoint")
 	}
 	v.clientTLS("pool_manager.tls", pm.TLS)
 	v.positive("pool_manager.deadline", pm.Deadline)
