@@ -34,11 +34,11 @@ profiles:
     kernel:
       image: registry.example.com/REPLACE/kernel:REPLACE
     rootfs: registry.example.com/REPLACE/ubuntu-ci:REPLACE
-    # The Kubernetes pool backend runs every Stage over kube-exec (KF-128);
-    # this field is replaced when the kube-exec Guest Transport lands in the
-    # configuration.
+    # The Kubernetes pool backend runs every Stage over kube-exec, through
+    # the pod's exec subresource, and rejects any other kind (KF-128). It is
+    # the default on this backend; it is spelled out so the file says so.
     transport:
-      kind: exec
+      kind: kube-exec
     pool:
       size: 2
 
