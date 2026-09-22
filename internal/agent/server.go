@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"sync/atomic"
 	"time"
 
 	mvmv1 "github.com/liquidmetal-dev/flintlock/api/services/microvm/v1alpha1"
@@ -207,6 +208,12 @@ func (s *server) relayExec(ctx context.Context, down grpc.BidiStreamingServer[ex
 	// caller's input is passed on as a half-close; a caller that goes away
 	// cancels the exchange. A failed send to flintlockd shows up on the
 	// receiving side, where it is reported.
+	//
+	// Only standard input follows the ExecStart. The claim was checked for
+	// the MicroVM the first message named, so a second ExecStart, naming that
+	// MicroVM or another, would ask flintlockd for something no one
+	// authorized; it is never passed on, and it ends the exchange.
+	var secondStart atomic.Bool
 	go func() {
 		for {
 			req, err := down.Recv()
@@ -215,6 +222,11 @@ func (s *server) relayExec(ctx context.Context, down grpc.BidiStreamingServer[ex
 				return
 			}
 			if err != nil {
+				cancel()
+				return
+			}
+			if req.GetStart() != nil {
+				secondStart.Store(true)
 				cancel()
 				return
 			}
@@ -227,6 +239,10 @@ func (s *server) relayExec(ctx context.Context, down grpc.BidiStreamingServer[ex
 	for {
 		resp, err := up.Recv()
 		if err != nil {
+			if secondStart.Load() {
+				s.log.Warn("refused an exchange that sent a second ExecStart", "user", userOf(ctx), "vm", first.GetStart().GetUid())
+				return status.Error(codes.InvalidArgument, "an exchange carries one ExecStart, first; a second one ends it")
+			}
 			if ctx.Err() != nil {
 				return status.FromContextError(ctx.Err()).Err()
 			}

@@ -67,6 +67,13 @@ func TestAuthorize(t *testing.T) {
 	}
 }
 
+// authenticated answers every TokenReview as the Runner's identity.
+func authenticated() (*authenticationv1.TokenReview, error) {
+	return &authenticationv1.TokenReview{Status: authenticationv1.TokenReviewStatus{
+		Authenticated: true, User: authenticationv1.UserInfo{Username: "runner"},
+	}}, nil
+}
+
 // stubClaims is a ClaimLookup of fixed answers.
 type stubClaims struct {
 	claims []Claim
@@ -178,11 +185,6 @@ func runMarker(t *testing.T, client execv1.MicroVMExecClient, uid, marker string
 // and a good claim, the same request runs.
 func TestRefusedWhenTheReviewOrTheLookupCannotBeCompleted(t *testing.T) {
 	t.Parallel()
-	authenticated := func() (*authenticationv1.TokenReview, error) {
-		return &authenticationv1.TokenReview{Status: authenticationv1.TokenReviewStatus{
-			Authenticated: true, User: authenticationv1.UserInfo{Username: "runner"},
-		}}, nil
-	}
 	good := func(uid string) Claim {
 		return Claim{Phase: ClaimBound, VMUID: uid, HostNode: "host", ExpiresAt: time.Now().Add(time.Hour), Creator: "runner"}
 	}
@@ -223,6 +225,57 @@ func TestRefusedWhenTheReviewOrTheLookupCannotBeCompleted(t *testing.T) {
 			t.Error("the command did not run")
 		}
 	})
+}
+
+// TestASecondExecStartEndsTheExchange authorizes an exchange for a MicroVM
+// and then sends a second ExecStart on it. The claim was checked for the
+// first message only, so the second must never reach flintlockd: the
+// exchange ends as an invalid argument, and the command the second
+// ExecStart named does not run.
+func TestASecondExecStartEndsTheExchange(t *testing.T) {
+	t.Parallel()
+	lookup := &stubClaims{}
+	client, uid, host := unitAgent(t, authenticated, lookup)
+	lookup.claims = []Claim{{Phase: ClaimBound, VMUID: uid, HostNode: "host", ExpiresAt: time.Now().Add(time.Hour), Creator: "runner"}}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	ctx = metadata.AppendToOutgoingContext(ctx, "authorization", "Bearer token")
+	stream, err := client.ExecCommand(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	start := func(cmd string) *execv1.ExecCommandRequest {
+		return &execv1.ExecCommandRequest{Payload: &execv1.ExecCommandRequest_Start{Start: &execv1.ExecStart{Uid: uid, Cmd: cmd, Shell: true}}}
+	}
+	if err := stream.Send(start("touch first; sleep 5")); err != nil {
+		t.Fatal(err)
+	}
+	// The first command is running once its marker is there, so the
+	// exchange is past the claim check and relaying.
+	deadline := time.Now().Add(5 * time.Second)
+	for !ran(t, host, uid, "first") {
+		if time.Now().After(deadline) {
+			t.Fatal("the authorized command never started")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if err := stream.Send(start("touch second")); err != nil && !errors.Is(err, io.EOF) {
+		t.Fatal(err)
+	}
+	for {
+		_, err := stream.Recv()
+		if err == nil {
+			continue
+		}
+		if status.Code(err) != codes.InvalidArgument {
+			t.Fatalf("exchange ended with %v, want invalid argument", err)
+		}
+		break
+	}
+	if ran(t, host, uid, "second") {
+		t.Error("the command of the second ExecStart ran")
+	}
 }
 
 // ran reports whether a marker file is in a MicroVM's sandbox.
