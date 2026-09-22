@@ -625,6 +625,82 @@ checks:
       # runs as its own user, not as this one.
       [ "$(q "$rendered/kubelet.yaml" '.guard.image')" != "" ] || fail "no guard image"
 
+  #= docs/requirements/11-host-image.md#image-networking
+  #= type=test
+  #/ The Host Image SHALL drop traffic from the user ids that run the
+  #/ Host Services, which it reads from the Host configuration file with
+  #/ defaults when none are set, to the instance metadata service address and
+  #/ to the Host's own kubelet, Pod Provider, `flintlockd` and metrics ports.
+  - name: the Host Services run as the user ids whose egress the Host Image drops
+    run: |
+      # HI-064: the Host Image drops traffic from HOST_SERVICE_UIDS of the
+      # Host configuration file, its default when a pool's host.conf sets
+      # none. Its single ids have to be exactly the ids the Host Services'
+      # containers run as; its ranges are ids a container's user namespace
+      # maps to, rootless buildkitd's subordinate ids, which no manifest
+      # names.
+      defaults=$root/image/rootfs/usr/share/flr/host.conf.defaults
+      img=$(sed -n 's/^HOST_SERVICE_UIDS=\([0-9,-]*\)$/\1/p' "$defaults" | tail -n 1)
+      [ -n "$img" ] || fail "the Host Image names no HOST_SERVICE_UIDS default"
+      echo "the Host Image's default Host Service user ids: $img"
+      spec=$(obj "$fleet" DaemonSet flintlock-host-agent | "$YQ" '.spec.template.spec')
+      # The Host Services are every container but the Pod Provider and the
+      # Host Agent's own scripts: the init containers and the pre-warm
+      # containers, which run prewarm.sh on the configured lists as nobody
+      # and run nothing a Job supplies.
+      services=$(echo "$spec" | "$YQ" '.containers[] | select(.name != "pod-provider" and (.name | test("^prewarm-") | not)) | .name + "=" + ((.securityContext.runAsUser // "unset") | tostring)')
+      prewarm=$(echo "$spec" | "$YQ" '.containers[] | select(.name | test("^prewarm-")) | .command | join(" ")' | sort -u)
+      if echo "$prewarm" | grep -qv '/etc/flr/templates/prewarm.sh '; then fail "a prewarm- container runs something other than prewarm.sh: $prewarm"; fi
+      echo "$services"
+      manifest=$(echo "$services" | cut -d= -f2 | sort -n -u | xargs)
+      singles=$(echo "$img" | tr ',' '\n' | grep -v -- - | sort -n -u | xargs)
+      [ "$manifest" = "$singles" ] || fail "the Host Services run as $manifest, the Host Image drops traffic from $singles"
+      # Rootless buildkitd runs build steps as users other than root under
+      # the subordinate ids of its image's user, 100000 to 165535.
+      if echo "$services" | grep -q '^buildkitd='; then
+        echo ",$img," | grep -q ',100000-165535,' || fail "buildkitd's subordinate ids 100000-165535 are not in $img"
+      fi
+      # A pool that sets its own list has to cover every Host Service.
+      for md in $(q "$capi" 'select(.kind == "MachineDeployment") | .metadata.name'); do
+        ref=$(obj "$capi" MachineDeployment "$md" | "$YQ" '.spec.template.spec.bootstrap.configRef.name')
+        pool=$(obj "$capi" KubeadmConfigTemplate "$ref" | "$YQ" '.spec.template.spec.files[] | select(.path == "/etc/flintlock-runner/host.conf") | .content' | sed -n 's/^HOST_SERVICE_UIDS=\([0-9,-]*\)$/\1/p' | tail -n 1)
+        [ -z "$pool" ] || [ "$(echo "$pool" | tr ',' '\n' | grep -v -- - | sort -n -u | xargs)" = "$manifest" ] ||
+          fail "$md: host.conf drops traffic from $pool, the Host Services run as $manifest"
+      done
+      # The Pod Provider's id is none of them, or its own traffic to
+      # flintlockd would be dropped.
+      uid=$(q "$deploy/host-agent/pod-provider-uid.yaml" '.data.uid')
+      for s in $singles; do [ "$s" != "$uid" ] || fail "the Pod Provider's user id $uid is a Host Service's"; done
+
+  #= docs/requirements/11-host-image.md#kernel-and-kvm
+  #= type=test
+  #/ The Host Image SHALL label the Host environment file and the
+  #/ not ready reason directory it writes under `/run/flr` so that the Host
+  #/ Agent's containers can read them, and the Host Service cache directory so
+  #/ that they can write it, under the base image's SELinux policy and without
+  #/ changing the domain of any container or the label of any other path.
+  - name: the Host Agent keeps the container domain, with a fixed level, and mounts only the paths the Host Image labels for it
+    run: |
+      spec=$(obj "$fleet" DaemonSet flintlock-host-agent | "$YQ" '.spec.template.spec')
+      all='(.containers + .initContainers)[]'
+      # No container is given a type, a user or a role: all keep container_t.
+      set_type=$(echo "$spec" | "$YQ" "[.securityContext.seLinuxOptions.type, .securityContext.seLinuxOptions.user, .securityContext.seLinuxOptions.role, ($all | .securityContext.seLinuxOptions)] | map(select(. != null)) | length")
+      [ "$set_type" = 0 ] || fail "a container or the pod sets an SELinux type, user or role, or a level of its own"
+      # One fixed MCS level for the pod, so that what one Host Agent pod
+      # writes into the cache the next one can read.
+      level=$(echo "$spec" | "$YQ" '.securityContext.seLinuxOptions.level // ""')
+      echo "the Host Agent's level: $level"
+      echo "$level" | grep -Eq '^s0:c[0-9]+,c[0-9]+$' || fail "the Host Agent's level '$level' is not s0 with two categories"
+      # Every host path it mounts has a file context in the Host Image's
+      # module, and tmpfiles.d restores it.
+      fc=$root/image/selinux/flr.fc
+      tmpf=$root/image/rootfs/usr/lib/tmpfiles.d/flr.conf
+      for p in $(echo "$spec" | "$YQ" '.volumes[] | select(.hostPath) | .hostPath.path'); do
+        re=$(printf '%s' "$p" | sed 's/\./\\\\./g')
+        grep -q "^$re[(	]" "$fc" || fail "$p has no file context of its own in image/selinux/flr.fc"
+        grep -q "^z $p " "$tmpf" || fail "tmpfiles.d does not restore the label of $p"
+      done
+
   #= docs/requirements/12-cluster-fleet.md#cluster-release
   #= type=test
   #/ The Fleet Manifests SHALL reference every third-party container

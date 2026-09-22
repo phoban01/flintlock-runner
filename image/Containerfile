@@ -61,6 +61,8 @@ COPY rootfs/ /
 COPY check.sh /usr/libexec/flr/check
 COPY check-thin-pool.sh /usr/libexec/flr/check-thin-pool-cases
 COPY check-flintlockd-access.sh /usr/libexec/flr/check-flintlockd-access-cases
+COPY check-host-service-egress.sh /usr/libexec/flr/check-host-service-egress-cases
+COPY check-selinux-contexts.sh /usr/libexec/flr/check-selinux-contexts-cases
 COPY --from=selinux /src/flr.pp /usr/share/selinux/packages/flr.pp
 COPY build/configure.sh /tmp/flr-build/configure.sh
 RUN bash /tmp/flr-build/configure.sh && rm -rf /tmp/flr-build

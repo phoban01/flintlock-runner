@@ -170,18 +170,23 @@ If a pool's `host.conf` sets `POD_PROVIDER_UID`, set the same value in
 
 ## Known gaps
 
-- **SELinux.** The Host Image enforces SELinux. The Host Agent's
-  containers run as `container_t`, which may read neither `/run/flr`
-  (`flr_run_t`) nor write the cache directory unless it is labelled
-  `container_file_t`. Until the Host Image labels those paths for
-  containers, the Host Agent fails on a booted Host. None of this has run on
-  one.
+- **SELinux.** The Host Image enforces SELinux and labels the three host
+  paths the Host Agent mounts for `container_t` (HI-065): `host.env` and
+  `not-ready.d` read-only, the cache directory writable, all at `s0`. The
+  Host Agent's pod keeps `container_t` with a fixed MCS level,
+  `s0:c311,c827`, so that its caches survive a restart of the pod; see
+  "SELinux" in `image/README.md`. The Host Image's containerd does not set
+  `enable_selinux`, and until it does the runtime does not apply the
+  container domain at all. None of this has run on a booted Host.
 - **Builds and the metadata service.** Rootless buildkitd runs in the
-  Host's network namespace, as push provisioning runs it, and push
-  provisioning's firewall rules for the buildkit user (SE-030, SE-031) have
-  no counterpart here. A Host has no instance profile, so there is no
-  credential to reach, but a build can still reach the metadata service and
-  the Host's own ports.
+  Host's network namespace, as push provisioning runs it. The Host Image
+  drops traffic from the Host Services' user ids, and from buildkit's
+  subordinate ids that build steps run as, to the metadata service and the
+  Host's control ports (HI-064); the ids are `HOST_SERVICE_UIDS` of the Host
+  configuration file, and `make manifests-check` checks that they are the
+  ones these manifests run the Host Services as. A pool whose `host.conf`
+  sets `HOST_SERVICE_UIDS`, or a change to a Host Service's `runAsUser`,
+  has to change the other too.
 - **One DaemonSet for every pool.** `max_microvms` and the Host Service
   settings are the same on every Host; size `max_microvms` for the smallest
   instance type.

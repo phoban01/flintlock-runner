@@ -268,6 +268,29 @@ else
   skip "sesearch is not installed; the module's rules are not inspected"
 fi
 
+#= docs/requirements/11-host-image.md#kernel-and-kvm
+#= type=test
+#/ The Host Image SHALL label the Host environment file and the
+#/ not ready reason directory it writes under `/run/flr` so that the Host
+#/ Agent's containers can read them, and the Host Service cache directory so
+#/ that they can write it, under the base image's SELinux policy and without
+#/ changing the domain of any container or the label of any other path.
+# The label each path takes from the policy the module was installed into,
+# and that the boot scripts label what they write before it takes its name.
+# That container_t may read container_ro_file_t and write container_file_t
+# is container-selinux's, and is inspected where sesearch is installed.
+if "$LIBEXEC/check-selinux-contexts-cases" "$work"; then
+  ok "SELinux context cases (labels of the Host Agent's host paths, labelled before rename)"
+else
+  fail "SELinux context cases"
+fi
+expect "container-selinux is installed" rpm -q container-selinux
+if command -v sesearch >/dev/null 2>&1; then
+  expect "container_t may read container_ro_file_t" sh -c "sesearch -A -s container_t -t container_ro_file_t -c file -p read | grep -q allow"
+  expect "container_t may write container_file_t" sh -c "sesearch -A -s container_t -t container_file_t -c file -p write | grep -q allow"
+  refute "container_t may not write container_ro_file_t" sh -c "sesearch -A -s container_t -t container_ro_file_t -c file -p write | grep -q allow"
+fi
+
 # ---------------------------------------------------------------------------
 echo "== Host configuration"
 export FLR_HOST_ENV=$work/run/host.env
@@ -280,7 +303,8 @@ host_config() { FLR_HOST_CONF=$1 "$LIBEXEC/host-config"; }
 expect "host-config succeeds with no Host configuration file" host_config "$work/absent.conf"
 for kv in FLR_GUEST_SUBNET=172.31.0.0/16 FLR_GATEWAY=172.31.0.1 FLR_PREFIX=16 FLR_NETMASK=255.255.0.0 \
   FLR_DHCP_START=172.31.0.10 FLR_DHCP_END=172.31.255.254 FLR_THIN_POOL_DEVICE= FLR_PROTECTED_CIDRS= \
-  FLR_HOST_RESERVE_VCPU=2 FLR_HOST_RESERVE_MEMORY_MB=4096 FLR_HOST_SERVICE_PORTS=1234,3000,5000,3128; do
+  FLR_HOST_RESERVE_VCPU=2 FLR_HOST_RESERVE_MEMORY_MB=4096 FLR_HOST_SERVICE_PORTS=1234,3000,5000,3128 \
+  FLR_HOST_SERVICE_UIDS=101,1000,10001,10002,100000-165535; do
   expect "default $kv" grep -qxF -- "$kv" "$FLR_HOST_ENV"
 done
 
@@ -471,6 +495,28 @@ case "$?:$nft_out" in
 *"Operation not permitted"* | *"netlink"* | *"Protocol not supported"*) skip "nft cannot open netlink here: $(echo "$nft_out" | head -n1)" ;;
 *) fail "nft rejects the ruleset: $nft_out" ;;
 esac
+
+#= docs/requirements/11-host-image.md#image-networking
+#= type=test
+#/ The Host Image SHALL drop traffic from the user ids that run the
+#/ Host Services, which it reads from the Host configuration file with
+#/ defaults when none are set, to the instance metadata service address and
+#/ to the Host's own kubelet, Pod Provider, `flintlockd` and metrics ports.
+# The rules, rendered from the installed scripts for the default ids, a
+# configured list and values that are no list of ids. That the kernel
+# enforces them cannot be shown here, as for HI-063.
+if "$LIBEXEC/check-host-service-egress-cases" "$work"; then
+  ok "Host Service egress cases (default ids, configured ids, refused values)"
+else
+  fail "Host Service egress cases"
+fi
+expect "the Host Services' ids are dropped to the metadata service" \
+  has "$nftf" '^[[:space:]]*meta skuid \{ 101, 1000, 10001, 10002, 100000-165535 \} ip daddr 169\.254\.169\.254 counter drop$'
+# The ids belong to the Host Services' containers alone: no account of the
+# Host itself has one, or the rules would cut a Host daemon off too.
+# shellcheck disable=SC2016
+clash=$(awk -F: '($3 == 101 || $3 == 1000 || $3 == 10001 || $3 == 10002 || ($3 >= 100000 && $3 <= 165535)) { print $1 "=" $3 }' /etc/passwd /usr/lib/passwd 2>/dev/null | xargs)
+if [ -z "$clash" ]; then ok "no account of the Host has a Host Service's user id"; else fail "accounts of the Host with a Host Service's user id: $clash"; fi
 
 #= docs/requirements/11-host-image.md#image-networking
 #= type=test

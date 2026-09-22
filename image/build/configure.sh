@@ -5,7 +5,8 @@ set -euo pipefail
 
 chmod 0755 /usr/libexec/flr/host-config /usr/libexec/flr/kvm-gate /usr/libexec/flr/thin-pool \
   /usr/libexec/flr/cache-volume /usr/libexec/flr/network /usr/libexec/flr/kubelet-config \
-  /usr/libexec/flr/check /usr/libexec/flr/check-thin-pool-cases /usr/libexec/flr/check-flintlockd-access-cases
+  /usr/libexec/flr/check /usr/libexec/flr/check-thin-pool-cases /usr/libexec/flr/check-flintlockd-access-cases \
+  /usr/libexec/flr/check-host-service-egress-cases /usr/libexec/flr/check-selinux-contexts-cases
 chmod 0644 /usr/libexec/flr/lib.sh
 
 #= docs/requirements/11-host-image.md#kernel-and-kvm

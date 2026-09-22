@@ -42,10 +42,11 @@ render() {
   env "${env[@]}" FLR_PRIMARY_INTERFACE=eth0 bash "$libexec/network" render "$C/net" >/dev/null 2>&1
 }
 # output_chain prints the rules of the rendered output chain, one per line,
-# without comments or indentation.
+# without comments or indentation, and without the rules for the Host
+# Services' user ids, which check-host-service-egress.sh checks (HI-064).
 output_chain() {
   awk '/^\tchain output \{/ { on = 1; next } on && /^\t\}/ { exit } on' "$C/net/guest-firewall.nft" |
-    sed -e 's/#.*//' -e 's/^[[:space:]]*//' -e '/^$/d'
+    sed -e 's/#.*//' -e 's/^[[:space:]]*//' -e '/^$/d' | grep -v '^meta skuid {'
 }
 rule_for() { printf 'oifname "lo" tcp dport %s meta skuid != %s counter reject with tcp reset' "$1" "$2"; }
 
@@ -119,7 +120,7 @@ attempt() {
   unshare --user --map-user="$1" --map-group="$1" --net --keep-caps bash -c '
     ip link set lo up && nft -f "$1" || exit 3
     { exec 3<>/dev/tcp/127.0.0.1/'"$port"'; } 2>/dev/null
-    nft list chain inet flr output | sed -n "s/.*skuid.* counter packets \([0-9]*\) .*/\1/p"
+    nft list chain inet flr output | sed -n "s/.*skuid != .* counter packets \([0-9]*\) .*/\1/p"
   ' _ "$C/net/guest-firewall.nft" 2>/dev/null
 }
 printf 'POD_PROVIDER_UID=4242\n' >"$C.conf"

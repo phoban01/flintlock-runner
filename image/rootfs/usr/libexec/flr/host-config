@@ -11,7 +11,7 @@ FLR_UNIT=flr-host-config
 #/ configuration file that cloud-init writes at first boot, containing the
 #/ guest subnet, the thin pool device, the protected CIDRs and the Host
 #/ reserve.
-KEYS="GUEST_SUBNET THIN_POOL_DEVICE PROTECTED_CIDRS HOST_RESERVE_VCPU HOST_RESERVE_MEMORY_MB HOST_SERVICE_PORTS HOST_CONTROL_PORTS CACHE_VOLUME_PERCENT POD_PROVIDER_UID"
+KEYS="GUEST_SUBNET THIN_POOL_DEVICE PROTECTED_CIDRS HOST_RESERVE_VCPU HOST_RESERVE_MEMORY_MB HOST_SERVICE_PORTS HOST_CONTROL_PORTS CACHE_VOLUME_PERCENT POD_PROVIDER_UID HOST_SERVICE_UIDS"
 declare -A CONF=()
 
 #= docs/requirements/11-host-image.md#host-configuration
@@ -100,6 +100,48 @@ if ! [[ $provider_uid =~ ^[0-9]{1,10}$ ]] || [ "$((10#$provider_uid))" -lt 1 ] |
   bad "POD_PROVIDER_UID is not a user id from 1 to 4294967294"
 fi
 
+# A port that is both would cut the Host Services off from each other on
+# the gateway (HI-064 below) as well as open a control port to guests.
+for p in ${service_ports//,/ }; do
+  case ",$control_ports," in *",$p,"*) bad "port $p is both a Host Service port and a control port" ;; esac
+done
+
+#= docs/requirements/11-host-image.md#image-networking
+#/ The Host Image SHALL drop traffic from the user ids that run the
+#/ Host Services, which it reads from the Host configuration file with
+#/ defaults when none are set
+# A comma-separated list of user ids and ranges LOW-HIGH. Root is never a
+# Host Service, and the Pod Provider's id is not one either: dropping its
+# traffic would cut it off from flintlockd. The entries may not overlap, so
+# that nftables takes the list as one set.
+service_uids=${CONF[HOST_SERVICE_UIDS]// /}
+[ -n "$service_uids" ] || bad "HOST_SERVICE_UIDS is empty"
+[[ $service_uids =~ ^[0-9]{1,10}(-[0-9]{1,10})?(,[0-9]{1,10}(-[0-9]{1,10})?)*$ ]] ||
+  bad "HOST_SERVICE_UIDS is not a comma-separated list of user ids and ranges LOW-HIGH"
+uids=()
+lows=()
+highs=()
+for u in ${service_uids//,/ }; do
+  lo=$((10#${u%-*}))
+  hi=$((10#${u#*-}))
+  if [ "$lo" -lt 1 ] || [ "$hi" -gt 4294967294 ] || [ "$lo" -gt "$hi" ]; then
+    bad "HOST_SERVICE_UIDS entry $u is not a user id or range from 1 to 4294967294"
+  fi
+  if [ "$lo" -le "$((10#$provider_uid))" ] && [ "$((10#$provider_uid))" -le "$hi" ]; then
+    bad "HOST_SERVICE_UIDS entry $u holds the Pod Provider's user id $((10#$provider_uid))"
+  fi
+  for i in "${!lows[@]}"; do
+    if [ "$lo" -le "${highs[$i]}" ] && [ "${lows[$i]}" -le "$hi" ]; then bad "HOST_SERVICE_UIDS entry $u overlaps another"; fi
+  done
+  lows+=("$lo")
+  highs+=("$hi")
+  if [ "$lo" = "$hi" ]; then uids+=("$lo"); else uids+=("$lo-$hi"); fi
+done
+service_uids=$(
+  IFS=,
+  echo "${uids[*]}"
+)
+
 # The addressing of internal/fleet/scripts/data.go: the gateway is the first
 # address, DHCP hands out the rest, leaving the first ten of a subnet larger
 # than /26 for static use.
@@ -128,8 +170,19 @@ FLR_HOST_SERVICE_PORTS=$service_ports
 FLR_HOST_CONTROL_PORTS=$control_ports
 FLR_CACHE_VOLUME_PERCENT=$((10#$cache_percent))
 FLR_POD_PROVIDER_UID=$((10#$provider_uid))
+FLR_HOST_SERVICE_UIDS=$service_uids
 EOF
 chmod 0644 "$tmp"
+#= docs/requirements/11-host-image.md#kernel-and-kvm
+#/ The Host Image SHALL label the Host environment file and the
+#/ not ready reason directory it writes under `/run/flr` so that the Host
+#/ Agent's containers can read them
+# The render init container reads this file. A rename keeps the label of
+# the file renamed, and mktemp's file in /run/flr would be flr_run_t, so the
+# file gets the Host environment file's label (selinux/flr.fc names the
+# temporary names too) before it takes its place: there is never a host.env
+# the Host Agent cannot read.
+relabel "$tmp" || refuse "cannot label $FLR_HOST_ENV for the Host Agent"
 mv -f "$tmp" "$FLR_HOST_ENV"
 ready
 log "guest subnet $(int_to_ip4 "$base")/$prefix, gateway $gateway, thin pool device ${device:-auto-detect}"
