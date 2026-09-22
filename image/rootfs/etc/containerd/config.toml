@@ -31,9 +31,9 @@ state = "/run/containerd"
   [plugins."io.containerd.grpc.v1.cri"]
     #= docs/requirements/11-host-image.md#kernel-and-kvm
     #/ The Host Image SHALL configure the container runtime interface
-    #/ of containerd to run every container of a Kubernetes pod under SELinux
-    #/ confinement, in the container domain the base image's policy assigns,
-    #/ rather than unconfined.
+    #/ of containerd to run every unprivileged container of a Kubernetes pod under
+    #/ SELinux confinement, in the container domain the base image's policy
+    #/ assigns or the one the pod names, rather than unconfined.
     # PluginConfig.EnableSelinux of containerd v1.7's CRI plugin, false by
     # default, when containerd disables go-selinux for the CRI plugin and no
     # pod gets a label. With it the CRI plugin labels each pod from the

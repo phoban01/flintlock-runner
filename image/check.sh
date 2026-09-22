@@ -289,9 +289,9 @@ expect "container-selinux is installed" rpm -q container-selinux
 #= docs/requirements/11-host-image.md#kernel-and-kvm
 #= type=test
 #/ The Host Image SHALL configure the container runtime interface
-#/ of containerd to run every container of a Kubernetes pod under SELinux
-#/ confinement, in the container domain the base image's policy assigns,
-#/ rather than unconfined.
+#/ of containerd to run every unprivileged container of a Kubernetes pod under
+#/ SELinux confinement, in the container domain the base image's policy
+#/ assigns or the one the pod names, rather than unconfined.
 # The effective value, as the pinned containerd reads its configuration:
 # `config dump` merges the file over the defaults without starting the
 # daemon. Where it cannot run, the file itself is read.
