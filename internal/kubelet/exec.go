@@ -176,9 +176,10 @@ func requireClientCertificate(next http.Handler) http.Handler {
 }
 
 // kubeletHandler is the kubelet API: virtual kubelet's pod routes over the
-// provider, behind the client certificate check.
-func (p *Provider) kubeletHandler(pods corev1listers.PodLister) http.Handler {
-	return requireClientCertificate(api.PodHandler(api.PodHandlerConfig{
+// provider, behind the client certificate check (KF-031) and then the
+// authorization of the certificate's identity (KF-130).
+func (p *Provider) kubeletHandler(pods corev1listers.PodLister, authz *authorizer) http.Handler {
+	return requireClientCertificate(authz.wrap(api.PodHandler(api.PodHandlerConfig{
 		RunInContainer:    p.RunInContainer,
 		AttachToContainer: p.AttachToContainer,
 		GetContainerLogs:  p.GetContainerLogs,
@@ -191,5 +192,5 @@ func (p *Provider) kubeletHandler(pods corev1listers.PodLister) http.Handler {
 		GetMetricsResource:    p.GetMetricsResource,
 		StreamIdleTimeout:     streamIdleTimeout,
 		StreamCreationTimeout: streamCreationTimeout,
-	}, false))
+	}, false)))
 }

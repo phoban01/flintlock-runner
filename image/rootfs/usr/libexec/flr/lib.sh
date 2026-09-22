@@ -23,6 +23,10 @@ FLR_VG=flintlock
 FLR_CACHE_DIR=/var/lib/flintlock-runner/cache
 FLR_METADATA_V4=169.254.169.254
 FLR_METADATA_V6=fd00:ec2::254
+# flintlockd's local endpoint, as flintlockd.service passes it to
+# --grpc-endpoint (HI-042).
+FLR_FLINTLOCKD_ADDR=127.0.0.1
+FLR_FLINTLOCKD_PORT=9090
 
 log() { printf '%s: %s\n' "$FLR_UNIT" "$*" >&2; }
 die() {

@@ -68,6 +68,13 @@ func runKubelet(c *cli.Context) error {
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
+	// The admission policy tells Hosts apart by the node in the provider's
+	// identity (KF-133, KF-134); without it every change would be refused,
+	// so a provider that does not carry its Host does not start.
+	if err := kubelet.CheckIdentity(ctx, kube, cfg.HostNode); err != nil {
+		return cli.NewExitError(err.Error(), 1)
+	}
+
 	host, err := kubelet.DialLocal(ctx, cfg.HostNode, cfg.Flintlockd)
 	if err != nil {
 		return cli.NewExitError(err.Error(), 1)

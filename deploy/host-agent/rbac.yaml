@@ -14,6 +14,11 @@
 # gets ConfigMaps only by the name a bound pod gives, and creates, reads and
 # deletes only the guard pod and budget named after its Host. There is no rule
 # for Secrets, Services, or for listing or watching ConfigMaps.
+#
+# For Nodes and pods, admission-policy.yaml beside this file moves that
+# narrowing into the API server: it refuses a Pod Provider's change to any
+# Node or pod but its own Host's (KF-133), so a compromised Host cannot use
+# these cluster-wide rules on another Host's objects.
 
 #= docs/requirements/12-cluster-fleet.md#cluster-least-privilege
 #/ The Pod Provider SHALL operate with permissions limited to its
@@ -53,6 +58,14 @@ rules:
   - apiGroups: [""]
     resources: ["events"]
     verbs: ["create", "patch"]
+  #= docs/requirements/12-cluster-fleet.md#cluster-hardening
+  #/ The Fleet Manifests SHALL grant the Pod Provider permission to
+  #/ create SubjectAccessReviews in addition to the permissions of KF-111.
+  # Every kubelet API request is authorized with one (KF-130). A review
+  # answers a question and changes nothing.
+  - apiGroups: ["authorization.k8s.io"]
+    resources: ["subjectaccessreviews"]
+    verbs: ["create"]
 ---
 # The Virtual Node's lease.
 apiVersion: rbac.authorization.k8s.io/v1

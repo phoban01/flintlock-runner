@@ -191,7 +191,7 @@ func Run(ctx context.Context, opts Options) error {
 	}
 
 	server := &http.Server{
-		Handler:           provider.kubeletHandler(podInformer.Lister()),
+		Handler:           provider.kubeletHandler(podInformer.Lister(), newAuthorizer(opts.Kube.AuthorizationV1().SubjectAccessReviews(), vnode.Name, log, clk)),
 		TLSConfig:         tlsConfig,
 		ReadHeaderTimeout: readHeaderTimeout,
 	}

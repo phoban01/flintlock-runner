@@ -11,7 +11,7 @@ FLR_UNIT=flr-host-config
 #/ configuration file that cloud-init writes at first boot, containing the
 #/ guest subnet, the thin pool device, the protected CIDRs and the Host
 #/ reserve.
-KEYS="GUEST_SUBNET THIN_POOL_DEVICE PROTECTED_CIDRS HOST_RESERVE_VCPU HOST_RESERVE_MEMORY_MB HOST_SERVICE_PORTS HOST_CONTROL_PORTS CACHE_VOLUME_PERCENT"
+KEYS="GUEST_SUBNET THIN_POOL_DEVICE PROTECTED_CIDRS HOST_RESERVE_VCPU HOST_RESERVE_MEMORY_MB HOST_SERVICE_PORTS HOST_CONTROL_PORTS CACHE_VOLUME_PERCENT POD_PROVIDER_UID"
 declare -A CONF=()
 
 #= docs/requirements/11-host-image.md#host-configuration
@@ -88,6 +88,18 @@ valid_ports "$control_ports" || bad "HOST_CONTROL_PORTS is not a comma-separated
 cache_percent=${CONF[CACHE_VOLUME_PERCENT]}
 if ! is_uint "$cache_percent" || [ "$cache_percent" -gt 50 ]; then bad "CACHE_VOLUME_PERCENT is not a whole number up to 50"; fi
 
+#= docs/requirements/11-host-image.md#image-flintlockd
+#/ The Host Image SHALL admit connections to the local
+#/ `flintlockd` endpoint only from the Pod Provider's user id, which it reads
+#/ from the Host configuration file with a default when none is set
+# The one user id the guest firewall lets reach flintlockd. Root is refused
+# like any other user, so 0 is not a Pod Provider user id, and neither is
+# 4294967295, which is no user at all.
+provider_uid=${CONF[POD_PROVIDER_UID]}
+if ! [[ $provider_uid =~ ^[0-9]{1,10}$ ]] || [ "$((10#$provider_uid))" -lt 1 ] || [ "$((10#$provider_uid))" -gt 4294967294 ]; then
+  bad "POD_PROVIDER_UID is not a user id from 1 to 4294967294"
+fi
+
 # The addressing of internal/fleet/scripts/data.go: the gateway is the first
 # address, DHCP hands out the rest, leaving the first ten of a subnet larger
 # than /26 for static use.
@@ -115,6 +127,7 @@ FLR_HOST_RESERVE_MEMORY_MB=$((10#${CONF[HOST_RESERVE_MEMORY_MB]}))
 FLR_HOST_SERVICE_PORTS=$service_ports
 FLR_HOST_CONTROL_PORTS=$control_ports
 FLR_CACHE_VOLUME_PERCENT=$((10#$cache_percent))
+FLR_POD_PROVIDER_UID=$((10#$provider_uid))
 EOF
 chmod 0644 "$tmp"
 mv -f "$tmp" "$FLR_HOST_ENV"

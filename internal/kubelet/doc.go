@@ -12,6 +12,12 @@
 //     and lease expiry (KF-020 to KF-029, KF-032).
 //   - exec.go: the kubelet API, served over mutual TLS, with the pod exec
 //     endpoint relayed to MicroVMExec (KF-030, KF-031).
+//   - authz.go: every kubelet API request authorized with a
+//     SubjectAccessReview of the client certificate's identity (KF-130,
+//     KF-131).
+//   - identity.go: the check, at start, that the provider's own identity
+//     names its Host, which the admission policy of
+//     deploy/host-agent/admission-policy.yaml relies on (KF-133, KF-134).
 //   - drain.go: the Virtual Node following its Host's Node through a drain,
 //     held open by a guard pod while Jobs run (KF-090 to KF-094).
 //   - flintlockd.go: the connection to the local flintlockd, refused for any

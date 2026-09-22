@@ -47,18 +47,22 @@ import (
 const (
 	agentNamespace = kubelettest.AgentNamespace
 	rbacManifest   = "../../deploy/host-agent/rbac.yaml"
+	// policyManifest is loaded as well, so that every scenario runs the
+	// provider under the admission policy it ships with (KF-133).
+	policyManifest = "../../deploy/host-agent/admission-policy.yaml"
 	waitTimeout    = 30 * time.Second
 	hostAddress    = "10.1.2.3"
 	guestAddress   = "10.200.0.7"
 )
 
 // suite is the shared API server, nil when there is none. Its admin client
-// plays the scheduler, the Runner, the Host's kubelet and the operator; its
-// agent client is the provider's, holding exactly the shipped RBAC.
+// plays the scheduler, the Runner, the Host's kubelet and the operator; each
+// fixture's provider runs as suite.AgentFor its Host, holding exactly the
+// shipped RBAC and subject to the shipped admission policy.
 var suite *kubelettest.Environment
 
 func TestMain(m *testing.M) {
-	env, err := kubelettest.Start(rbacManifest)
+	env, err := kubelettest.Start(rbacManifest, kubelettest.WithAdmissionPolicy(policyManifest))
 	switch {
 	case errors.Is(err, kubelettest.ErrNoAssets):
 		// Every scenario skips.
@@ -183,12 +187,16 @@ func (f *fixture) start() {
 		f.t.Fatal(err)
 	}
 	f.addr = listener.Addr().String()
+	agent, err := suite.AgentFor(f.hostNode)
+	if err != nil {
+		f.t.Fatal(err)
+	}
 	ctx, cancel := context.WithCancel(context.Background())
 	ready := make(chan struct{})
 	f.cancel, f.done = cancel, make(chan error, 1)
 	go func() {
 		f.done <- Run(ctx, Options{
-			Config: f.cfg, Kube: suite.Agent, Host: f.host, Version: "test", Listener: listener, Ready: ready,
+			Config: f.cfg, Kube: agent, Host: f.host, Version: "test", Listener: listener, Ready: ready,
 			Logger: slog.New(slog.NewTextHandler(f.logs, &slog.HandlerOptions{Level: slog.LevelDebug})),
 		})
 	}()
