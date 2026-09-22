@@ -17,7 +17,8 @@ fail() {
   failed=1
 }
 
-scripts=(image/check.sh image/check-thin-pool.sh image/check-flintlockd-access.sh image/check-labels.sh image/lint.sh image/publish-ami.sh
+scripts=(image/check.sh image/check-thin-pool.sh image/check-flintlockd-access.sh image/check-host-service-egress.sh
+  image/check-selinux-contexts.sh image/check-labels.sh image/lint.sh image/publish-ami.sh
   image/build/*.sh image/rootfs/usr/libexec/flr/*)
 for s in "${scripts[@]}"; do
   bash -n "$s" || fail "bash -n $s"
@@ -95,6 +96,38 @@ if image/check-flintlockd-access.sh "$tmp" image/rootfs/usr/libexec/flr image/ro
   echo "ok    flintlockd access cases"
 else
   fail "flintlockd access cases"
+fi
+
+#= docs/requirements/11-host-image.md#image-networking
+#= type=test
+#/ The Host Image SHALL drop traffic from the user ids that run the
+#/ Host Services, which it reads from the Host configuration file with
+#/ defaults when none are set, to the instance metadata service address and
+#/ to the Host's own kubelet, Pod Provider, `flintlockd` and metrics ports.
+# The check stage's cases against the sources. Where this machine has nft
+# and unprivileged user and network namespaces they also load the rules and
+# show what the kernel drops and lets through.
+if image/check-host-service-egress.sh "$tmp" image/rootfs/usr/libexec/flr image/rootfs/usr/share/flr/host.conf.defaults; then
+  echo "ok    Host Service egress cases"
+else
+  fail "Host Service egress cases"
+fi
+
+#= docs/requirements/11-host-image.md#kernel-and-kvm
+#= type=test
+#/ The Host Image SHALL label the Host environment file and the
+#/ not ready reason directory it writes under `/run/flr` so that the Host
+#/ Agent's containers can read them, and the Host Service cache directory so
+#/ that they can write it, under the base image's SELinux policy and without
+#/ changing the domain of any container or the label of any other path.
+# The check stage's cases against the sources, and the module's rules. The
+# labels themselves are looked up in the check stage, where the module is
+# installed into the base image's policy.
+if image/check-selinux-contexts.sh "$tmp" image/rootfs/usr/libexec/flr image/selinux image/rootfs/usr/lib/tmpfiles.d/flr.conf \
+  image/rootfs/usr/share/flr/host.conf.defaults; then
+  echo "ok    SELinux context cases"
+else
+  fail "SELinux context cases"
 fi
 
 #= docs/requirements/11-host-image.md#image-build

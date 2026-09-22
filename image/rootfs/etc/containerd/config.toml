@@ -29,6 +29,20 @@ state = "/run/containerd"
   # The kubelet's pods stay on overlayfs and use the systemd cgroup driver,
   # which is kubeadm's default for the kubelet.
   [plugins."io.containerd.grpc.v1.cri"]
+    #= docs/requirements/11-host-image.md#kernel-and-kvm
+    #/ The Host Image SHALL configure the container runtime interface
+    #/ of containerd to run every unprivileged container of a Kubernetes pod under
+    #/ SELinux confinement, in the container domain the base image's policy
+    #/ assigns or the one the pod names, rather than unconfined.
+    # PluginConfig.EnableSelinux of containerd v1.7's CRI plugin, false by
+    # default, when containerd disables go-selinux for the CRI plugin and no
+    # pod gets a label. With it the CRI plugin labels each pod from the
+    # policy's container contexts (lxc_contexts): container_t with categories
+    # of the pod's own, or what the pod's seLinuxOptions ask for. It is
+    # the CRI plugin's alone: flintlockd uses containerd for images,
+    # snapshots and leases and starts Firecracker and Cloud Hypervisor
+    # itself, so the MicroVMs are untouched.
+    enable_selinux = true
     [plugins."io.containerd.grpc.v1.cri".containerd]
       snapshotter = "overlayfs"
       [plugins."io.containerd.grpc.v1.cri".containerd.runtimes.runc]

@@ -50,3 +50,17 @@ CACHE_VOLUME_PERCENT=15
 # the Pod Provider as this id and nothing else of the Host Agent as it
 # (KF-135); change both together.
 POD_PROVIDER_UID=10250
+
+#= docs/requirements/11-host-image.md#image-networking
+#/ The Host Image SHALL drop traffic from the user ids that run the
+#/ Host Services, which it reads from the Host configuration file with
+#/ defaults when none are set
+# The user ids the Host Services run as, which may reach neither the
+# instance metadata service nor the Host's control ports and flintlockd.
+# Comma-separated ids and ranges LOW-HIGH, never 0 and never the Pod
+# Provider's. The Fleet Manifests run nginx as 101, buildkitd as 1000,
+# Athens as 10001 and zot as 10002 (`make manifests-check` compares them
+# with this line); 100000-165535 are the subordinate ids of the buildkit
+# image's user, which a build step run as any user but root has. Change
+# both together.
+HOST_SERVICE_UIDS=101,1000,10001,10002,100000-165535

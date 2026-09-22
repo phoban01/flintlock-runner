@@ -29,6 +29,24 @@ FLR_FLINTLOCKD_ADDR=127.0.0.1
 FLR_FLINTLOCKD_PORT=9090
 
 log() { printf '%s: %s\n' "$FLR_UNIT" "$*" >&2; }
+
+#= docs/requirements/11-host-image.md#kernel-and-kvm
+#/ The Host Image SHALL label the Host environment file and the
+#/ not ready reason directory it writes under `/run/flr` so that the Host
+#/ Agent's containers can read them, and the Host Service cache directory so
+#/ that they can write it
+# relabel PATH... gives each PATH the label the policy's file contexts name
+# for it (selinux/flr.fc), where SELinux is enabled, and does nothing where
+# it is not: the build's check stage and `make image-lint`. -F sets the
+# whole context, level included, which restorecon otherwise leaves alone on
+# the container types; it never recurses.
+relabel() {
+  if [ -n "${FLR_RELABEL:-}" ]; then
+    "$FLR_RELABEL" "$@"
+  elif command -v selinuxenabled >/dev/null 2>&1 && selinuxenabled; then
+    restorecon -F "$@"
+  fi
+}
 die() {
   log "error: $*"
   exit 1
@@ -40,10 +58,16 @@ die() {
 # Node's not ready message (KF-016).
 not_ready() {
   local tmp
-  mkdir -p "$FLR_NOT_READY_DIR"
+  if [ ! -d "$FLR_NOT_READY_DIR" ]; then
+    mkdir -p "$FLR_NOT_READY_DIR"
+    relabel "$FLR_NOT_READY_DIR" || log "warning: could not label $FLR_NOT_READY_DIR for the Host Agent"
+  fi
   tmp=$(mktemp "$FLR_NOT_READY_DIR/.$FLR_UNIT.XXXXXX")
   printf '%s\n' "$(printf '%s' "$*" | tr '\n' ' ')" >"$tmp"
   chmod 0644 "$tmp"
+  # A rename keeps the label of the file renamed, so the reason is labelled
+  # for the Pod Provider before it takes its name (HI-065).
+  relabel "$tmp" || log "warning: could not label the reason for the Host Agent"
   mv -f "$tmp" "$FLR_NOT_READY_DIR/$FLR_UNIT"
   log "not ready: $*"
 }
