@@ -22,6 +22,9 @@
 #                                        the Host Services, each its own
 #                                        subdirectory
 #
+# The Host Image labels all three for the container domain (HI-065): the
+# first two container_ro_file_t, the cache container_file_t, at s0.
+#
 # flintlockd is reached on its loopback endpoint through the Host's network
 # namespace, which takes no mount and no capability.
 apiVersion: apps/v1
@@ -75,6 +78,18 @@ spec:
         runAsNonRoot: true
         seccompProfile:
           type: RuntimeDefault
+        # SELinux (HI-065). The containers keep the ordinary container
+        # domain, container_t; only the MCS level is fixed. A pod otherwise
+        # gets two random categories each time it starts, and what the Host
+        # Services write into the cache directory carries them, so the next
+        # Host Agent pod, with other categories, could neither read its
+        # predecessor's caches nor hand them over in prepare-cache. With a
+        # fixed pair every Host Agent pod reads what the last one wrote,
+        # and a pod with random categories still cannot. The Host Image
+        # labels the host paths below at s0, which every level dominates;
+        # see "SELinux" in image/README.md.
+        seLinuxOptions:
+          level: "s0:c311,c827"
       initContainers:
         # Renders the Pod Provider's and the Host Services' configuration for
         # this Host, bridge gateway address included (render.sh).
