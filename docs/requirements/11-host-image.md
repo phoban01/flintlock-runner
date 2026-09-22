@@ -53,12 +53,27 @@ operator creates once.
 - **HI-013** Where a component cannot run under the base image's SELinux
   policy, the Host Image SHALL ship a policy module that relaxes confinement
   for that component's domain only.
+- **HI-065** The Host Image SHALL label the Host environment file and the
+  not ready reason directory it writes under `/run/flr` so that the Host
+  Agent's containers can read them, and the Host Service cache directory so
+  that they can write it, under the base image's SELinux policy and without
+  changing the domain of any container or the label of any other path.
 
 HI-011 is the successor of FL-117: whether an instance can run MicroVMs is
 still decided on the host, but by a unit at boot rather than by a remote
 command. The SELinux requirements exist because the quick fix, setting the
 whole host permissive, removes a layer of isolation between jobs' Firecracker
 processes and the Host, which is the layer this project is built on.
+
+HI-065 exists because the Host Agent's containers run in the ordinary
+container domain, which may read and write only files labelled for
+containers: without it the Host Agent cannot read the bridge gateway the
+Host Image writes at boot, nor keep its caches, and fails on every enforcing
+Host, and the Pod Provider cannot read the not ready reasons of HI-011 and
+HI-022, which it treats as not ready, so no Virtual Node would ever become
+ready. Labelling those paths for containers is the narrow fix. Running
+the Host Agent as a super-privileged container would work too, and would
+remove SELinux from between the Host Services and the Host entirely.
 
 ## Storage {#image-storage}
 
@@ -105,12 +120,24 @@ cold. HI-023 restates the fix of pull request #43 as a requirement.
 - **HI-037** The Host Image SHALL use a default guest subnet that the Host
   configuration file can override, so that it can be kept clear of the
   cluster's node, pod and service ranges.
+- **HI-064** The Host Image SHALL drop traffic from the user ids that run the
+  Host Services, which it reads from the Host configuration file with
+  defaults when none are set, to the instance metadata service address and
+  to the Host's own kubelet, Pod Provider, `flintlockd` and metrics ports.
 
 FL-046 dropped guest traffic to the addresses of the other Hosts in the
 Inventory, which the Fleet Controller knew because it wrote the Inventory.
 A Host that configures itself at boot does not know its peers, so HI-035
 takes ranges instead: the operator lists the node and pod CIDRs of the
 cluster, and anything else a job has no business reaching.
+
+HI-064 carries SE-030 and SE-031 over to the Host Services. In a cluster
+fleet they run in the Host's own network namespace, so the guest-subnet rules
+above do not apply to them, and `buildkitd` runs the `RUN` steps of every
+Job's image builds as its own user. Those steps must not reach the metadata
+service or the Host's control ports any more than the Job's MicroVM may. The
+user ids are the ones the Fleet Manifests run the Host Services as, and the
+two have to agree, as the Pod Provider's user id of HI-063 does.
 
 ## flintlockd {#image-flintlockd}
 

@@ -41,6 +41,13 @@ cluster. The table at the end maps each of them to its counterpart here.
   Host pool that replaces a Machine whose Node stays not ready beyond the
   configured interval.
 
+A known gap: the MachineHealthCheck of KF-005 watches the Host's own Node,
+and a Host that cannot run MicroVMs, for want of KVM (HI-011) or of a thin
+pool device (HI-022), reports that on its Virtual Node instead (KF-016). Such
+a Host stays in the pool, advertising no ready capacity, until an operator
+replaces it. Closing the gap needs the Pod Provider to set a condition on
+the Host's Node, which KF-133 forbids today.
+
 One instance type per pool keeps capacity arithmetic trivial today and is
 what a snapshot compatibility class will need later. The number of Hosts is
 the replica count of the MachineDeployment. Because MicroVMs are now pods
@@ -342,6 +349,9 @@ would need credentials for it.
 - **KF-135** The Fleet Manifests SHALL run the Pod Provider's container as
   the user id that HI-063 admits to the local `flintlockd` endpoint, and
   SHALL run no other container of the Host Agent as that user id.
+- **KF-138** The Fleet Manifests SHALL extend the policy of KF-133 to the
+  node Leases in `kube-node-lease`, so that a Pod Provider can create, update
+  or delete only the Lease of its own Virtual Node.
 
 KF-031 checks who a client is; KF-130 checks what that client may do, as a
 real kubelet does. Without it any certificate from the kubelet client
@@ -356,7 +366,10 @@ bound ServiceAccount token, whose user information carries the name of the
 node the Host Agent pod runs on
 (`authentication.kubernetes.io/node-name`), compared in the policy with the
 object's node; the Virtual Node's name is that node's name with the
-`-microvms` suffix of KF-010.
+`-microvms` suffix of KF-010. KF-138 closes the same door on the node Leases
+the Pod Providers renew: a Host that could delete or stop renewing another
+Host's Lease would make that Virtual Node unready, and the cluster would
+then evict the Jobs running on it.
 
 KF-135 and HI-063 close the last way round KF-031: `flintlockd` has no
 authentication of its own, and a loopback listener is reachable by every
@@ -402,15 +415,25 @@ the Host, so it is not the threat this addresses.
   SHALL contain nothing but the `flr` binary, certificate authority
   certificates and time zone data.
 - **KF-142** The Release SHALL publish the Host Image to the project's
-  container registry, tagged with the release version and with the
-  Kubernetes version it carries.
-- **KF-143** The Release SHALL publish the Fleet Manifests as one release
-  asset in which every container image of this project is referenced by
-  digest.
+  container registry, tagged with the release version and with the release
+  version joined to the Kubernetes version it carries.
+- **KF-143** The Release SHALL publish the Fleet Manifests as two release
+  assets, one for the workload cluster and one for the Cluster API objects
+  of the management cluster, in which every container image of this project
+  is referenced by digest.
 - **KF-144** The Fleet Manifests SHALL reference every third-party container
   image they use, including those of the Host Services, by digest.
 - **KF-145** The Release SHALL NOT publish a `latest` tag or any other tag
   that moves.
+
+The Host Image carries the Kubernetes version in a tag such as
+`1.1.0-k8s-v1.35.8` rather than a bare `v1.35.8`: the bare tag would point at
+a different image with every release, which KF-145 forbids, while the joined
+one names exactly one build. The Cluster API objects are a separate asset
+because they are applied to the management cluster, and the rest to the
+workload cluster the Hosts join. The registry's packages have to be public,
+or readable by both clusters, for a fleet to pull them; that is set once on
+the registry and is not something a release can check.
 
 A release candidate publishes images too, so that a candidate can be tried
 on a cluster before its version is released. The Release does not publish
