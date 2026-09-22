@@ -4,7 +4,8 @@
 # Lints the Host Image sources without building anything: `bash -n` and
 # the shellcheck tool over every script, with the settings internal/fleet/scripts
 # uses for the provisioning scripts; the digest pin and the versions file;
-# the thin-pool cases against stand-in tools; and `systemd-analyze verify`
+# the thin-pool cases against stand-in tools; the flintlockd access cases
+# (HI-063); and `systemd-analyze verify`
 # where it is installed. FLINTLOCK_RUNNER_REQUIRE_SHELLCHECK=1, which CI
 # sets, makes a missing shellcheck a failure instead of a skip.
 set -uo pipefail
@@ -16,7 +17,7 @@ fail() {
   failed=1
 }
 
-scripts=(image/check.sh image/check-thin-pool.sh image/check-labels.sh image/lint.sh image/publish-ami.sh
+scripts=(image/check.sh image/check-thin-pool.sh image/check-flintlockd-access.sh image/check-labels.sh image/lint.sh image/publish-ami.sh
   image/build/*.sh image/rootfs/usr/libexec/flr/*)
 for s in "${scripts[@]}"; do
   bash -n "$s" || fail "bash -n $s"
@@ -78,6 +79,22 @@ if image/check-thin-pool.sh "$tmp" image/rootfs/usr/libexec/flr/thin-pool image/
   echo "ok    thin-pool cases"
 else
   fail "thin-pool cases"
+fi
+
+#= docs/requirements/11-host-image.md#image-flintlockd
+#= type=test
+#/ The Host Image SHALL admit connections to the local
+#/ `flintlockd` endpoint only from the Pod Provider's user id, which it reads
+#/ from the Host configuration file with a default when none is set, and
+#/ SHALL refuse them from every other process on the Host.
+# The same cases the check stage runs in the image, here against the
+# sources, so that the rendered rule is checked without a build. Like the
+# check stage, this shows the rule and not the kernel enforcing it.
+if image/check-flintlockd-access.sh "$tmp" image/rootfs/usr/libexec/flr image/rootfs/usr/share/flr/host.conf.defaults \
+  image/rootfs/usr/lib/systemd/system/flintlockd.service; then
+  echo "ok    flintlockd access cases"
+else
+  fail "flintlockd access cases"
 fi
 
 #= docs/requirements/11-host-image.md#image-build

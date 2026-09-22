@@ -24,6 +24,16 @@ fi
 
 # The guest firewall. The tables are replaced as a whole, so loading the
 # file again leaves exactly one copy of each rule.
+#
+#= docs/requirements/11-host-image.md#image-flintlockd
+#/ The Host Image SHALL admit connections to the local
+#/ `flintlockd` endpoint only from the Pod Provider's user id, which it reads
+#/ from the Host configuration file with a default when none is set, and
+#/ SHALL refuse them from every other process on the Host.
+# That is the output chain below, over loopback, with the user id that
+# flr-host-config read into FLR_POD_PROVIDER_UID. It lives in this table
+# because it is loaded with it, but it concerns the Host's own processes,
+# not guests.
 render_firewall() {
   cat <<EOF
 table inet flr
@@ -75,6 +85,18 @@ $(if [ -n "$FLR_HOST_SERVICE_PORTS" ]; then
 		iifname "$bridge" oifname "$primary" accept
 		iifname "$primary" oifname "$bridge" ct state established,related accept
 		oifname "$bridge" drop
+	}
+
+	# Connections from the Host's own processes to flintlockd.
+	chain output {
+		type filter hook output priority filter - 10; policy accept;
+		# HI-063. Every packet a local socket sends to the flintlockd port over
+		# loopback, from any address to any address, is refused unless the
+		# socket belongs to the Pod Provider's user id: root included, and
+		# any pod in the Host's network namespace. The refusal is a reset,
+		# so a client fails at once rather than timing out. flintlockd's own
+		# replies go from that port, not to it, and pass.
+		oifname "lo" tcp dport $FLR_FLINTLOCKD_PORT meta skuid != $FLR_POD_PROVIDER_UID counter reject with tcp reset
 	}
 }
 
