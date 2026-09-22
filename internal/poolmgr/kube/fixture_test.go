@@ -236,6 +236,7 @@ func (f *fixture) backend(mutate ...func(*kube.Options, *rest.Config)) *kube.Bac
 		RunnerName:      runnerName,
 		Profiles:        []config.Profile{f.profile},
 		JobTimeout:      time.Hour,
+		CleanupMargin:   5 * time.Minute,
 		RolloutInterval: time.Minute,
 		Clock:           f.clock,
 		Log:             slog.New(slog.NewTextHandler(f.logs, &slog.HandlerOptions{Level: slog.LevelDebug})),

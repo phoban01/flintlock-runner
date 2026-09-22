@@ -39,6 +39,7 @@ const (
 	DefaultPoolManagerDeclareRetry             = 30 * time.Second
 	DefaultPoolManagerReleaseRetry             = 5
 	DefaultKubernetesJobTimeout                = 2 * time.Hour
+	DefaultKubernetesCleanupMargin             = 15 * time.Minute
 	DefaultKubernetesRolloutInterval           = 10 * time.Second
 	DefaultAllocationTimeout                   = 5 * time.Minute
 	DefaultHostHealthInterval                  = 10 * time.Second
@@ -286,6 +287,9 @@ func applyPoolManagerDefaults(pm *PoolManager) {
 	}
 	if pm.Kubernetes.JobTimeout == 0 {
 		pm.Kubernetes.JobTimeout = DefaultKubernetesJobTimeout
+	}
+	if pm.Kubernetes.CleanupMargin == 0 {
+		pm.Kubernetes.CleanupMargin = DefaultKubernetesCleanupMargin
 	}
 	if pm.Kubernetes.RolloutInterval == 0 {
 		pm.Kubernetes.RolloutInterval = DefaultKubernetesRolloutInterval

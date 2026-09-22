@@ -23,8 +23,9 @@
 // list of Host names instead, so the backend is given the Profiles and looks
 // one up by the Profile label of the spec's template (KF-041). And ClaimVM
 // has no Job, so the Job timeout that becomes the claimed pod's active
-// deadline is read from the claim's context (WithJobTimeout) and falls back
-// to the configured one (KF-044).
+// deadline, with a cleanup margin added, is read from the claim's context
+// (poolmgr.WithJobTimeout) and falls back to the configured one (KF-044,
+// KF-127).
 //
 // The permissions all of this needs are the Role in deploy/runner/role.yaml
 // (KF-110); permissions_test.go holds the code to it.

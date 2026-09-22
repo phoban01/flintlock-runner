@@ -41,6 +41,27 @@ func TestPrepareResolvesTheProfileForTheJob(t *testing.T) {
 	}
 }
 
+// TestPrepareGivesTheSchedulerTheJobTimeout checks that the Scheduler is
+// told the timeout gitlab-runner enforces on the Job, which becomes the
+// claimed pod's active deadline on the Kubernetes pool backend (KF-127).
+func TestPrepareGivesTheSchedulerTheJobTimeout(t *testing.T) {
+	t.Parallel()
+	f := newFixture(t)
+	job := testJob()
+	job.RunnerInfo.Timeout = 3 * 60 * 60
+	e, _, err := f.prepareOnly(context.Background(), job)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer e.Cleanup()
+	if len(f.sched.resolved) != 1 {
+		t.Fatalf("ResolveProfile called %d times", len(f.sched.resolved))
+	}
+	if got := f.sched.resolved[0].Timeout; got != 3*time.Hour {
+		t.Errorf("JobInfo.Timeout = %s, want the job's 3h", got)
+	}
+}
+
 //= docs/requirements/02-executor.md#prepare
 //= type=test
 //# If no Profile can be resolved for the Job, then the Executor

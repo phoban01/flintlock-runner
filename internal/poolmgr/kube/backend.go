@@ -26,6 +26,7 @@ const (
 	defaultCallDeadline    = 10 * time.Second
 	defaultLeaseExpiry     = config.DefaultHeartbeatExpiry
 	defaultJobTimeout      = config.DefaultKubernetesJobTimeout
+	defaultCleanupMargin   = config.DefaultKubernetesCleanupMargin
 	defaultRolloutInterval = config.DefaultKubernetesRolloutInterval
 	// informerResync is how often the informers replay their cache, which
 	// bounds how long a missed transition can stay missed.
@@ -51,8 +52,11 @@ type Options struct {
 	// cloud-init user data (KF-023).
 	CloudInitConfigMaps map[string]string
 	// JobTimeout is the active deadline of a claimed pod when the claim's
-	// context carries none (KF-044).
+	// context carries no Job timeout (KF-044, KF-127).
 	JobTimeout time.Duration
+	// CleanupMargin is added to the Job timeout a claim's context carries,
+	// so that the active deadline outlasts the Job (KF-127).
+	CleanupMargin time.Duration
 	// RolloutInterval is the least time between two deletions of idle pods
 	// of a previous template, per Pool (KF-050).
 	RolloutInterval time.Duration
@@ -68,6 +72,9 @@ type Options struct {
 func (o Options) withDefaults() Options {
 	if o.JobTimeout <= 0 {
 		o.JobTimeout = defaultJobTimeout
+	}
+	if o.CleanupMargin <= 0 {
+		o.CleanupMargin = defaultCleanupMargin
 	}
 	if o.RolloutInterval <= 0 {
 		o.RolloutInterval = defaultRolloutInterval
@@ -250,21 +257,20 @@ func profilesByName(profiles []config.Profile) map[string]config.Profile {
 	return out
 }
 
-// jobTimeoutKey is the context key of WithJobTimeout.
-type jobTimeoutKey struct{}
+//= docs/requirements/12-cluster-fleet.md#kube-allocation
+//# the backend SHALL set the
+//# active deadline of KF-044 to that timeout plus the configured cleanup
+//# margin, using its configured default only for a Job that has none.
 
-// WithJobTimeout returns a context that carries a Job's timeout to ClaimVM,
-// which becomes the claimed pod's active deadline (KF-044). poolmgr.Lease has
-// no parameter for it, because battery has no use for one.
-func WithJobTimeout(ctx context.Context, timeout time.Duration) context.Context {
-	return context.WithValue(ctx, jobTimeoutKey{}, timeout)
-}
-
-// jobTimeout is the timeout the claim's context carries, or the configured
-// one.
+// jobTimeout is the active deadline of a claim: the Job timeout the claim's
+// context carries (poolmgr.WithJobTimeout) plus the cleanup margin, or the
+// configured default for a claim that carries none. The margin is added
+// because the deadline must outlast the Job: the claim is made before the
+// Job's own clock starts, and a Job that times out still runs its
+// after_script and failure uploads in the same MicroVM.
 func (b *Backend) jobTimeout(ctx context.Context) time.Duration {
-	if d, ok := ctx.Value(jobTimeoutKey{}).(time.Duration); ok && d > 0 {
-		return d
+	if d, ok := poolmgr.JobTimeoutFrom(ctx); ok {
+		return d + b.opts.CleanupMargin
 	}
 	return b.opts.JobTimeout
 }
