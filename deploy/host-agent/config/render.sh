@@ -49,8 +49,9 @@ gateway=$(get "$host_env" FLR_GATEWAY)
 # Image admits to flintlockd (HI-063), which the Exec Agent has to run as.
 agent_uid=$(get "$host_env" FLR_POD_PROVIDER_UID)
 is_ipv4 "$gateway" || die "FLR_GATEWAY '$gateway' in $host_env is not an IPv4 address"
-is_uint "$agent_uid" && [ "$agent_uid" -gt 0 ] ||
+if ! is_uint "$agent_uid" || [ "$agent_uid" -eq 0 ]; then
   die "FLR_POD_PROVIDER_UID '$agent_uid' in $host_env is not a user id other than root"
+fi
 
 mkdir -p "$out"
 
@@ -72,8 +73,9 @@ if [ -r "$go_env" ]; then
       die "go-proxy.env: PRIVATE_PATTERNS '$go_private' is not a comma-separated list of module path patterns"
     echo "$go_vcs" | grep -Eq '^[A-Za-z0-9.-]+(:[0-9]+)?$' ||
       die "go-proxy.env: PRIVATE_PATTERNS need PRIVATE_VCS_HOST, a host name"
-    is_uint "$go_revalidate" && [ "$go_revalidate" -gt 0 ] ||
+    if ! is_uint "$go_revalidate" || [ "$go_revalidate" -eq 0 ]; then
       die "go-proxy.env: PRIVATE_REVALIDATE_SECONDS '$go_revalidate' is not a positive number of seconds"
+    fi
   fi
 fi
 
