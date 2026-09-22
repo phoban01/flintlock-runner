@@ -325,6 +325,9 @@ func (e *executor) guestTarget(a scheduler.Allocation) (transport.Target, error)
 		target.VMUID = a.Lease.ID
 		return target, nil
 	}
+	if target.Kind == transport.KindAgentExec {
+		return e.agentTarget(target, a)
+	}
 
 	client, done, err := e.p.deps.Hosts.Lease(a.Placement.Host)
 	if err != nil {
@@ -339,6 +342,30 @@ func (e *executor) guestTarget(a scheduler.Allocation) (transport.Target, error)
 		}
 		target.SSH = ssh
 	}
+	return target, nil
+}
+
+//= docs/requirements/12-cluster-fleet.md#agent-exec-transport
+//# Where the claim backend is configured, the Executor SHALL run
+//# each Stage through the Exec Agent of the Host named in the Job's claim,
+//# with the Stage script on standard input.
+
+// agentTarget is the target of agent-exec: the Exec Agent of the Host the
+// Job's claim names, at the address the claim gives for it, held for the
+// life of the Job. The Host Registry is not asked; in the claim design the
+// claim is the only thing that says where a MicroVM is (KF-151). The Stage
+// script goes on standard input as it does over exec (EX-044), because the
+// transport is the exec transport.
+func (e *executor) agentTarget(target transport.Target, a scheduler.Allocation) (transport.Target, error) {
+	if e.p.agents == nil {
+		return target, buildErr(common.ConfigurationError, "the agent-exec guest transport has no exec agent clients")
+	}
+	client, done, err := e.p.agents.Lease(a.Host.Name, a.Host.Address)
+	if err != nil {
+		return target, buildErr(common.RunnerSystemFailure, "exec agent of host %s: %w", a.Host.Name, err)
+	}
+	e.hostDone = done
+	target.Host, target.VMUID = client, a.VMUID
 	return target, nil
 }
 

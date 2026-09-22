@@ -68,8 +68,33 @@ const (
 const (
 	// AnnotationHostServicePrefix prefixes one annotation per enabled Host
 	// Service on a Virtual Node; the rest of the key is the service's name
-	// and the value its `address:port` (KF-017, KF-062).
+	// and the value its `address:port` (KF-017, KF-062). The Exec Agent
+	// publishes the same keys on its Host's own Node (KF-179), which is
+	// where the Executor of the claim design reads them (KF-189).
 	AnnotationHostServicePrefix = "host-service." + Prefix
+)
+
+// Host Node annotations the Exec Agent publishes (KF-178, KF-179, KF-181).
+// Each is under Prefix, which is all the admission policy of KF-180 lets
+// the Exec Agent change on its Host's Node.
+const (
+	// AnnotationExecAgentReady is "true" while the Exec Agent reports its
+	// Host ready and "false" otherwise (KF-178).
+	AnnotationExecAgentReady = Prefix + "exec-agent-ready"
+	// AnnotationExecAgentReason is the reason of the last readiness check,
+	// one word in the manner of a condition's reason.
+	AnnotationExecAgentReason = Prefix + "exec-agent-reason"
+	// AnnotationExecAgentMessage says in words what the last readiness
+	// check found.
+	AnnotationExecAgentMessage = Prefix + "exec-agent-message"
+	// AnnotationExecAgentAddress is the `address:port` the Exec Agent
+	// serves its exec API on (KF-172), for whatever tells battery where a
+	// Host's Exec Agent is (KF-151).
+	AnnotationExecAgentAddress = Prefix + "exec-agent-address"
+	// AnnotationDrainStarted is when the Exec Agent first saw its Host's
+	// Node unschedulable, so that a restart does not restart the drain
+	// timeout (KF-181).
+	AnnotationDrainStarted = Prefix + "drain-started"
 )
 
 // The Host Service names: the keys of the Runner's host_services section,

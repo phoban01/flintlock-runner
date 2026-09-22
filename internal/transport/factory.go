@@ -80,7 +80,9 @@ func (f *factory) New(ctx context.Context, target Target) (Transport, error) {
 	}
 
 	switch target.Kind {
-	case KindExec, "":
+	case KindExec, "", KindAgentExec:
+		// agent-exec is the exec transport over the Exec Agent's client,
+		// which answers ServerInfo for the Host behind it (KF-188).
 		if err := f.checkService(ctx, target, KindExec); err != nil {
 			return nil, err
 		}
@@ -91,8 +93,8 @@ func (f *factory) New(ctx context.Context, target Target) (Transport, error) {
 		}
 		return newSSHTransport(target, f.clk, f.log)
 	default:
-		return nil, fmt.Errorf("transport: unknown guest transport %q, expected %q, %q or %q",
-			target.Kind, KindExec, KindSSH, KindKubeExec)
+		return nil, fmt.Errorf("transport: unknown guest transport %q, expected %q, %q, %q or %q",
+			target.Kind, KindExec, KindSSH, KindKubeExec, KindAgentExec)
 	}
 }
 

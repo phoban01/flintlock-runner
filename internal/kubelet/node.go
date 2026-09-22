@@ -2,13 +2,9 @@ package kubelet
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"net"
-	"os"
-	"path/filepath"
 	"runtime"
-	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -19,6 +15,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	"github.com/phoban01/flintlock-runner/internal/flintlock"
+	"github.com/phoban01/flintlock-runner/internal/hostcheck"
 	"github.com/phoban01/flintlock-runner/internal/kubelabels"
 )
 
@@ -43,17 +40,10 @@ const (
 	reasonHostServiceDown    = "HostServiceUnreachable"
 )
 
-// hostServiceDialTimeout bounds one Host Service probe. The service is on
-// the Host's own bridge, so anything slower than this is not working.
-const hostServiceDialTimeout = time.Second
-
 // serverInfoTimeout bounds the ServerInfo call of one readiness check, so
 // that a flintlockd that accepts and never answers is not ready rather than
 // a check that never ends.
 const serverInfoTimeout = 5 * time.Second
-
-// maxReasonLength caps one not ready reason in the condition's message.
-const maxReasonLength = 256
 
 // VirtualNodeName is the name of the Virtual Node of a Host (KF-010).
 func VirtualNodeName(hostNode string) string { return hostNode + virtualNodeSuffix }
@@ -363,24 +353,10 @@ func checkReadiness(ctx context.Context, cfg *Config, host flintlock.HostClient)
 }
 
 // dialTCP succeeds when addr accepts a connection.
-func dialTCP(ctx context.Context, addr string) error {
-	ctx, cancel := context.WithTimeout(ctx, hostServiceDialTimeout)
-	defer cancel()
-	var d net.Dialer
-	conn, err := d.DialContext(ctx, "tcp", addr)
-	if err != nil {
-		return err
-	}
-	return conn.Close()
-}
+func dialTCP(ctx context.Context, addr string) error { return hostcheck.DialTCP(ctx, addr) }
 
 // NotReadyReason is one reason a unit of the Host Image reported.
-type NotReadyReason struct {
-	// Unit is the name of the file, by convention the reporting unit.
-	Unit string
-	// Reason is the first line of the file.
-	Reason string
-}
+type NotReadyReason = hostcheck.NotReadyReason
 
 // ReadNotReadyReasons reads the not-ready-reason contract between the Host
 // Image and the Pod Provider (KF-016, HI-011):
@@ -400,36 +376,8 @@ type NotReadyReason struct {
 //
 // A directory that exists and cannot be read is an error, which the caller
 // reports as not ready: the provider does not guess that a Host is fine.
+// The contract lives in hostcheck, which the Exec Agent reads it through
+// too.
 func ReadNotReadyReasons(dir string) ([]NotReadyReason, error) {
-	entries, err := os.ReadDir(dir)
-	if errors.Is(err, os.ErrNotExist) {
-		return nil, nil
-	}
-	if err != nil {
-		return nil, fmt.Errorf("reading the not ready reasons: %w", err)
-	}
-	var out []NotReadyReason
-	for _, entry := range entries {
-		if !entry.Type().IsRegular() || strings.HasPrefix(entry.Name(), ".") {
-			continue
-		}
-		data, err := os.ReadFile(filepath.Join(dir, entry.Name()))
-		if errors.Is(err, os.ErrNotExist) {
-			continue // removed between the listing and the read
-		}
-		if err != nil {
-			return nil, fmt.Errorf("reading the not ready reason of %s: %w", entry.Name(), err)
-		}
-		line, _, _ := strings.Cut(strings.TrimSpace(string(data)), "\n")
-		line = strings.TrimSpace(line)
-		if line == "" {
-			line = "not ready"
-		}
-		if len(line) > maxReasonLength {
-			line = line[:maxReasonLength]
-		}
-		out = append(out, NotReadyReason{Unit: entry.Name(), Reason: line})
-	}
-	sort.Slice(out, func(i, j int) bool { return out[i].Unit < out[j].Unit })
-	return out, nil
+	return hostcheck.ReadNotReadyReasons(dir)
 }

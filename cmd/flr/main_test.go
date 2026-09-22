@@ -60,6 +60,7 @@ func TestSubcommandsAreRegistered(t *testing.T) {
 		"config":  {"show"},
 		"fleet":   {"provision", "verify", "up", "drain", "teardown", "emit-userdata"},
 		"kubelet": nil,
+		"agent":   nil,
 	}
 	for _, c := range app.Commands {
 		subs, ok := want[c.Name]
