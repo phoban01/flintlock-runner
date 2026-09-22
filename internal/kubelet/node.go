@@ -106,7 +106,7 @@ func buildVirtualNode(cfg *Config, host *corev1.Node, kubeletPort int32, version
 			Phase:       corev1.NodeRunning,
 			Capacity:    capacity,
 			Allocatable: capacity.DeepCopy(),
-			Addresses:   virtualNodeAddresses(host, name),
+			Addresses:   virtualNodeAddresses(host),
 			DaemonEndpoints: corev1.NodeDaemonEndpoints{
 				KubeletEndpoint: corev1.DaemonEndpoint{Port: kubeletPort},
 			},
@@ -202,14 +202,16 @@ func subtract(total, reserve resource.Quantity) resource.Quantity {
 }
 
 // virtualNodeAddresses gives the Virtual Node the Host's internal address,
-// which is where the API server reaches the kubelet API for an exec, and its
-// own name as the hostname.
-func virtualNodeAddresses(host *corev1.Node, name string) []corev1.NodeAddress {
-	addrs := []corev1.NodeAddress{{Type: corev1.NodeHostName, Address: name}}
+// which is where the API server reaches the kubelet API for an exec, and
+// nothing else. In particular it has no hostname address: its name, the
+// Host's with a suffix, resolves nowhere, and an API server whose preferred
+// address types put Hostname first, as the default order does, would dial
+// that name for every exec and fail.
+func virtualNodeAddresses(host *corev1.Node) []corev1.NodeAddress {
 	if ip := hostInternalIP(host); ip != "" {
-		addrs = append(addrs, corev1.NodeAddress{Type: corev1.NodeInternalIP, Address: ip})
+		return []corev1.NodeAddress{{Type: corev1.NodeInternalIP, Address: ip}}
 	}
-	return addrs
+	return nil
 }
 
 // hostInternalIP is the Host's internal address (KF-025).

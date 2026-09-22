@@ -2,9 +2,13 @@ package config
 
 import (
 	"errors"
+	"reflect"
+	"sort"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/phoban01/flintlock-runner/internal/kubelabels"
 )
 
 // kubernetesConfig is testdata/minimal.yaml turned into the smallest
@@ -237,5 +241,26 @@ func TestKubernetesBackendRefusesAnInventory(t *testing.T) {
 	}
 	if errs := fieldErrors(t, cfg); !hasFieldError(errs, "inventory", "reaches no Host") {
 		t.Errorf("errors = %v, want the inventory refused", errs)
+	}
+}
+
+// TestHostServiceKeysAreTheCanonicalNames checks that the keys of the
+// host_services section are the Host Service names of kubelabels, which the
+// Pod Provider publishes under and the Executor reads a Virtual Node by
+// (KF-017, KF-062): a key renamed here without them would leave a cluster
+// fleet's Jobs without that service.
+func TestHostServiceKeysAreTheCanonicalNames(t *testing.T) {
+	t.Parallel()
+	var keys []string
+	typ := reflect.TypeFor[HostServices]()
+	for i := range typ.NumField() {
+		key, _, _ := strings.Cut(typ.Field(i).Tag.Get("yaml"), ",")
+		if key != "cache_volume" {
+			keys = append(keys, key)
+		}
+	}
+	sort.Strings(keys)
+	if want := kubelabels.HostServiceNames(); !reflect.DeepEqual(keys, want) {
+		t.Errorf("host_services keys = %v, want the canonical names %v", keys, want)
 	}
 }
