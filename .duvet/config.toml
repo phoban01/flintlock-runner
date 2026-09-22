@@ -66,6 +66,21 @@ comment-style = { meta = "#=", content = "#/" }
 pattern = "deploy/**/*.yaml"
 comment-style = { meta = "#=", content = "#/" }
 
+# The Release (12-cluster-fleet.md#cluster-release): the goreleaser
+# configuration and the release scripts beside the flr image's Containerfile.
+# Only the scripts and the Containerfile, not the testdata.
+[[source]]
+pattern = ".goreleaser.yaml"
+comment-style = { meta = "#=", content = "#/" }
+
+[[source]]
+pattern = "hack/release/*.sh"
+comment-style = { meta = "#=", content = "#/" }
+
+[[source]]
+pattern = "hack/release/*.Containerfile"
+comment-style = { meta = "#=", content = "#/" }
+
 [[specification]]
 source = "docs/requirements/01-gitlab-protocol.md"
 format = "markdown"

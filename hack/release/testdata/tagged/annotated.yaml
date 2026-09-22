@@ -1,0 +1,16 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: flr
+  annotations:
+    gitlab-runner.flintlock.dev/host-image: ghcr.io/phoban01/flintlock-runner/host:dev
+spec:
+  selector:
+    matchLabels: {app: flr}
+  template:
+    metadata:
+      labels: {app: flr}
+    spec:
+      containers:
+        - name: flr
+          image: ghcr.io/phoban01/flintlock-runner/flr:dev

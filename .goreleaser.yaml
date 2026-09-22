@@ -53,6 +53,44 @@ archives:
       - LICENSE
       - README.md
 
+# The container image of flr, for a cluster fleet's Runner and Host Agent.
+# It is built from the flr binaries above, the very ones the runner archives
+# ship, with buildx for both Linux platforms into one multi-platform index.
+# hack/release/flr.Containerfile says what is in it.
+dockers_v2:
+  #= docs/requirements/12-cluster-fleet.md#cluster-release
+  #/ The Release SHALL publish a container image of `flr` for
+  #/ `linux/amd64` and `linux/arm64` to the project's container registry,
+  #/ tagged with the release version.
+  - id: flr
+    ids: [flr]
+    dockerfile: hack/release/flr.Containerfile
+    images:
+      - ghcr.io/phoban01/flintlock-runner/flr
+    platforms:
+      - linux/amd64
+      - linux/arm64
+    #= docs/requirements/12-cluster-fleet.md#cluster-release
+    #/ The Release SHALL NOT publish a `latest` tag or any other tag
+    #/ that moves.
+    # Exactly one tag, the version without its v (1.2.3-rc.1). Never latest,
+    # never 1 or 1.2: a reference to this image names one build forever.
+    # hack/release/check-tags.sh refuses a published tag that is not this.
+    tags:
+      - "{{ .Version }}"
+    labels:
+      org.opencontainers.image.title: flr
+      org.opencontainers.image.description: flintlock-runner, a GitLab Runner that runs every job in a Firecracker or Cloud Hypervisor MicroVM
+      org.opencontainers.image.source: https://github.com/phoban01/flintlock-runner
+      org.opencontainers.image.licenses: Apache-2.0
+      org.opencontainers.image.version: "{{ .Version }}"
+      org.opencontainers.image.revision: "{{ .FullCommit }}"
+      org.opencontainers.image.created: "{{ .CommitDate }}"
+    annotations:
+      org.opencontainers.image.source: https://github.com/phoban01/flintlock-runner
+      org.opencontainers.image.version: "{{ .Version }}"
+      org.opencontainers.image.revision: "{{ .FullCommit }}"
+
 checksum:
   name_template: checksums.txt
   algorithm: sha256
@@ -67,6 +105,11 @@ release:
     name: flintlock-runner
   # v1.2.3-rc.1 is published as a pre-release, v1.2.3 as a release.
   prerelease: auto
+  # goreleaser leaves the release a draft. The release workflow then renders
+  # the manifests assets against the image digests goreleaser pushed,
+  # attaches them and publishes the release, so that no one sees a release
+  # without its manifests.
+  draft: true
   # The requirements report of the tagged commit ships with the binaries, so
   # anyone can see which requirements that build implements and tests.
   extra_files:
