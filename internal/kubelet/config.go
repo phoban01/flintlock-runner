@@ -14,6 +14,7 @@ import (
 	"gopkg.in/yaml.v3"
 	"k8s.io/apimachinery/pkg/api/resource"
 
+	"github.com/phoban01/flintlock-runner/internal/hostcheck"
 	"github.com/phoban01/flintlock-runner/internal/kubelabels"
 )
 
@@ -27,7 +28,7 @@ const (
 	DefaultMicroVMNamespace = "flintlock-runner"
 	// DefaultNotReadyDir is the directory of the not-ready-reason contract
 	// (KF-016); see ReadNotReadyReasons.
-	DefaultNotReadyDir = "/run/flr/not-ready.d"
+	DefaultNotReadyDir = hostcheck.DefaultNotReadyDir
 	// DefaultListen is the kubelet API port.
 	DefaultListen = ":10250"
 	// DefaultLeaseDuration is how old a claimed pod's lease may grow before
@@ -277,46 +278,15 @@ func (c *Config) EnabledHostServices() []string {
 	return names
 }
 
-// unixScheme prefixes a unix socket endpoint, as gRPC writes them.
-const unixScheme = "unix://"
-
 //= docs/requirements/12-cluster-fleet.md#virtual-node
 //# The Pod Provider SHALL reach `flintlockd` only through the
 //# local endpoint of HI-042.
 
-// ValidateLocalEndpoint accepts exactly the two shapes HI-042 allows: a unix
-// socket, written `unix://` and an absolute path, or a literal loopback IP
-// address and a port. A host name is refused even when it is `localhost`,
-// because what it resolves to is not this function's to know; so is every
-// other scheme, the unspecified address and any address of another machine.
+// ValidateLocalEndpoint accepts exactly the two shapes HI-042 allows, a
+// unix socket or a literal loopback address and port, and nothing else;
+// hostcheck.ValidateLocalEndpoint says why each other shape is refused.
 // The flintlockd of a Host has no authentication in a cluster fleet, so a
 // provider pointed anywhere else would be talking to it in the clear.
 func ValidateLocalEndpoint(endpoint string) error {
-	if endpoint == "" {
-		return errors.New("is required")
-	}
-	if path, ok := strings.CutPrefix(endpoint, unixScheme); ok {
-		if !strings.HasPrefix(path, "/") {
-			return fmt.Errorf("%q: a unix socket endpoint needs an absolute path", endpoint)
-		}
-		return nil
-	}
-	if strings.Contains(endpoint, "://") || strings.HasPrefix(endpoint, "unix:") || strings.HasPrefix(endpoint, "dns:") {
-		return fmt.Errorf("%q: only unix:// and a loopback address:port are local endpoints", endpoint)
-	}
-	host, port, err := net.SplitHostPort(endpoint)
-	if err != nil {
-		return fmt.Errorf("%q: not unix:// and not an address:port: %w", endpoint, err)
-	}
-	if port == "" {
-		return fmt.Errorf("%q: the port is missing", endpoint)
-	}
-	ip := net.ParseIP(host)
-	if ip == nil {
-		return fmt.Errorf("%q: the host has to be a literal loopback address, not a name", endpoint)
-	}
-	if !ip.IsLoopback() {
-		return fmt.Errorf("%q: %s is not a loopback address; flintlockd is reached only on the Host itself", endpoint, host)
-	}
-	return nil
+	return hostcheck.ValidateLocalEndpoint(endpoint)
 }

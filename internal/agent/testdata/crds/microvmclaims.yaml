@@ -1,0 +1,69 @@
+# PROVISIONAL test definition of battery's MicroVMClaim.
+#
+# battery (github.com/liquidmetal-dev/battery) will serve the real resource;
+# its group, version and field names are not settled. This definition exists
+# only so that the Exec Agent and the agent-exec Guest Transport can be tested
+# against a real API server (KF-190). Every name here is this project's, under
+# the group claims.test.flintlock-runner.dev so that it can never be mistaken
+# for battery's, and internal/agent's ProvisionalClaimResource names the same
+# fields. When battery publishes its resource, the agent reads that instead
+# and this file goes.
+#
+# The facts the Exec Agent reads:
+#   status.phase            Pending, Bound, Expired or Released
+#   status.microVM.uid      the flintlock uid of the bound MicroVM
+#   status.host.nodeName    the node name of the Host's Node
+#   status.leaseExpiresAt   when the lease runs out (RFC 3339)
+#   metadata.annotations["claims.test.flintlock-runner.dev/creator"]
+#                           the user name of the identity that created it
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: microvmclaims.claims.test.flintlock-runner.dev
+spec:
+  group: claims.test.flintlock-runner.dev
+  scope: Namespaced
+  names:
+    kind: MicroVMClaim
+    listKind: MicroVMClaimList
+    plural: microvmclaims
+    singular: microvmclaim
+  versions:
+    - name: v1alpha1
+      served: true
+      storage: true
+      subresources:
+        status: {}
+      schema:
+        openAPIV3Schema:
+          type: object
+          properties:
+            spec:
+              type: object
+              properties:
+                poolRef:
+                  type: object
+                  properties:
+                    name:
+                      type: string
+            status:
+              type: object
+              properties:
+                phase:
+                  type: string
+                  enum: [Pending, Bound, Expired, Released]
+                microVM:
+                  type: object
+                  properties:
+                    uid:
+                      type: string
+                host:
+                  type: object
+                  properties:
+                    nodeName:
+                      type: string
+                    execAgentAddress:
+                      type: string
+                leaseExpiresAt:
+                  type: string
+                  format: date-time

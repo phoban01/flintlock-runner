@@ -187,8 +187,15 @@ func (t *execTransport) exchange(ctx context.Context, start *execv1.ExecStart, s
 //# payload as the command's exit status and SHALL treat an `error` payload
 //# as a transport failure only where the stream ends without an `exit_code`.
 
+//= docs/requirements/12-cluster-fleet.md#agent-exec-transport
+//# The `agent-exec` Guest Transport SHALL treat a response that
+//# ends without an exit status frame as a stream failure, as EX-023 requires.
+
 // receive reads the response stream to its end, writing output as it
-// arrives and watching the Host for liveness while it does.
+// arrives and watching the Host for liveness while it does. agent-exec
+// runs through here too, so a response the Exec Agent ends without
+// flintlockd's exit_code, whether with an error status or cleanly, is a
+// stream failure for it as well (KF-187).
 //
 // An error payload does not end the exchange. The exec service sends one to
 // say that something went wrong and then, ordinarily, the exit_code that

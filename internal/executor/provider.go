@@ -13,6 +13,7 @@ import (
 
 	"github.com/phoban01/flintlock-runner/internal/clock"
 	"github.com/phoban01/flintlock-runner/internal/config"
+	"github.com/phoban01/flintlock-runner/internal/flintlock"
 	"github.com/phoban01/flintlock-runner/internal/scheduler"
 	"github.com/phoban01/flintlock-runner/internal/transport"
 )
@@ -74,6 +75,32 @@ func WithGuestTransport(kind transport.Kind) Option {
 	return func(p *provider) { p.transport = kind }
 }
 
+// AgentHosts hands out the clients of Exec Agents by the Host and address a
+// claim names. *transport.AgentHosts is one.
+type AgentHosts interface {
+	// Lease returns the client of the Exec Agent at address on the named
+	// Host and a function that releases it.
+	Lease(host, address string) (flintlock.HostClient, func(), error)
+}
+
+//= docs/requirements/12-cluster-fleet.md#agent-exec-transport
+//# Where the claim backend is configured, the Executor SHALL run
+//# each Stage through the Exec Agent of the Host named in the Job's claim,
+//# with the Stage script on standard input.
+
+// WithAgentExec makes every Profile's Stages run over the `agent-exec`
+// Guest Transport, through the Exec Agent of the Host each Job's claim
+// names, with agents as the source of their clients. The Runner of the
+// claim design sets it with its claim backend: the claim is the only
+// thing that says where a MicroVM is (KF-151), and the Host Registry is
+// not asked.
+func WithAgentExec(agents AgentHosts) Option {
+	return func(p *provider) {
+		p.transport = transport.KindAgentExec
+		p.agents = agents
+	}
+}
+
 // provider is the flintlock ExecutorProvider (EX-001, EX-002).
 type provider struct {
 	deps      Deps
@@ -82,6 +109,8 @@ type provider struct {
 	lifecycle scheduler.Lifecycle
 	// transport, when set, is the Guest Transport of every Profile.
 	transport transport.Kind
+	// agents is set by WithAgentExec.
+	agents AgentHosts
 	// httpCacheVars are the configured HTTP cache variable names.
 	httpCacheVars map[string]bool
 
