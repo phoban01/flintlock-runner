@@ -62,6 +62,19 @@ func hostReset() error {
 //# When a Job's context is cancelled because its timeout elapsed,
 //# the Runner SHALL report the failure reason `job_execution_timeout`.
 
+//= docs/requirements/02-executor.md#job-timeout
+//= type=test
+//# If a Stage's operation fails at or after the Job's timeout has
+//# elapsed, then the Executor SHALL report the Stage as ended by the Job's
+//# context rather than as a stream failure.
+
+//= docs/requirements/02-executor.md#job-timeout
+//= type=test
+//# While the Job's timeout has elapsed and the Job's context does
+//# not yet report that it is done, the Executor SHALL wait for that context
+//# to report it, bounded by a fixed expiry wait, before returning the outcome
+//# of a step or a Stage.
+
 // TestStreamResetAtTheDeadlineIsTheTimeout is the Executor's half of the
 // GL-043 race the harness found: the Host ends the Stage's stream at the
 // Job's deadline and the failure reaches Run before the Job's context says
@@ -113,6 +126,11 @@ func TestStreamResetAtTheDeadlineIsTheTimeout(t *testing.T) {
 //# When a Job's context is cancelled because its timeout elapsed,
 //# the Runner SHALL report the failure reason `job_execution_timeout`.
 
+//= docs/requirements/01-gitlab-protocol.md#job-execution
+//= type=test
+//# When a Job's timeout has elapsed, the Runner SHALL NOT run that
+//# Job's `after_script` Stage.
+
 // TestJobTimeoutRacingAStreamResetIsReportedAsTheTimeout runs a whole Job
 // through the library's Build in the race the harness found: at the Job's
 // deadline the Host resets step_script's stream, and the Job's context is
@@ -154,6 +172,13 @@ func TestJobTimeoutRacingAStreamResetIsReportedAsTheTimeout(t *testing.T) {
 //= type=test
 //# When a Job's context is cancelled because its timeout elapsed,
 //# the Runner SHALL report the failure reason `job_execution_timeout`.
+
+//= docs/requirements/02-executor.md#job-timeout
+//= type=test
+//# If a step of `Prepare` fails at or after the Job's timeout has
+//# elapsed, then the Executor SHALL fail the Job with the failure reason
+//# `job_execution_timeout` rather than with the failure reason that step
+//# would otherwise carry.
 
 // TestJobTimeoutDuringPrepareIsTheTimeout lets the allocation wait out the
 // Job's own timeout, as it does when a loaded Pool Manager is slow: the Job
@@ -211,5 +236,44 @@ func TestStreamFailureBeforeTheDeadlineIsASystemFailure(t *testing.T) {
 	be := buildError(t, e.Run(common.ExecutorCommand{Script: "make\n", Stage: "step_script", Context: ctx}))
 	if be.FailureReason != common.RunnerSystemFailure || !errors.Is(be, transport.ErrStreamFailed) {
 		t.Errorf("error = %v (%s), want a runner_system_failure wrapping the stream failure", be, be.FailureReason)
+	}
+}
+
+//= docs/requirements/02-executor.md#job-timeout
+//= type=test
+//# When `Run` is called for a Stage whose context is already done,
+//# the Executor SHALL return that context's cause without reporting a Stage
+//# failure of its own.
+
+// TestAStageWhoseContextIsAlreadyDoneReturnsTheCause covers the Stage the
+// Executor is handed after the Job's time is gone. The Build skips such a
+// Stage itself, which is why after_script does not run after a Job timeout
+// (GL-047), so what is checked here is the Executor's own answer where a
+// Stage does begin and finds its context already done: the context's cause,
+// and not a stream failure invented from whatever the transport said.
+func TestAStageWhoseContextIsAlreadyDoneReturnsTheCause(t *testing.T) {
+	t.Parallel()
+	f := newFixture(t)
+	e, _, err := f.prepareOnly(context.Background(), testJob())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer e.Cleanup()
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Nanosecond)
+	defer cancel()
+	<-ctx.Done()
+	f.tr.runs = []transport.Scripted{{Err: hostReset()}}
+
+	err = e.Run(common.ExecutorCommand{Script: "after-script\n", Stage: "after_script", Context: ctx})
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Errorf("error = %v, want the context's own cause", err)
+	}
+	if errors.Is(err, transport.ErrStreamFailed) {
+		t.Errorf("error = %v, want no stage failure of the Executor's own", err)
+	}
+	var be *common.BuildError
+	if errors.As(err, &be) && be.FailureReason == common.RunnerSystemFailure {
+		t.Errorf("error = %v (%s), want no runner_system_failure", err, be.FailureReason)
 	}
 }

@@ -113,6 +113,11 @@ func (t *execTransport) Close() error { return nil }
 //# The `exec` Guest Transport SHALL set the `timeout_seconds` field
 //# of `ExecStart` from the remaining time on the operation's context.
 
+//= docs/requirements/02-executor.md#guest-transport
+//# The `exec` Guest Transport SHALL carry the operation's deadline
+//# to the Host both in the `timeout_seconds` field of `ExecStart` and in
+//# gRPC's own `grpc-timeout` on the exec stream.
+
 // exchange runs one ExecCommand exchange to its end and returns the exit
 // status. The framing is flintlockd's: ExecStart first, carrying
 // timeout_seconds derived from what is left of ctx so that the guest agent
@@ -125,6 +130,11 @@ func (t *execTransport) Close() error { return nil }
 // terminates the process in the guest when ctx is cancelled (EX-024), and
 // the goroutine that feeds standard input is waited for, so no operation
 // leaves anything running behind it.
+//
+// ctx carries the deadline to the Host a second time without anything here
+// doing so: grpc-go writes it into the stream's grpc-timeout, and the Host's
+// server ends the stream when that passes (EX-053). The Executor is the one
+// that has to cope with the two enforcers racing (EX-071).
 func (t *execTransport) exchange(ctx context.Context, start *execv1.ExecStart, stdin io.Reader, stdout, stderr io.Writer) (int, error) {
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()

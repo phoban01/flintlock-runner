@@ -130,6 +130,12 @@ func (e *executor) Prepare(options common.ExecutorPrepareOptions) (err error) {
 	return nil
 }
 
+//= docs/requirements/02-executor.md#job-timeout
+//# If a step of `Prepare` fails at or after the Job's timeout has
+//# elapsed, then the Executor SHALL fail the Job with the failure reason
+//# `job_execution_timeout` rather than with the failure reason that step
+//# would otherwise carry.
+
 // prepareErr turns an error from a step of Prepare into the error Prepare
 // returns: when the prepare timeout is what stopped the step, the timeout
 // is the cause the Job log names, and when the Job's own timeout is, the
@@ -596,6 +602,16 @@ type stageResult struct {
 //# Scheduler SHALL abort the Job with the failure reason
 //# `runner_system_failure` and drop the Allocation without a release call.
 
+//= docs/requirements/02-executor.md#job-timeout
+//# If a Stage's operation fails at or after the Job's timeout has
+//# elapsed, then the Executor SHALL report the Stage as ended by the Job's
+//# context rather than as a stream failure.
+
+//= docs/requirements/02-executor.md#job-timeout
+//# When `Run` is called for a Stage whose context is already done,
+//# the Executor SHALL return that context's cause without reporting a Stage
+//# failure of its own.
+
 // runStage runs the command and waits for it, the Job's context or the
 // Allocation's Handle, whichever ends first. The transport writes output
 // to the Job log's streams as it arrives. Cancelling the Job cancels the
@@ -607,6 +623,13 @@ type stageResult struct {
 // was the Runner, not the Job, that failed (Data.WithContext does the same
 // for the Build's context once Prepare has returned; the prepare_script
 // Stage runs before that, so the Handle is watched here too).
+//
+// A Stage whose context is done before it starts returns that context's
+// cause and nothing else (EX-073). The Build calls Run for after_script
+// after a Job ran past its timeout with exactly such a context, because it
+// derives after_script's context from the Job's, so the Stage cannot reach
+// the guest; the transport fails at once and the outcome is the deadline,
+// not a Stage failure that would stand in for it.
 func (e *executor) runStage(cmd common.ExecutorCommand, command transport.Command) error {
 	ctx, cancel := context.WithCancelCause(cmd.Context)
 	defer cancel(nil)
@@ -654,6 +677,12 @@ func (e *executor) runStage(cmd common.ExecutorCommand, command transport.Comman
 //= docs/requirements/01-gitlab-protocol.md#job-execution
 //# When a Job's context is cancelled because its timeout elapsed,
 //# the Runner SHALL report the failure reason `job_execution_timeout`.
+
+//= docs/requirements/02-executor.md#job-timeout
+//# While the Job's timeout has elapsed and the Job's context does
+//# not yet report that it is done, the Executor SHALL wait for that context
+//# to report it, bounded by a fixed expiry wait, before returning the outcome
+//# of a step or a Stage.
 
 // expiryWait bounds how long expired waits for a context whose deadline has
 // passed to say that it is done. The context package cancels a context at

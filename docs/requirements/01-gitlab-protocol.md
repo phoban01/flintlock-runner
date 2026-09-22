@@ -110,11 +110,24 @@ Jobs that need auxiliary services run them from their own script.
   shell.
 - **GL-046** The Runner SHALL download dependency artifacts with each
   dependency's own token as provided in the Job payload.
+- **GL-047** When a Job's timeout has elapsed, the Runner SHALL NOT run that
+  Job's `after_script` Stage.
 
 Artifacts and caches are handled by the `gitlab-runner-helper` binary that
 the generated scripts invoke; the Profile's root filesystem image therefore
 has to contain a helper binary at the path the shell expects, which the
 Executor document specifies.
+
+GL-047 is gitlab-runner's own behaviour, not a choice of this Runner, and it
+is written down because it surprises people. `after_script` has a timeout of
+its own, `RUNNER_AFTER_SCRIPT_TIMEOUT`, but the context it runs under is
+derived from the Job's and is clamped to what is left of the Job's timeout,
+so a Job that used all of its time reaches `after_script` with a context
+that is already done and the Stage is skipped before any executor is asked
+to run it. A Job cancelled from the UI is not the same case: there only the
+script context is cancelled, the Job's context stays live, and
+`after_script` runs. Anything a Job must do even when it runs out of time
+belongs in the Job's own `timeout` budget rather than in `after_script`.
 
 ## Job log {#job-log}
 
