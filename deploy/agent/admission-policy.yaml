@@ -1,0 +1,150 @@
+# Admission policy of the Exec Agent (`flr agent`), which runs in the Host
+# Agent.
+#
+# rbac.yaml has to grant every Host's Exec Agent the same cluster-wide rules,
+# because RBAC cannot say "this Host's Node". This policy says it, in the API
+# server: an Exec Agent may change only the annotations under the project's
+# prefix of its own Host's Node, and nothing else of any Node; and it may
+# create and delete only its own Host's drain guard pod and budget. A
+# compromised Host keeps what it already had and gets nothing of another
+# Host's.
+#
+# Which Host a request comes from is read from the requester's identity, not
+# from anything the request says. The Host Agent's pod authenticates with the
+# bound ServiceAccount token the kubelet projects into it, and the API server
+# puts the node that pod runs on into the token's user information as the
+# extra `authentication.kubernetes.io/node-name` (the
+# ServiceAccountTokenPodNodeInfo feature, generally available since
+# Kubernetes 1.32). A request by the Host Agent's ServiceAccount whose
+# identity carries no node, a legacy Secret token or a TokenRequest not bound
+# to a pod, is refused outright. `flr agent` checks at start that its own
+# identity names its Host.
+#
+# "Under the project's prefix" is an annotation key whose prefix is
+# `gitlab-runner.flintlock.dev` or a subdomain of it, which takes in the Host
+# Service annotations `host-service.gitlab-runner.flintlock.dev/<name>`.
+#
+# This policy and deploy/host-agent/admission-policy.yaml, the Pod
+# Provider's, match the same ServiceAccount and are alternatives: the Pod
+# Provider's refuses any change to a Host's own Node, which the Exec Agent
+# has to make. A fleet deploys one or the other.
+#
+# The agent's test suite loads this file unchanged and tests it with real
+# bound tokens.
+
+#= docs/requirements/12-cluster-fleet.md#exec-agent
+#/ The Fleet Manifests SHALL include a ValidatingAdmissionPolicy
+#/ that lets an Exec Agent's identity change only the annotations of its own
+#/ Host's Node, under the project's prefix, and nothing else of any Node.
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: flintlock-exec-agent-own-host
+spec:
+  # A policy that cannot be evaluated refuses.
+  failurePolicy: Fail
+  matchConstraints:
+    # A patch is an UPDATE to admission. Every subresource whose object is
+    # the Node or the pod itself is matched, so that none is a way round.
+    resourceRules:
+      - apiGroups: [""]
+        apiVersions: ["*"]
+        operations: ["CREATE", "UPDATE", "DELETE"]
+        resources: ["nodes", "nodes/status", "pods", "pods/status", "pods/ephemeralcontainers", "pods/resize"]
+      - apiGroups: ["policy"]
+        apiVersions: ["*"]
+        operations: ["CREATE", "UPDATE", "DELETE"]
+        resources: ["poddisruptionbudgets"]
+  matchConditions:
+    - name: exec-agent
+      expression: request.userInfo.username == 'system:serviceaccount:flintlock-system:flintlock-host-agent'
+  variables:
+    # The node of the requester's pod, or empty when its identity names none.
+    - name: host
+      expression: >-
+        has(request.userInfo.extra)
+        && 'authentication.kubernetes.io/node-name' in request.userInfo.extra
+        && size(request.userInfo.extra['authentication.kubernetes.io/node-name']) == 1
+        ? request.userInfo.extra['authentication.kubernetes.io/node-name'][0] : ''
+    - name: guard
+      expression: "'flintlock-drain-guard-' + variables.host"
+    # What the request touches: the object as it was for a delete, as it
+    # would be for a create.
+    - name: touched
+      expression: >-
+        request.operation == 'DELETE' ? [oldObject]
+        : request.operation == 'UPDATE' ? [oldObject, object]
+        : [object]
+    - name: isNodeUpdate
+      expression: request.resource.resource == 'nodes' && request.?subResource.orValue('') == '' && request.operation == 'UPDATE'
+    - name: oldAnnotations
+      expression: "variables.isNodeUpdate ? oldObject.metadata.?annotations.orValue({}) : {}"
+    - name: newAnnotations
+      expression: "variables.isNodeUpdate ? object.metadata.?annotations.orValue({}) : {}"
+  validations:
+    - expression: variables.host != ''
+      reason: Forbidden
+      message: >-
+        the Exec Agent's identity names no Host: it has to authenticate with
+        the bound ServiceAccount token of a pod scheduled to its Host's Node
+    # A Node is only ever updated, and only the Host's own, and never
+    # through its status.
+    - expression: >-
+        request.resource.resource != 'nodes'
+        || (variables.isNodeUpdate && oldObject.metadata.name == variables.host)
+      reason: Forbidden
+      messageExpression: >-
+        'the Exec Agent of ' + variables.host + ' may change no Node but ' + variables.host
+        + ', and that only by its annotations'
+    # Of that Node, only the annotations under the project's prefix change:
+    # its labels, owners, finalizers and spec stay as they were (its status
+    # is not written by an update of the Node itself), and every other
+    # annotation keeps its value.
+    - expression: >-
+        !variables.isNodeUpdate || (
+          object.metadata.?labels.orValue({}) == oldObject.metadata.?labels.orValue({})
+          && object.metadata.?ownerReferences.orValue([]) == oldObject.metadata.?ownerReferences.orValue([])
+          && object.metadata.?finalizers.orValue([]) == oldObject.metadata.?finalizers.orValue([])
+          && object.?spec.orValue({}) == oldObject.?spec.orValue({})
+          && variables.newAnnotations.all(k, k.matches(r'^([a-z0-9-]+\.)*gitlab-runner\.flintlock\.dev/')
+               || (k in variables.oldAnnotations && variables.oldAnnotations[k] == variables.newAnnotations[k]))
+          && variables.oldAnnotations.all(k, k.matches(r'^([a-z0-9-]+\.)*gitlab-runner\.flintlock\.dev/')
+               || k in variables.newAnnotations))
+      reason: Forbidden
+      messageExpression: >-
+        'the Exec Agent of ' + variables.host + ' may change only the gitlab-runner.flintlock.dev
+        annotations of its Node'
+    # The only pod an Exec Agent makes is its guard, on its Host's Node,
+    # which it creates and deletes and never edits.
+    - expression: >-
+        request.resource.resource != 'pods'
+        || (request.?subResource.orValue('') == '' && request.operation != 'UPDATE'
+            && variables.touched.all(p, p.metadata.name == variables.guard
+                 && has(p.spec.nodeName) && p.spec.nodeName == variables.host))
+      reason: Forbidden
+      messageExpression: >-
+        'the Exec Agent of ' + variables.host + ' may create and delete only its guard pod '
+        + variables.guard + ' on ' + variables.host
+    # The guard runs a pause container and needs no credential. Refusing it
+    # a token and volumes keeps a guard pod from carrying another
+    # ServiceAccount's token onto the Host.
+    - expression: >-
+        request.resource.resource != 'pods' || request.operation != 'CREATE'
+        || (has(object.spec.automountServiceAccountToken) && !object.spec.automountServiceAccountToken
+            && (!has(object.spec.volumes) || size(object.spec.volumes) == 0))
+      reason: Forbidden
+      message: the Exec Agent's guard pod mounts no ServiceAccount token and no volume
+    - expression: >-
+        request.resource.resource != 'poddisruptionbudgets'
+        || (request.operation != 'UPDATE' && variables.touched.all(b, b.metadata.name == variables.guard))
+      reason: Forbidden
+      messageExpression: >-
+        'the Exec Agent of ' + variables.host + ' may create and delete only its guard budget ' + variables.guard
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: flintlock-exec-agent-own-host
+spec:
+  policyName: flintlock-exec-agent-own-host
+  validationActions: [Deny]

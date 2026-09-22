@@ -1,0 +1,87 @@
+# The Exec Agent's container in the Host Agent: a strategic merge patch of
+# the Host Agent's DaemonSet, `flintlock-host-agent` in `flintlock-system`,
+# which the Fleet Manifests apply in place of the Pod Provider's container.
+# The DaemonSet runs on every Host, in the Host's network namespace (KF-070,
+# KF-071), so the agent runs on every Host and can listen on the Host's
+# internal address.
+#
+# The agent is the one process on the Host the Host Image admits to
+# flintlockd: flintlockd listens on a loopback port that the Host's firewall
+# opens to one user id, POD_PROVIDER_UID in the Host configuration file,
+# 10250 by default (HI-042, HI-063). The container runs as that user id and
+# `flr agent` refuses to start as any other. No other container of the Host
+# Agent may run as it, which the Fleet Manifests' checks assert of the
+# assembled DaemonSet and internal/agent's manifest test asserts of this
+# patch.
+#
+# The serving certificate has to name the Host's internal address (KF-172).
+# It is issued per pod by cert-manager's csi-driver for the pod's IP, which
+# in the Host's network namespace is the Host's internal address, from an
+# Issuer named `flintlock-exec-agent` that the operator provides; the
+# Runner's `agent-exec` Guest Transport verifies it against that Issuer's
+# certificate authority (KF-186).
+
+#= docs/requirements/12-cluster-fleet.md#exec-agent
+#/ The Fleet Manifests SHALL run the Exec Agent in the Host Agent
+#/ on every Host.
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: flintlock-host-agent
+  namespace: flintlock-system
+spec:
+  template:
+    spec:
+      containers:
+        #= docs/requirements/12-cluster-fleet.md#exec-agent
+        #/ The Exec Agent SHALL reach `flintlockd` only through the local
+        #/ endpoint of HI-042, and the Fleet Manifests SHALL run it as the user id
+        #/ that HI-063 admits there and run no other container as that user id.
+        - name: exec-agent
+          image: flr
+          args: ["agent", "--agent-config", "/etc/flintlock-runner/agent/agent.yaml"]
+          env:
+            - name: FLINTLOCK_RUNNER_HOST_NODE
+              valueFrom:
+                fieldRef:
+                  fieldPath: spec.nodeName
+          ports:
+            - name: exec-api
+              containerPort: 10270
+              protocol: TCP
+          securityContext:
+            runAsUser: 10250
+            runAsGroup: 10250
+            runAsNonRoot: true
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          volumeMounts:
+            - name: exec-agent-config
+              mountPath: /etc/flintlock-runner/agent
+              readOnly: true
+            - name: exec-agent-tls
+              mountPath: /etc/flintlock-runner/agent-tls
+              readOnly: true
+            - name: not-ready
+              mountPath: /run/flr/not-ready.d
+              readOnly: true
+      volumes:
+        - name: exec-agent-config
+          configMap:
+            name: flintlock-exec-agent
+        - name: exec-agent-tls
+          csi:
+            driver: csi.cert-manager.io
+            readOnly: true
+            volumeAttributes:
+              csi.cert-manager.io/issuer-name: flintlock-exec-agent
+              csi.cert-manager.io/issuer-kind: Issuer
+              csi.cert-manager.io/ip-sans: ${POD_IP}
+              csi.cert-manager.io/common-name: flintlock-exec-agent
+              csi.cert-manager.io/fs-group: "10250"
+        - name: not-ready
+          hostPath:
+            path: /run/flr/not-ready.d
+            type: DirectoryOrCreate

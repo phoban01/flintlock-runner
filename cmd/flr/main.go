@@ -14,6 +14,7 @@
 //	fleet teardown      delete Pools, stop services, remove the Inventory
 //	fleet emit-userdata print the launch-template user-data, gzip-compressed
 //	kubelet             run the Pod Provider of a cluster fleet on a Host
+//	agent               run the Exec Agent of a cluster fleet on a Host
 package main
 
 import (
@@ -91,6 +92,7 @@ func newApp() *cli.App {
 			Subcommands: fleetCommands(productionSeams()),
 		},
 		kubeletCommand(),
+		agentCommand(),
 	}
 	return app
 }

@@ -1,0 +1,24 @@
+# The Exec Agent's configuration file, mounted into its container by
+# host-agent-patch.yaml. host_node comes from the downward API through
+# FLINTLOCK_RUNNER_HOST_NODE. The Host Services, their ports and the bridge
+# gateway are the fleet's; the Fleet Manifests render them into this file
+# from the same values the Host Services are run with, and a Host Service
+# not listed here is neither probed nor published.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: flintlock-exec-agent
+  namespace: flintlock-system
+data:
+  agent.yaml: |
+    flintlockd: 127.0.0.1:9090
+    flintlockd_user_id: 10250
+    port: 10270
+    tls:
+      cert_file: /etc/flintlock-runner/agent-tls/tls.crt
+      key_file: /etc/flintlock-runner/agent-tls/tls.key
+    not_ready_dir: /run/flr/not-ready.d
+    exec_open_timeout: 10s
+    drain_timeout: 1h
+    guard:
+      namespace: flintlock-system

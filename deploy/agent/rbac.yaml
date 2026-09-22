@@ -1,0 +1,86 @@
+# RBAC of the Exec Agent (`flr agent`), which runs in the Host Agent.
+#
+# The Exec Agent authenticates as the Host Agent's ServiceAccount,
+# `flintlock-host-agent` in `flintlock-system`, because it is a container of
+# that pod. This file is only what the Exec Agent is allowed to do, and the
+# agent's test suite runs it as this ServiceAccount with exactly these rules,
+# so a call the code makes and this file lacks fails a test.
+#
+# RBAC cannot say "this Host's Node": one DaemonSet shares one
+# ServiceAccount. admission-policy.yaml beside this file narrows the Node and
+# pod rules to the agent's own Host in the API server (KF-180).
+
+#= docs/requirements/12-cluster-fleet.md#exec-agent
+#/ The Exec Agent SHALL authenticate every request with a
+#/ TokenReview of the bearer token it carries, and SHALL refuse a request
+#/ that does not authenticate.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: flintlock-exec-agent
+rules:
+  # Every exec request is authenticated with one (KF-173). A review answers
+  # a question and changes nothing.
+  - apiGroups: ["authentication.k8s.io"]
+    resources: ["tokenreviews"]
+    verbs: ["create"]
+  # The claims every request is authorized against (KF-174) and the drain
+  # guard counts (KF-181), read and never written.
+  #
+  # PROVISIONAL: claims.test.flintlock-runner.dev/microvmclaims is this
+  # project's test definition of battery's MicroVMClaim
+  # (internal/agent/testdata/crds/microvmclaims.yaml). It is replaced by
+  # battery's group and resource once battery publishes them.
+  - apiGroups: ["claims.test.flintlock-runner.dev"]
+    resources: ["microvmclaims"]
+    verbs: ["get", "list", "watch"]
+  # The Host's own Node is read, and annotated with the Host Services, the
+  # Host's readiness, the exec API's address and when a drain started
+  # (KF-178, KF-179, KF-181). The admission policy lets a patch change
+  # nothing else. Nodes are never created, deleted or listed, and their
+  # status is not written.
+  - apiGroups: [""]
+    resources: ["nodes"]
+    verbs: ["get", "patch"]
+---
+# The drain guard pod and its PodDisruptionBudget (KF-181), in the Host
+# Agent's own namespace (`guard.namespace` in the agent's configuration).
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: flintlock-exec-agent-guard
+  namespace: flintlock-system
+rules:
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["get", "create", "delete"]
+  - apiGroups: ["policy"]
+    resources: ["poddisruptionbudgets"]
+    verbs: ["create", "delete"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: flintlock-exec-agent
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: flintlock-exec-agent
+subjects:
+  - kind: ServiceAccount
+    name: flintlock-host-agent
+    namespace: flintlock-system
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: flintlock-exec-agent-guard
+  namespace: flintlock-system
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: flintlock-exec-agent-guard
+subjects:
+  - kind: ServiceAccount
+    name: flintlock-host-agent
+    namespace: flintlock-system

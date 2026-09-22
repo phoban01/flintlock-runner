@@ -32,6 +32,8 @@ type virtualNodes struct {
 	nodes     NodeGetter
 	upstreams []config.HTTPCacheUpstream
 	log       *slog.Logger
+	// what names the node in the log: a Virtual Node or a Host's Node.
+	what string
 }
 
 // NewVirtualNodeInventory returns the InventoryLookup of a cluster fleet.
@@ -45,7 +47,24 @@ func NewVirtualNodeInventory(nodes NodeGetter, upstreams []config.HTTPCacheUpstr
 	if log == nil {
 		log = slog.New(slog.DiscardHandler)
 	}
-	return &virtualNodes{nodes: nodes, upstreams: upstreams, log: log}
+	return &virtualNodes{nodes: nodes, upstreams: upstreams, log: log, what: "virtual node"}
+}
+
+//= docs/requirements/12-cluster-fleet.md#agent-exec-transport
+//# The Executor SHALL read the Host Service addresses for a Job
+//# from the annotations of KF-179 on the Node of the Job's Host.
+
+// NewHostNodeInventory returns the InventoryLookup of the claim design of a
+// cluster fleet. The Placement names the Node of the Host the Job's claim
+// is bound to, and the Exec Agent of that Host has published the Host
+// Services on that Node under the same annotations a Virtual Node carries
+// (KF-179), so each lookup reads them exactly as NewVirtualNodeInventory
+// does. RBAC: get on Nodes.
+func NewHostNodeInventory(nodes NodeGetter, upstreams []config.HTTPCacheUpstream, log *slog.Logger) InventoryLookup {
+	if log == nil {
+		log = slog.New(slog.DiscardHandler)
+	}
+	return &virtualNodes{nodes: nodes, upstreams: upstreams, log: log, what: "host's node"}
 }
 
 //= docs/requirements/12-cluster-fleet.md#kube-exec-transport
@@ -60,8 +79,8 @@ func (v *virtualNodes) Host(name string) (*config.HostEntry, bool) {
 	defer cancel()
 	node, err := v.nodes.Get(ctx, name, metav1.GetOptions{})
 	if err != nil {
-		v.log.Warn("could not read the virtual node for its host services; the job gets none",
-			"virtual_node", name, "error", err)
+		v.log.Warn("could not read the "+v.what+" for its host services; the job gets none",
+			"node", name, "error", err)
 		return nil, false
 	}
 	return &config.HostEntry{Name: node.Name, Services: v.services(node.Annotations)}, true

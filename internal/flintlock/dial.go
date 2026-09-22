@@ -89,6 +89,16 @@ func WithReconnectBackoff(base, max time.Duration) DialerOption {
 	}
 }
 
+// WithPerRPCCredentials attaches creds to every call and stream on every
+// connection the Dialer opens. It is how the `agent-exec` Guest Transport
+// carries the Runner's ServiceAccount token to an Exec Agent (KF-186); a
+// Host's basic auth token stays on the Endpoint (HO-004). gRPC refuses to
+// send credentials that require transport security over a plaintext
+// connection, so they never leave in the clear.
+func WithPerRPCCredentials(creds credentials.PerRPCCredentials) DialerOption {
+	return func(g *grpcDialer) { g.perRPC = creds }
+}
+
 // NewDialer returns the production Dialer: one long-lived gRPC connection
 // per Host (HO-002), the configured deadline on every unary call (HO-003),
 // basic auth (HO-004) and TLS (HO-005, HO-006) from the Endpoint.
@@ -113,6 +123,8 @@ type grpcDialer struct {
 	keepaliveTimeout time.Duration
 	backoffBase      time.Duration
 	backoffMax       time.Duration
+	// perRPC, when set, is sent on every call (WithPerRPCCredentials).
+	perRPC credentials.PerRPCCredentials
 }
 
 //= docs/requirements/05-hosts.md#flintlock-client
@@ -154,6 +166,9 @@ func (g *grpcDialer) Dial(_ context.Context, ep Endpoint) (HostClient, error) {
 			MinConnectTimeout: minConnectTimeout,
 		}),
 		grpc.WithChainUnaryInterceptor(deadlineInterceptor(g.deadline)),
+	}
+	if g.perRPC != nil {
+		opts = append(opts, grpc.WithPerRPCCredentials(g.perRPC))
 	}
 	if header := basicAuthHeader(ep.Token); header != "" {
 		opts = append(opts,
