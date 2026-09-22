@@ -125,11 +125,20 @@ cluster, and anything else a job has no business reaching.
 - **HI-043** The Host Image SHALL enable the `flintlockd` exec API.
 - **HI-044** The Host Image SHALL NOT expose `flintlockd` on any address
   reachable from outside the Host.
+- **HI-063** The Host Image SHALL admit connections to the local
+  `flintlockd` endpoint only from the Pod Provider's user id, which it reads
+  from the Host configuration file with a default when none is set, and
+  SHALL refuse them from every other process on the Host.
 
 Because its only client is the Pod Provider on the same Host, `flintlockd`
 needs no certificate and no token here, and the fleet certificate authority
 of SE-023 has nothing left to sign. The authenticated network surface of a
-Host is the Pod Provider's kubelet endpoint (KF-031) instead.
+Host is the Pod Provider's kubelet endpoint (KF-031) instead. The pinned
+`flintlockd` listens on TCP only, so the endpoint is a loopback port, and a
+loopback port is open to every process in the Host's network namespace;
+HI-063 narrows it to one user id with a firewall rule on the socket's owner.
+A unix socket with file permissions would be the better boundary, and is
+the one to move to when `flintlockd` can listen on one.
 
 HI-040 is the one place where this design refuses to be Kubernetes-native.
 Firecracker processes are children of `flintlockd`; inside a pod they would
