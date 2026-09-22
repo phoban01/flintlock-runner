@@ -3,11 +3,8 @@
 #
 #= docs/requirements/12-cluster-fleet.md#cluster-host-agent
 #/ The Fleet Manifests SHALL run the Host Agent as a DaemonSet that
-#/ tolerates the Host taint, selects the Host label and contains the Pod
-#/ Provider and the Host Services of FL-100.
-# The Pod Provider part of KF-070 is superseded by the move to battery's
-# claim resources: the Exec Agent takes the Pod Provider's place in the Host
-# Agent (KF-170), and no Pod Provider runs here.
+#/ tolerates the Host taint, selects the Host label and contains the Exec
+#/ Agent and the Host Services of FL-100.
 #
 # This file is the plumbing every container of the Host Agent shares. The
 # Exec Agent's container comes from deploy/agent (host-agent-patch.yaml),

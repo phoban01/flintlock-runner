@@ -31,9 +31,10 @@ specified in the sections from `#battery-claims` onwards: battery stays the
 scheduler and the authority over Pools, the Runner claims a MicroVM through a
 `MicroVMClaim`, and a per-Host Exec Agent relays each Stage to `flintlockd`.
 These sections are superseded by that design: Virtual Node, MicroVM pods,
-Pools, Allocation, Guest Transport, the Pod Provider parts of Host Agent,
-Drain, Verification, Least privilege (KF-110, KF-111), Hardening (KF-130 to
-KF-137) and Test doubles (KF-120 to KF-125). Their code is still on `main`
+Pools, Allocation, Guest Transport, Drain, Verification, Least privilege
+(KF-110, KF-111), Hardening (KF-130 to KF-137) and Test doubles (KF-120 to
+KF-125). The Host Agent now runs the Exec Agent in the Pod Provider's place
+(KF-070). Their code is still on `main`
 and still cites them, so they are withdrawn in the change that removes that
 code, once the claim design passes the harness, rather than now.
 
@@ -254,8 +255,8 @@ same path the GitLab Kubernetes executor uses.
 ## Host Agent {#cluster-host-agent}
 
 - **KF-070** The Fleet Manifests SHALL run the Host Agent as a DaemonSet that
-  tolerates the Host taint, selects the Host label and contains the Pod
-  Provider and the Host Services of FL-100.
+  tolerates the Host taint, selects the Host label and contains the Exec
+  Agent and the Host Services of FL-100.
 - **KF-071** The Host Agent SHALL run in the Host's network namespace and
   SHALL bind every Host Service only to the guest bridge gateway address.
 - **KF-072** The Host Agent SHALL keep all Host Service storage in the Host
@@ -498,9 +499,9 @@ this repository, is open; the requirements hold either way.
   `MicroVMExec.ExecCommand` on the local `flintlockd` and SHALL end every
   response with an exit status frame, sent only after `flintlockd` has
   reported the command's exit.
-- **KF-177** If `flintlockd` does not open the exec stream of a request
-  within the configured deadline, then the Exec Agent SHALL end the response
-  as a stream failure.
+- **KF-177** If `flintlockd` has not answered for the requested MicroVM and
+  accepted the request's exec stream within the configured deadline, then
+  the Exec Agent SHALL end the response as a stream failure.
 - **KF-178** The Exec Agent SHALL report its Host not ready while the local
   `flintlockd` does not answer `ServerInfo` with the exec service enabled,
   while an enabled Host Service does not accept connections on the bridge
@@ -515,6 +516,12 @@ this repository, is open; the requirements hold either way.
 - **KF-181** While claims are `Bound` on its Host, the Exec Agent SHALL hold
   an eviction-based drain of the Host's Node open, and SHALL let it complete
   when none remain or when the configured drain timeout elapses.
+- **KF-182** The Exec Agent SHALL publish the readiness of KF-178 on its
+  Host's Node as the annotation `gitlab-runner.flintlock.dev/exec-agent-ready`
+  set to `true` or `false`, with the reason and message of the last check in
+  `gitlab-runner.flintlock.dev/exec-agent-reason` and
+  `gitlab-runner.flintlock.dev/exec-agent-message`, and its own address in
+  `gitlab-runner.flintlock.dev/exec-agent-address`.
 
 The Exec Agent is what the Pod Provider becomes once there are no pods to
 realise: it keeps the relay to `MicroVMExec`, the fail-closed TLS front, the
@@ -530,7 +537,15 @@ ended exactly as a successful one does, with no status, and the Job was
 reported as having succeeded; here the exit status is a frame of its own and
 its absence is a failure. And the relay opened its stream to `flintlockd`
 with no deadline, so a Host that stopped answering held a Job until its
-timeout; here opening the stream is bounded.
+timeout; here opening the stream is bounded. Opening means `flintlockd` has
+answered, not only that the client has a stream: a gRPC stream and its
+first message are accepted on the client's side alone, even by a server
+that answers nothing, so the Exec Agent first asks `flintlockd` for the
+MicroVM and counts the exchange open only once that call has returned.
+
+KF-182 is the contract the Inventory Controller reads (KF-160, KF-161): the
+annotations say whether a Host can take claims and why not, and where
+clients reach its Exec Agent, which battery passes on in a claim's status.
 
 The Runner reaches each Exec Agent on the Host's internal address, which is
 a network route the operator has to allow from wherever the Runner runs, and
