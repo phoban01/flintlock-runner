@@ -27,10 +27,8 @@ import (
 	"github.com/phoban01/flintlock-runner/internal/executor"
 	"github.com/phoban01/flintlock-runner/internal/fleet/discovery"
 	"github.com/phoban01/flintlock-runner/internal/flintlock"
-	"github.com/phoban01/flintlock-runner/internal/flintlock/inventory"
 	"github.com/phoban01/flintlock-runner/internal/poolmgr"
 	"github.com/phoban01/flintlock-runner/internal/scheduler"
-	"github.com/phoban01/flintlock-runner/internal/transport"
 )
 
 // runnerConfigFile is the name of the gitlab-runner configuration the `run`
@@ -232,8 +230,9 @@ func newRunner(ctx context.Context, cfg *config.Config, log *slog.Logger, onInit
 		return nil, err
 	}
 
-	dialer := flintlock.NewDialer(flintlock.WithCallDeadline(cfg.Scheduler.HostCallDeadline))
-	hosts, err := flintlock.NewRegistry(ctx, dialer, inventory.Endpoints(cfg.Inventory.Hosts),
+	inv := newInventoryView(cfg.Inventory.Hosts)
+	access := newGuestAccess(cfg, client, inv, log)
+	hosts, err := flintlock.NewRegistry(ctx, access.dialer, access.endpoints,
 		flintlock.WithRegistryLogger(log))
 	if err != nil {
 		_ = client.Close()
@@ -272,7 +271,6 @@ func newRunner(ctx context.Context, cfg *config.Config, log *slog.Logger, onInit
 		return nil, err
 	}
 
-	inv := newInventoryView(cfg.Inventory.Hosts)
 	var provider executor.Provider
 	initHook := func() {
 		if s, ok := provider.(executor.Stopper); ok && onInit != nil {
@@ -281,9 +279,9 @@ func newRunner(ctx context.Context, cfg *config.Config, log *slog.Logger, onInit
 	}
 	provider, err = executor.NewProvider(executor.Deps{
 		Scheduler:  sched,
-		Transports: transport.NewFactory(transport.WithLogger(log)),
+		Transports: access.transports,
 		Env:        executor.NewHostServiceEnv(cfg.HostServices),
-		Inventory:  inv,
+		Inventory:  access.inventory,
 		Timeouts: executor.Timeouts{
 			Prepare:      cfg.Executor.PrepareTimeout,
 			GracefulKill: cfg.Executor.GracefulKillTimeout,
@@ -292,11 +290,12 @@ func newRunner(ctx context.Context, cfg *config.Config, log *slog.Logger, onInit
 		KeepOnFailure:   cfg.Scheduler.KeepOnFailure,
 		CacheConfigured: cfg.DistributedCache != nil,
 		Hosts:           hosts,
-	},
+	}, append([]executor.Option{
 		executor.WithLifecycle(sched),
 		executor.WithLogger(log),
 		executor.WithHTTPCacheUpstreams(cfg.HostServices.HTTPCache.Upstreams),
 		executor.WithInitHook(initHook),
+	}, access.options...)...,
 	)
 	if err != nil {
 		_ = hosts.Close()

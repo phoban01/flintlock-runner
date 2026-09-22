@@ -200,6 +200,11 @@ func applyProfileDefaults(c *Config) {
 		}
 		if p.Transport.Kind == "" {
 			p.Transport.Kind = TransportExec
+			// A cluster fleet reaches every guest through its pod
+			// (KF-128).
+			if c.PoolManager.IsKubernetes() {
+				p.Transport.Kind = TransportKubeExec
+			}
 		}
 		if p.User == "" {
 			p.User = DefaultUser

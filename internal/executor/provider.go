@@ -14,6 +14,7 @@ import (
 	"github.com/phoban01/flintlock-runner/internal/clock"
 	"github.com/phoban01/flintlock-runner/internal/config"
 	"github.com/phoban01/flintlock-runner/internal/scheduler"
+	"github.com/phoban01/flintlock-runner/internal/transport"
 )
 
 // RunnerUnsupported is the failure reason for a Job the Executor cannot run
@@ -65,12 +66,22 @@ func WithHTTPCacheUpstreams(upstreams []config.HTTPCacheUpstream) Option {
 	}
 }
 
+// WithGuestTransport makes every Profile's Stages run over the named Guest
+// Transport, whatever the Profile says. The Runner of a cluster fleet sets
+// kube-exec, because its MicroVMs are pods it reaches through the API
+// server and there is no Host it may connect to (KF-128, KF-063).
+func WithGuestTransport(kind transport.Kind) Option {
+	return func(p *provider) { p.transport = kind }
+}
+
 // provider is the flintlock ExecutorProvider (EX-001, EX-002).
 type provider struct {
 	deps      Deps
 	clk       clock.Clock
 	log       *slog.Logger
 	lifecycle scheduler.Lifecycle
+	// transport, when set, is the Guest Transport of every Profile.
+	transport transport.Kind
 	// httpCacheVars are the configured HTTP cache variable names.
 	httpCacheVars map[string]bool
 
