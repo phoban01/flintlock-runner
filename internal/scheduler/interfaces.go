@@ -140,6 +140,9 @@ type JobInfo struct {
 	// Image is the Job Image name; empty when the Job has none (SC-010,
 	// SC-011).
 	Image string
+	// Timeout is the Job's own timeout; zero when it is not known. The
+	// claim passes it to the Pool backend (KF-127).
+	Timeout time.Duration
 }
 
 // Reservation is the Scheduler's promise of capacity for one not-yet-known
