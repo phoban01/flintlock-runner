@@ -1,0 +1,7 @@
+# A stand-in for deploy/ that names the Host Image by tag where kustomize's
+# image transformer does not reach, in an annotation, so rendering has to
+# refuse it. For test-render.sh only.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - annotated.yaml

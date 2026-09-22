@@ -1,0 +1,6 @@
+# A stand-in for deploy/, for test-render.sh only: a kustomization that
+# names the flr image by its source tag, as deploy/ does.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - runner.yaml
