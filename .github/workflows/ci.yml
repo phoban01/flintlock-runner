@@ -120,3 +120,49 @@ jobs:
           echo "gating on: $ids"
           # shellcheck disable=SC2086
           SKIP_REPORT=1 hack/duvet-coverage.sh $ids
+
+  # The Host Image (docs/requirements/11-host-image.md): lint its sources,
+  # build it for x86_64 with podman, which runs the check stage of HI-008
+  # inside the built image, then check its OCI labels. The runner has no
+  # /dev/kvm access configured and no AWS credentials, which is HI-007. The
+  # build is slow, so it runs only when the image or this workflow changed.
+  image:
+    name: host image build and check stage
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          fetch-depth: 0
+      - name: did the image change
+        id: changed
+        env:
+          EVENT: ${{ github.event_name }}
+          BASE: ${{ github.base_ref }}
+          BEFORE: ${{ github.event.before }}
+        run: |
+          if [ "$EVENT" = pull_request ]; then
+            range="origin/$BASE...HEAD"
+          elif git cat-file -e "$BEFORE^{commit}" 2>/dev/null; then
+            range="$BEFORE..HEAD"
+          else
+            range=""
+          fi
+          if [ -z "$range" ] || git diff --name-only "$range" | grep -qE '^(image/|\.github/workflows/ci\.yml$)'; then
+            echo "build=true" >>"$GITHUB_OUTPUT"
+          else
+            echo "image/ is unchanged in $range; skipping the build"
+            echo "build=false" >>"$GITHUB_OUTPUT"
+          fi
+      - name: lint the image sources
+        if: steps.changed.outputs.build == 'true'
+        run: |
+          command -v shellcheck >/dev/null || { sudo apt-get update -qq && sudo apt-get install -y -qq shellcheck; }
+          FLINTLOCK_RUNNER_REQUIRE_SHELLCHECK=1 make image-lint
+      - name: build the image, check stage included
+        if: steps.changed.outputs.build == 'true'
+        run: |
+          podman --version
+          make image CONTAINER_ENGINE=podman
+      - name: run the checks again and compare the labels
+        if: steps.changed.outputs.build == 'true'
+        run: make image-check CONTAINER_ENGINE=podman
