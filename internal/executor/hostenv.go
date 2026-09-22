@@ -8,15 +8,18 @@ import (
 	"gitlab.com/gitlab-org/gitlab-runner/common/spec"
 
 	"github.com/phoban01/flintlock-runner/internal/config"
+	"github.com/phoban01/flintlock-runner/internal/kubelabels"
 )
 
 // Host Service names as they appear in the flintlock_prepare section
-// (EX-064). They are the keys of the host_services configuration section.
+// (EX-064). They are the keys of the host_services configuration section,
+// and the names the Pod Provider publishes a cluster fleet's Host Services
+// under (kubelabels).
 const (
-	ServiceBuildkit       = "buildkit"
-	ServiceGoProxy        = "go_proxy"
-	ServiceRegistryMirror = "registry_mirror"
-	ServiceHTTPCache      = "http_cache"
+	ServiceBuildkit       = kubelabels.HostServiceBuildkit
+	ServiceGoProxy        = kubelabels.HostServiceGoProxy
+	ServiceRegistryMirror = kubelabels.HostServiceRegistryMirror
+	ServiceHTTPCache      = kubelabels.HostServiceHTTPCache
 )
 
 // hostServiceEnv is the production HostServiceEnvResolver: a pure function

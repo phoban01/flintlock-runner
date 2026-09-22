@@ -72,6 +72,23 @@ const (
 	AnnotationHostServicePrefix = "host-service." + Prefix
 )
 
+// The Host Service names: the keys of the Runner's host_services section,
+// the names the Executor reads Virtual Node annotations by (KF-062), and the
+// only names the Pod Provider publishes under (KF-017), so that the two
+// sides cannot disagree about a service without one of them refusing to
+// start.
+const (
+	HostServiceBuildkit       = "buildkit"
+	HostServiceGoProxy        = "go_proxy"
+	HostServiceRegistryMirror = "registry_mirror"
+	HostServiceHTTPCache      = "http_cache"
+)
+
+// HostServiceNames lists every Host Service name, sorted.
+func HostServiceNames() []string {
+	return []string{HostServiceBuildkit, HostServiceGoProxy, HostServiceHTTPCache, HostServiceRegistryMirror}
+}
+
 // HostServiceAnnotation is the Virtual Node annotation key that carries the
 // address of the named Host Service (KF-017).
 func HostServiceAnnotation(service string) string {

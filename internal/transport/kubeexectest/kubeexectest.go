@@ -35,73 +35,56 @@ import (
 	"k8s.io/apimachinery/pkg/util/yaml"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
-	"sigs.k8s.io/controller-runtime/pkg/envtest"
 
 	"github.com/phoban01/flintlock-runner/internal/flintlock"
 	hostfake "github.com/phoban01/flintlock-runner/internal/flintlock/fake"
 	"github.com/phoban01/flintlock-runner/internal/kubelabels"
 	"github.com/phoban01/flintlock-runner/internal/kubelet"
+	"github.com/phoban01/flintlock-runner/internal/kubelet/kubelettest"
 )
 
 const (
-	// AssetsVar names the directory of kube-apiserver and etcd, which
-	// `make envtest` downloads and prints.
-	AssetsVar = "KUBEBUILDER_ASSETS"
-	// RequireVar names the variable that, when set, makes a missing
-	// environment a failure instead of a skip. CI sets it.
-	RequireVar = "FLINTLOCK_RUNNER_REQUIRE_ENVTEST"
 	// HostAddress is the internal address of every fake Host's Node, and so
 	// of its Virtual Node: the address the API server dials the Pod
 	// Provider's kubelet endpoint on, which listens there.
 	HostAddress = "127.0.0.1"
 	// WaitTimeout bounds every wait of the fixture.
 	WaitTimeout = 30 * time.Second
-	// agentNamespace holds the drain guard of every provider; nothing in
-	// these tests drains, but the provider's configuration names one.
-	agentNamespace = "flintlock-system"
 	// labelPodUID is the MicroVM label the Pod Provider records its pod's
 	// UID in (KF-021).
 	labelPodUID = kubelabels.Prefix + "pod-uid"
 )
 
-// ErrNoAssets is returned by Start when AssetsVar is unset and RequireVar is
-// not: the caller skips.
-var ErrNoAssets = errors.New("kubeexectest: no API server test environment: run `make envtest` and set " + AssetsVar)
+// ErrNoAssets is returned by Start when the envtest binaries are missing and
+// FLINTLOCK_RUNNER_REQUIRE_ENVTEST is not set: the caller skips.
+var ErrNoAssets = kubelettest.ErrNoAssets
 
 // Env is one running API server that can reach the Pod Providers the tests
 // start.
 type Env struct {
-	env *envtest.Environment
-	// Config is the administrator's configuration.
-	Config *rest.Config
-	// Admin is the administrator's client. It plays the scheduler that binds
-	// pods and the operator; the Pod Providers use it too, because what they
-	// may do is the provider's own tests' concern.
-	Admin kubernetes.Interface
+	// Environment is the Pod Provider's own test environment: the Host
+	// Agent's RBAC and admission policy applied, the API server's kubelet
+	// client bound to system:kubelet-api-admin, and a client per Host's
+	// provider (AgentFor). Its Admin plays the scheduler that binds pods and
+	// the operator.
+	*kubelettest.Environment
 
 	certs *hostfake.TestCerts
 	dir   string
-
-	users sync.Mutex
 	seq   atomic.Int64
 }
 
-// Start starts kube-apiserver and etcd, configured as a cluster's API server
-// is to reach its kubelets: a client certificate to present to them, the
-// authority their serving certificates are checked against, and the
-// internal address of a Node as the only address it dials, because a
-// Virtual Node's host name resolves nowhere. One certificate authority
-// issues all three sides here: the API server's kubelet client certificate,
-// which every Pod Provider requires (KF-031), and every provider's serving
-// certificate, which names HostAddress.
+// Start starts the Pod Provider's test environment (kubelettest) with its
+// shipped RBAC and admission policy, and with the API server configured as
+// a cluster's is to reach its kubelets: a client certificate to present to
+// them, the authority their serving certificates are checked against, and
+// the internal address of a Node as the only address it dials. One
+// certificate authority issues both sides here: the API server's kubelet
+// client certificate, whose identity kubelettest binds to
+// system:kubelet-api-admin as kubeadm does, so that every Pod Provider
+// authenticates it (KF-031) and authorizes it (KF-130), and every
+// provider's serving certificate, which names HostAddress.
 func Start() (*Env, error) {
-	dir := os.Getenv(AssetsVar)
-	if dir == "" {
-		if os.Getenv(RequireVar) != "" {
-			return nil, fmt.Errorf("kubeexectest: %s is set and %s is not: run `make envtest`", RequireVar, AssetsVar)
-		}
-		return nil, ErrNoAssets
-	}
 	certDir, err := os.MkdirTemp("", "kubeexectest-")
 	if err != nil {
 		return nil, err
@@ -111,33 +94,22 @@ func Start() (*Env, error) {
 		_ = os.RemoveAll(certDir)
 		return nil, err
 	}
-
-	env := &envtest.Environment{BinaryAssetsDirectory: dir}
-	env.ControlPlane.GetAPIServer().Configure().
-		Set("kubelet-client-certificate", certs.ClientCertFile).
-		Set("kubelet-client-key", certs.ClientKeyFile).
-		Set("kubelet-certificate-authority", certs.CAFile).
-		Set("kubelet-preferred-address-types", string(corev1.NodeInternalIP))
-	cfg, err := env.Start()
+	deploy := filepath.Join(moduleRoot(), "deploy", "host-agent")
+	env, err := kubelettest.Start(filepath.Join(deploy, "rbac.yaml"),
+		kubelettest.WithAdmissionPolicy(filepath.Join(deploy, "admission-policy.yaml")),
+		kubelettest.WithKubeletClient(kubelettest.KubeletClient{
+			CertFile: certs.ClientCertFile, KeyFile: certs.ClientKeyFile, CAFile: certs.CAFile,
+		}))
 	if err != nil {
 		_ = os.RemoveAll(certDir)
-		return nil, fmt.Errorf("kubeexectest: starting the API server test environment: %w", err)
-	}
-	e := &Env{env: env, Config: cfg, certs: certs, dir: certDir}
-	if e.Admin, err = kubernetes.NewForConfig(cfg); err == nil {
-		_, err = e.Admin.CoreV1().Namespaces().Create(context.Background(),
-			&corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: agentNamespace}}, metav1.CreateOptions{})
-	}
-	if err != nil {
-		_ = e.Stop()
 		return nil, err
 	}
-	return e, nil
+	return &Env{Environment: env, certs: certs, dir: certDir}, nil
 }
 
 // Stop stops the API server and etcd and removes the certificates.
 func (e *Env) Stop() error {
-	err := e.env.Stop()
+	err := e.Environment.Stop()
 	_ = os.RemoveAll(e.dir)
 	return err
 }
@@ -163,9 +135,7 @@ func (e *Env) RunnerConfig(t testing.TB, namespace string) *rest.Config {
 	t.Helper()
 	ctx := context.Background()
 	name := fmt.Sprintf("%s-runner-%d", namespace, e.seq.Add(1))
-	e.users.Lock()
-	user, err := e.env.AddUser(envtest.User{Name: name}, nil)
-	e.users.Unlock()
+	cfg, err := e.AddUser(name)
 	if err != nil {
 		t.Fatalf("adding user %s: %v", name, err)
 	}
@@ -196,7 +166,6 @@ func (e *Env) RunnerConfig(t testing.TB, namespace string) *rest.Config {
 
 	// The authoriser learns of a binding through its own watch, so the
 	// first moments after creating one can still be refused.
-	cfg := user.Config()
 	client := kubernetes.NewForConfigOrDie(cfg)
 	eventually(t, "the runner's role binding takes effect", func() bool {
 		_, podsErr := client.CoreV1().Pods(namespace).List(ctx, metav1.ListOptions{Limit: 1})
@@ -209,7 +178,7 @@ func (e *Env) RunnerConfig(t testing.TB, namespace string) *rest.Config {
 // runnerRoles reads the Role and the ClusterRole of deploy/runner/role.yaml.
 func runnerRoles(t testing.TB) (*rbacv1.Role, *rbacv1.ClusterRole) {
 	t.Helper()
-	path := filepath.Join(moduleRoot(t), "deploy", "runner", "role.yaml")
+	path := filepath.Join(moduleRoot(), "deploy", "runner", "role.yaml")
 	data, err := os.ReadFile(path)
 	if err != nil {
 		t.Fatal(err)
@@ -244,24 +213,11 @@ func runnerRoles(t testing.TB) (*rbacv1.Role, *rbacv1.ClusterRole) {
 	return role, clusterRole
 }
 
-// moduleRoot is the directory of go.mod, found from this file.
-func moduleRoot(t testing.TB) string {
-	t.Helper()
-	_, file, _, ok := runtime.Caller(0)
-	if !ok {
-		t.Fatal("kubeexectest: cannot locate the source tree")
-	}
-	dir := filepath.Dir(file)
-	for {
-		if _, err := os.Stat(filepath.Join(dir, "go.mod")); err == nil {
-			return dir
-		}
-		parent := filepath.Dir(dir)
-		if parent == dir {
-			t.Fatal("kubeexectest: no go.mod above " + file)
-		}
-		dir = parent
-	}
+// moduleRoot is the directory of go.mod: this file is three directories
+// below it.
+func moduleRoot() string {
+	_, file, _, _ := runtime.Caller(0)
+	return filepath.Join(filepath.Dir(file), "..", "..", "..")
 }
 
 // HostOptions shape one fake Host.
@@ -336,12 +292,19 @@ func (e *Env) NewHost(t testing.TB, opts HostOptions) *Host {
 		TLS:                 kubelet.ServerTLS{CertFile: e.certs.ServerCertFile, KeyFile: e.certs.ServerKeyFile, ClientCAFile: e.certs.CAFile},
 		LeaseDuration:       time.Hour,
 		DrainTimeout:        time.Hour,
-		Guard:               kubelet.Guard{Namespace: agentNamespace},
+		Guard:               kubelet.Guard{Namespace: kubelettest.AgentNamespace},
 		SyncInterval:        50 * time.Millisecond,
 		GuestAddressCommand: "echo 10.200.0.7",
 	}
 	cfg.ApplyDefaults()
 
+	// The provider runs as its Host's Host Agent: the shipped RBAC, under
+	// the shipped admission policy, with an identity that names its Host
+	// (KF-111, KF-133), as it runs in production.
+	agent, err := e.AgentFor(h.Node)
+	if err != nil {
+		t.Fatal(err)
+	}
 	listener, err := net.Listen("tcp", cfg.Listen)
 	if err != nil {
 		t.Fatal(err)
@@ -351,7 +314,7 @@ func (e *Env) NewHost(t testing.TB, opts HostOptions) *Host {
 	done := make(chan error, 1)
 	go func() {
 		done <- kubelet.Run(runCtx, kubelet.Options{
-			Config: cfg, Kube: e.Admin, Host: h.Fake.Client(), Version: "test", Listener: listener, Ready: ready,
+			Config: cfg, Kube: agent, Host: h.Fake.Client(), Version: "test", Listener: listener, Ready: ready,
 			Logger: slog.New(slog.NewTextHandler(h.logs, &slog.HandlerOptions{Level: slog.LevelInfo})),
 		})
 	}()

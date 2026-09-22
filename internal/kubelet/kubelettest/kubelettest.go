@@ -13,6 +13,7 @@ import (
 	"fmt"
 	"os"
 	"strings"
+	"sync"
 	"time"
 
 	admissionregistrationv1 "k8s.io/api/admissionregistration/v1"
@@ -73,6 +74,8 @@ type Environment struct {
 	// policy is loaded it may change nothing; AgentFor is the client of one
 	// Host's provider.
 	Agent kubernetes.Interface
+
+	users sync.Mutex
 }
 
 // Option configures Start.
@@ -80,6 +83,29 @@ type Option func(*options)
 
 type options struct {
 	admissionPolicy string
+	kubeletClient   *KubeletClient
+}
+
+// KubeletClient is the material the API server reaches kubelet APIs with:
+// the client certificate and key it presents, whose common name has to be
+// KubeletClientUser for the binding Start makes to apply, and the
+// certificate authority it checks their serving certificates against. The
+// fake Host's WriteTestCerts writes all three.
+type KubeletClient struct {
+	CertFile string
+	KeyFile  string
+	CAFile   string
+}
+
+// WithKubeletClient configures the API server as a cluster's is to reach
+// its kubelets, so that a pods/exec request is proxied to the Pod Provider
+// of the pod's Virtual Node: the client certificate of kc, its certificate
+// authority for the provider's serving certificate, and the internal
+// address as the only node address it dials, because a Virtual Node has no
+// other that resolves. Without it the API server has no kubelet client
+// certificate and a Pod Provider refuses whatever it proxies (KF-031).
+func WithKubeletClient(kc KubeletClient) Option {
+	return func(o *options) { o.kubeletClient = &kc }
 }
 
 //= docs/requirements/12-cluster-fleet.md#cluster-test-doubles
@@ -118,6 +144,13 @@ func Start(rbacManifest string, opts ...Option) (*Environment, error) {
 		return nil, ErrNoAssets
 	}
 	env := &envtest.Environment{}
+	if kc := o.kubeletClient; kc != nil {
+		env.ControlPlane.GetAPIServer().Configure().
+			Set("kubelet-client-certificate", kc.CertFile).
+			Set("kubelet-client-key", kc.KeyFile).
+			Set("kubelet-certificate-authority", kc.CAFile).
+			Set("kubelet-preferred-address-types", string(corev1.NodeInternalIP))
+	}
 	cfg, err := env.Start()
 	if err != nil {
 		return nil, fmt.Errorf("kubelettest: starting the API server test environment: %w", err)
@@ -147,6 +180,19 @@ func Start(rbacManifest string, opts ...Option) (*Environment, error) {
 
 // Stop stops the API server and etcd.
 func (e *Environment) Stop() error { return e.env.Stop() }
+
+// AddUser returns the client configuration of a new user of that name, who
+// may do nothing until a test binds a role to it. It is safe for concurrent
+// use, which envtest's own is not.
+func (e *Environment) AddUser(name string) (*rest.Config, error) {
+	e.users.Lock()
+	defer e.users.Unlock()
+	user, err := e.env.AddUser(envtest.User{Name: name}, nil)
+	if err != nil {
+		return nil, err
+	}
+	return user.Config(), nil
+}
 
 // AgentFor is the client of the Pod Provider of the Host whose Node is
 // hostNode: the Host Agent's ServiceAccount, impersonated with the node

@@ -12,6 +12,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -76,8 +77,8 @@ func TestVirtualNodeRegistration(t *testing.T) {
 	services := listenOn(t)
 	f.cfg.BridgeGateway = "127.0.0.1"
 	f.cfg.HostServices = map[string]HostService{
-		"goproxy":  {Enabled: true, Port: services.port},
-		"registry": {Enabled: false, Port: 5000},
+		kubelabels.HostServiceGoProxy:        {Enabled: true, Port: services.port},
+		kubelabels.HostServiceRegistryMirror: {Enabled: false, Port: 5000},
 	}
 	f.start()
 	ctx := context.Background()
@@ -105,6 +106,20 @@ func TestVirtualNodeRegistration(t *testing.T) {
 		}
 		if got := node.Status.Allocatable[resourceName]; got.Cmp(wantQ) != 0 {
 			t.Errorf("allocatable %s = %s, want %s", resourceName, got.String(), want)
+		}
+	}
+
+	// The only address is the Host's internal one, where the API server
+	// dials the kubelet API: the Virtual Node's own name resolves nowhere,
+	// so a hostname address would break exec on an API server that prefers
+	// it.
+	wantAddrs := []corev1.NodeAddress{{Type: corev1.NodeInternalIP, Address: hostAddress}}
+	if !reflect.DeepEqual(node.Status.Addresses, wantAddrs) {
+		t.Errorf("addresses = %+v, want only the host's internal address %+v", node.Status.Addresses, wantAddrs)
+	}
+	for _, addr := range node.Status.Addresses {
+		if addr.Type == corev1.NodeHostName {
+			t.Errorf("the virtual node reports the hostname address %q", addr.Address)
 		}
 	}
 
@@ -137,10 +152,10 @@ func TestVirtualNodeRegistration(t *testing.T) {
 		t.Errorf("taints = %+v, want %+v among them", node.Spec.Taints, want)
 	}
 
-	if got := node.Annotations[kubelabels.HostServiceAnnotation("goproxy")]; got != services.addr {
-		t.Errorf("goproxy annotation = %q, want %q", got, services.addr)
+	if got := node.Annotations[kubelabels.HostServiceAnnotation(kubelabels.HostServiceGoProxy)]; got != services.addr {
+		t.Errorf("go_proxy annotation = %q, want %q", got, services.addr)
 	}
-	if _, published := node.Annotations[kubelabels.HostServiceAnnotation("registry")]; published {
+	if _, published := node.Annotations[kubelabels.HostServiceAnnotation(kubelabels.HostServiceRegistryMirror)]; published {
 		t.Error("a disabled Host Service was published")
 	}
 	if node.Status.DaemonEndpoints.KubeletEndpoint.Port == 0 {
@@ -207,7 +222,7 @@ func TestVirtualNodeReadinessFollowsTheHost(t *testing.T) {
 	f := newFixture(t, flintlock.FakeHostConfig{})
 	service := listenOn(t)
 	f.cfg.BridgeGateway = "127.0.0.1"
-	f.cfg.HostServices = map[string]HostService{"goproxy": {Enabled: true, Port: service.port}}
+	f.cfg.HostServices = map[string]HostService{kubelabels.HostServiceGoProxy: {Enabled: true, Port: service.port}}
 	f.start()
 
 	waitReady := func(want bool, reason, inMessage string) {
@@ -220,7 +235,7 @@ func TestVirtualNodeReadinessFollowsTheHost(t *testing.T) {
 	waitReady(true, reasonReady, "")
 
 	_ = service.Close()
-	waitReady(false, reasonHostServiceDown, "goproxy")
+	waitReady(false, reasonHostServiceDown, kubelabels.HostServiceGoProxy)
 	again, err := net.Listen("tcp", service.addr)
 	if err != nil {
 		t.Fatalf("listening on %s again: %v", service.addr, err)
