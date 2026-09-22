@@ -527,6 +527,25 @@ refute "no flintlockd configuration file overrides the unit" test -e /etc/opt/fl
 
 #= docs/requirements/11-host-image.md#image-flintlockd
 #= type=test
+#/ The Host Image SHALL admit connections to the local
+#/ `flintlockd` endpoint only from the Pod Provider's user id, which it reads
+#/ from the Host configuration file with a default when none is set, and
+#/ SHALL refuse them from every other process on the Host.
+# The rule the firewall loads, rendered from the installed scripts for the
+# default user id, a configured one and values that are no user id. That
+# the kernel enforces it cannot be shown here: a build container has no
+# netlink for nft to load it with, let alone a second user to connect as.
+if "$LIBEXEC/check-flintlockd-access-cases" "$work"; then
+  ok "flintlockd access cases (default user id, configured user id, refused values)"
+else
+  fail "flintlockd access cases"
+fi
+expect "the rendered firewall admits only the Pod Provider's user id to flintlockd" \
+  has "$nftf" '^[[:space:]]*oifname "lo" tcp dport 9090 meta skuid != 10250 counter reject with tcp reset$'
+expect "flr-network loads the rule before flintlockd starts" has "$UNITS/flr-network.service" '^Before=flintlockd\.service'
+
+#= docs/requirements/11-host-image.md#image-flintlockd
+#= type=test
 #/ The Host Image SHALL enable the `flintlockd` exec API.
 expect "the exec API is enabled" has "$fl" '--enable-exec-api '
 # Every flag the unit passes has to exist in the pinned flintlockd.

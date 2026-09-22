@@ -40,3 +40,13 @@ HOST_CONTROL_PORTS=9090,8090,10248,10250,10255,10256,10260,9252,1338
 # The share of the thin pool volume group given to the Host Service cache
 # volume when the group is first created, 0 to 50.
 CACHE_VOLUME_PERCENT=15
+
+#= docs/requirements/11-host-image.md#image-flintlockd
+#/ The Host Image SHALL admit connections to the local
+#/ `flintlockd` endpoint only from the Pod Provider's user id, which it reads
+#/ from the Host configuration file with a default when none is set
+# The user id the Pod Provider's container runs as, the only one that may
+# connect to flintlockd's local endpoint. Never 0. The Fleet Manifests run
+# the Pod Provider as this id and nothing else of the Host Agent as it
+# (KF-135); change both together.
+POD_PROVIDER_UID=10250

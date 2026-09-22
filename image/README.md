@@ -15,7 +15,7 @@ guest firewall at boot. Nothing is pushed to a Host after it boots.
 | `build/` | The build steps the Containerfile runs |
 | `rootfs/` | Copied to `/`: units, `/usr/libexec/flr` scripts, configuration |
 | `selinux/` | The policy module |
-| `check.sh`, `check-thin-pool.sh` | The check stage, run inside the built image |
+| `check.sh`, `check-thin-pool.sh`, `check-flintlockd-access.sh` | The check stage, run inside the built image; the last two run in `make image-lint` too |
 | `check-labels.sh`, `lint.sh` | Checks that run outside the image |
 | `publish-ami.sh` | AMI publishing, on request only |
 
@@ -24,7 +24,7 @@ guest firewall at boot. Nothing is pushed to a Host after it boots.
 ```sh
 make image          # build for x86_64; the check stage is part of the build
 make image-check    # run the checks again in the built image, compare its labels
-make image-lint     # bash -n, shellcheck, digest pin, thin-pool cases; no build
+make image-lint     # bash -n, shellcheck, digest pin, thin-pool and flintlockd access cases; no build
 ```
 
 `make image` uses podman when it is installed and docker otherwise
@@ -72,7 +72,7 @@ has it.
 | `flr-kvm` | refuses unless `/dev/kvm` opens for reading and writing | HI-011 |
 | `flr-thin-pool` | creates the thin pool once; leaves an existing one alone | HI-020 to HI-023 |
 | `flr-cache` | mounts the Host Service cache volume | HI-024 |
-| `flr-network` | bridge `flbr0`, forwarding, NAT, guest firewall | HI-030, HI-032 to HI-037 |
+| `flr-network` | bridge `flbr0`, forwarding, NAT, guest firewall, `flintlockd` for the Pod Provider's user id only | HI-030, HI-032 to HI-037, HI-063 |
 | `flr-dnsmasq` | DHCP and DNS on the bridge | HI-031 |
 | `containerd` | one containerd for the kubelet and for `flintlockd` | HI-040 |
 | `flintlockd` | `Requires=` the KVM gate, the thin pool, the bridge and containerd | HI-040 to HI-044 |
@@ -86,7 +86,8 @@ has it.
 gateway off. The Pod Provider reaches it there because the Host Agent runs in
 the Host's network namespace. A guest cannot: the guest firewall drops
 everything that arrives on the bridge except DHCP, DNS and the Host Service
-ports on the gateway.
+ports on the gateway. Of the Host's own processes, only the Pod Provider's
+user id can: see [The Pod Provider's user id](#the-pod-providers-user-id).
 
 ## Host configuration file
 
@@ -108,6 +109,7 @@ reads a credential from it or from user-data.
 | `HOST_SERVICE_PORTS` | `1234,3000,5000,3128` | TCP ports guests may reach on the gateway |
 | `HOST_CONTROL_PORTS` | `9090,8090,10248,10250,10255,10256,10260,9252,1338` | The Host's own ports, dropped for guests by name as well as by the final drop |
 | `CACHE_VOLUME_PERCENT` | `15` | Share of the volume group for the cache volume, when first created |
+| `POD_PROVIDER_UID` | `10250` | The one user id that may connect to `flintlockd`; 1 to 4294967294, never 0. See below |
 
 ```yaml
 # in the KubeadmConfigTemplate
@@ -141,6 +143,56 @@ The volume group is laid out as the pool (80%), its metadata (1%), the cache
 volume (`CACHE_VOLUME_PERCENT`, ext4, mounted at
 `/var/lib/flintlock-runner/cache`) and 4% left free for the pool's
 autoextension.
+
+### The Pod Provider's user id
+
+`flintlockd` has no authentication of its own, and a loopback port is open
+to every process in the Host's network namespace, which includes every pod
+with host networking. So the guest firewall (`flr-network`, table
+`inet flr`) has an output chain with one rule:
+
+```
+oifname "lo" tcp dport 9090 meta skuid != <POD_PROVIDER_UID> counter reject with tcp reset
+```
+
+Every connection to port 9090 over loopback, to any address, from a socket
+owned by any other user id is reset before it is made: root's, a Host
+Service's, a DaemonSet's. `flintlockd`'s replies come from port 9090 and
+pass. The rule is loaded with the rest of the firewall before `flintlockd`
+starts (HI-063).
+
+This is the contract the Fleet Manifests follow (KF-135):
+
+- The Pod Provider's container runs with `runAsUser` equal to
+  `POD_PROVIDER_UID`, `10250` unless the Host configuration file says
+  otherwise, and with `runAsNonRoot: true`. A value changed in the
+  bootstrap configuration has to be changed in the manifests too; nothing
+  checks that the two agree except the Virtual Node, which stays not ready
+  because `flintlockd` refuses the provider.
+- No other container of the Host Agent, and nothing else scheduled onto a
+  Host, runs as that user id. The id is chosen to be outside the ranges base
+  images default to (`65532` for distroless, `65534` for nobody) and
+  outside systemd's dynamic users; keep it that way.
+- The Host Agent runs in the Host's network namespace (KF-071), which
+  rules out a user namespace for the pod, so the id in the pod is the id
+  the Host's kernel sees. A pod in a user namespace would present a
+  different id and be refused.
+- The container needs no capability to connect: port 9090 is not privileged
+  and the rule matches the socket's owner only. Files it reads, the kubelet
+  API's certificates and its ServiceAccount token, have to be readable by
+  that user id (`fsGroup` or `defaultMode`).
+
+An operator who needs to talk to `flintlockd` on a Host by hand does it as
+that user id, for example with `setpriv --reuid=10250 --regid=10250
+--clear-groups`. The checks render the rule for the default and for a
+configured user id and refuse `0` and anything that is not a user id; where
+unprivileged user and network namespaces are available (not in the image
+build) they also load it and show a connection from the configured id let
+through and one from root or any other id refused. On a booted Host,
+`nft list chain inet flr output` shows the rule and its counter.
+
+A unix socket with file permissions would be the better boundary, and is the
+one to move to when `flintlockd` can listen on one.
 
 ### The kubelet
 

@@ -27,7 +27,10 @@ After=flr-kvm.service flr-thin-pool.service flr-network.service containerd.servi
 # a guest cannot, because the guest firewall's input chain drops everything
 # arriving on the bridge except DHCP, DNS and the Host Service ports, and the
 # kernel refuses loopback destinations arriving on an interface as martians
-# unless something (kube-proxy can) turns route_localnet on.
+# unless something (kube-proxy can) turns route_localnet on. Of the Host's
+# own processes, only the Pod Provider's user id may connect: the guest
+# firewall's output chain resets every other connection to this port over
+# loopback, root's included (HI-063).
 #
 #= docs/requirements/11-host-image.md#image-flintlockd
 #/ The Host Image SHALL NOT expose `flintlockd` on any address
