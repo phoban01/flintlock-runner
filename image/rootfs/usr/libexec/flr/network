@@ -1,0 +1,139 @@
+#!/usr/bin/bash
+# flr-network.service: the guest bridge, forwarding, NAT, the guest firewall
+# and the configuration of the bridge's DHCP and DNS service. Ported from
+# networking.sh.tmpl in internal/fleet/scripts/templates.
+#
+# `network render DIR` writes the firewall and dnsmasq files into DIR and
+# touches nothing else, so the build's check stage can parse them.
+FLR_UNIT=flr-network
+# shellcheck source=image/rootfs/usr/libexec/flr/lib.sh
+. "${FLR_LIB:-/usr/libexec/flr/lib.sh}"
+load_host_env
+
+mode=${1:-apply}
+out=${2:-$FLR_RUN}
+bridge=$FLR_BRIDGE
+
+# The primary interface carries the default route; guests are NATed out of it.
+if [ "$mode" = render ]; then
+  primary=${FLR_PRIMARY_INTERFACE:-eth0}
+else
+  primary=$(ip -o -4 route show default | awk '{for (i = 1; i < NF; i++) if ($i == "dev") { print $(i + 1); exit }}')
+  [ -n "$primary" ] || die "no IPv4 default route"
+fi
+
+# The guest firewall. The tables are replaced as a whole, so loading the
+# file again leaves exactly one copy of each rule.
+render_firewall() {
+  cat <<EOF
+table inet flr
+delete table inet flr
+table inet flr {
+	set protected {
+		type ipv4_addr
+		flags interval
+		auto-merge
+$([ -z "$FLR_PROTECTED_CIDRS" ] || echo "		elements = { ${FLR_PROTECTED_CIDRS//,/, } }")
+	}
+
+	# Traffic from guests to the Host itself.
+	chain input {
+		type filter hook input priority filter - 10; policy accept;
+		#= docs/requirements/11-host-image.md#image-networking
+		#/ The Host Image SHALL allow traffic from the guest subnet to the
+		#/ bridge gateway address only on the Host Service ports and the DHCP and DNS
+		#/ ports, and SHALL keep every other port on the gateway closed to guests.
+		iifname "$bridge" udp dport 67 accept
+		iifname "$bridge" ip daddr $FLR_GATEWAY udp dport 53 accept
+		iifname "$bridge" ip daddr $FLR_GATEWAY tcp dport 53 accept
+$(if [ -n "$FLR_HOST_SERVICE_PORTS" ]; then
+    echo "		iifname \"$bridge\" ip daddr $FLR_GATEWAY tcp dport { ${FLR_HOST_SERVICE_PORTS//,/, } } accept"
+    echo "		# The Host Services answer only the guest subnet and the Host itself."
+    echo "		iifname != { \"$bridge\", \"lo\" } ip daddr $FLR_GATEWAY tcp dport { ${FLR_HOST_SERVICE_PORTS//,/, } } drop"
+  fi)
+		#= docs/requirements/11-host-image.md#image-networking
+		#/ The Host Image SHALL drop traffic from the guest subnet to the
+		#/ Host's own kubelet, Pod Provider and metrics ports.
+		iifname "$bridge" tcp dport { ${FLR_HOST_CONTROL_PORTS//,/, } } drop
+		# Every other port on the gateway, and every other address of the
+		# Host, is closed to guests.
+		iifname "$bridge" drop
+	}
+
+	# Traffic from guests leaving the Host.
+	chain forward {
+		type filter hook forward priority filter - 10; policy accept;
+		#= docs/requirements/11-host-image.md#image-networking
+		#/ The Host Image SHALL drop traffic from the guest subnet to the
+		#/ EC2 instance metadata service address.
+		iifname "$bridge" ip daddr $FLR_METADATA_V4 drop
+		iifname "$bridge" ip6 daddr $FLR_METADATA_V6 drop
+		#= docs/requirements/11-host-image.md#image-networking
+		#/ The Host Image SHALL drop traffic from the guest subnet to every
+		#/ protected CIDR listed in the Host configuration file.
+		iifname "$bridge" ip daddr @protected drop
+		iifname "$bridge" oifname "$primary" accept
+		iifname "$primary" oifname "$bridge" ct state established,related accept
+		oifname "$bridge" drop
+	}
+}
+
+table ip flr_nat
+delete table ip flr_nat
+table ip flr_nat {
+	chain postrouting {
+		type nat hook postrouting priority srcnat; policy accept;
+		ip saddr $FLR_GUEST_SUBNET oifname "$primary" masquerade
+	}
+}
+EOF
+}
+
+#= docs/requirements/11-host-image.md#image-networking
+#/ The Host Image SHALL run a DHCP and DNS service bound to the
+#/ bridge so that guests obtain an address, gateway and resolver without
+#/ static configuration.
+# flr-dnsmasq.service runs dnsmasq on this file and nothing else.
+render_dnsmasq() {
+  echo "interface=$bridge"
+  echo "bind-dynamic"
+  echo "except-interface=lo"
+  echo "dhcp-authoritative"
+  echo "dhcp-range=$FLR_DHCP_START,$FLR_DHCP_END,$FLR_NETMASK,12h"
+  echo "dhcp-option=option:router,$FLR_GATEWAY"
+  echo "dhcp-option=option:dns-server,$FLR_GATEWAY"
+  echo "dhcp-leasefile=/var/lib/dnsmasq/flr.leases"
+  # systemd-resolved leaves /etc/resolv.conf pointing at its loopback stub,
+  # which dnsmasq refuses as an upstream, so every guest query would come
+  # back REFUSED. The real upstream servers are in this file instead.
+  if [ "$mode" = render ] || [ -e /run/systemd/resolve/resolv.conf ]; then
+    echo "resolv-file=/run/systemd/resolve/resolv.conf"
+  fi
+}
+
+mkdir -p "$out"
+render_firewall >"$out/guest-firewall.nft"
+render_dnsmasq >"$out/dnsmasq.conf"
+chmod 0644 "$out/guest-firewall.nft" "$out/dnsmasq.conf"
+[ "$mode" = render ] && exit 0
+
+#= docs/requirements/11-host-image.md#image-networking
+#/ The Host Image SHALL enable IPv4 forwarding and SHALL configure
+#/ source NAT from the guest subnet to the Host's primary interface.
+# /usr/lib/sysctl.d/90-flr.conf sets it at boot; this covers a unit restart
+# after something else turned it off.
+[ "$(sysctl -n net.ipv4.ip_forward)" = 1 ] || sysctl -q -w net.ipv4.ip_forward=1
+
+#= docs/requirements/11-host-image.md#image-networking
+#/ The Host Image SHALL create a Linux bridge at boot with the
+#/ guest subnet from the Host configuration file and SHALL configure
+#/ `flintlockd` to attach TAP interfaces to it.
+ip link show "$bridge" >/dev/null 2>&1 || ip link add "$bridge" type bridge
+# A subnet changed in the Host configuration replaces the old address.
+if ! ip -o -4 addr show dev "$bridge" | grep -qF " $FLR_GATEWAY/$FLR_PREFIX "; then
+  ip -4 addr flush dev "$bridge"
+  ip addr add "$FLR_GATEWAY/$FLR_PREFIX" dev "$bridge"
+fi
+ip link set "$bridge" up
+nft -f "$out/guest-firewall.nft"
+log "bridge $bridge at $FLR_GATEWAY/$FLR_PREFIX, guests NATed out of $primary"

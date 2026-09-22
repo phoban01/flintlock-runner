@@ -1,0 +1,19 @@
+#= docs/requirements/11-host-image.md#image-networking
+#/ The Host Image SHALL create a Linux bridge at boot with the
+#/ guest subnet from the Host configuration file and SHALL configure
+#/ `flintlockd` to attach TAP interfaces to it.
+[Unit]
+Description=flintlock-runner guest bridge flbr0, NAT and guest firewall
+Documentation=https://github.com/phoban01/flintlock-runner/blob/main/image/README.md
+Requires=flr-host-config.service
+Wants=network-online.target
+After=flr-host-config.service network-online.target nftables.service systemd-modules-load.service systemd-sysctl.service
+Before=flintlockd.service flr-dnsmasq.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/libexec/flr/network
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,56 @@
+#= docs/requirements/11-host-image.md#image-flintlockd
+#/ The Host Image SHALL run `flintlockd`, its containerd and every
+#/ hypervisor process they start as systemd services outside the cgroup of
+#/ any Kubernetes pod.
+# Firecracker and Cloud Hypervisor processes are children of flintlockd and
+# stay in this unit's cgroup under system.slice. KillMode=process keeps a
+# restart of flintlockd from killing the MicroVMs it started.
+[Unit]
+Description=flintlock microvm service
+Documentation=https://www.liquidmetal.dev
+#= docs/requirements/11-host-image.md#image-flintlockd
+#/ The Host Image SHALL start `flintlockd` only after the thin
+#/ pool and the bridge are present.
+# Requires= as well as After=: when the KVM gate or the thin pool unit
+# fails, flintlockd is not started at all (HI-011, HI-022).
+Requires=flr-kvm.service flr-thin-pool.service flr-network.service containerd.service
+After=flr-kvm.service flr-thin-pool.service flr-network.service containerd.service
+
+[Service]
+#= docs/requirements/11-host-image.md#image-flintlockd
+#/ The Host Image SHALL configure `flintlockd` to listen only on a
+#/ local endpoint, a unix socket or a loopback address, that the Pod Provider
+#/ of `12-cluster-fleet.md` can reach and a guest cannot.
+# flintlockd v0.15.1 listens with net.Listen("tcp", ...) only, so the local
+# endpoint is a loopback address rather than a unix socket. The Pod Provider
+# runs in the Host's network namespace (KF-071) and reaches 127.0.0.1:9090;
+# a guest cannot, because the guest firewall's input chain drops everything
+# arriving on the bridge except DHCP, DNS and the Host Service ports, and the
+# kernel refuses loopback destinations arriving on an interface as martians
+# unless something (kube-proxy can) turns route_localnet on.
+#
+#= docs/requirements/11-host-image.md#image-flintlockd
+#/ The Host Image SHALL NOT expose `flintlockd` on any address
+#/ reachable from outside the Host.
+# No TLS and no token: nothing but this Host can reach the endpoint. The
+# HTTP gateway (--enable-http) and the debug endpoint stay off.
+#
+#= docs/requirements/11-host-image.md#image-flintlockd
+#/ The Host Image SHALL enable the `flintlockd` exec API.
+ExecStart=/usr/bin/flintlockd run \
+    --grpc-endpoint 127.0.0.1:9090 \
+    --insecure \
+    --enable-exec-api \
+    --bridge-name flbr0 \
+    --containerd-socket /run/containerd/containerd.sock \
+    --state-dir /var/lib/flintlock \
+    --firecracker-bin /usr/bin/firecracker \
+    --cloudhypervisor-bin /usr/bin/cloud-hypervisor-static
+Restart=always
+RestartSec=5
+User=root
+KillMode=process
+LimitNOFILE=1048576
+
+[Install]
+WantedBy=multi-user.target

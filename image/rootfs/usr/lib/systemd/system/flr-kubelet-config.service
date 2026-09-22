@@ -1,0 +1,22 @@
+#= docs/requirements/11-host-image.md#kubernetes-node
+#/ The Host Image SHALL register its kubelet with the labels
+#/ `gitlab-runner.flintlock.dev/host` set to `true`,
+#/ `gitlab-runner.flintlock.dev/image` set to a value derived from the image
+#/ digest and one label per hypervisor carrying its pinned version.
+# kubeadm join starts the kubelet from cloud-init's final stage, which runs
+# after multi-user.target, so this unit has always finished by then;
+# Before=kubelet.service covers every later boot.
+[Unit]
+Description=flintlock-runner kubelet labels and reservations
+Documentation=https://github.com/phoban01/flintlock-runner/blob/main/image/README.md
+Requires=flr-host-config.service
+After=flr-host-config.service
+Before=kubelet.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/libexec/flr/kubelet-config
+
+[Install]
+WantedBy=multi-user.target
