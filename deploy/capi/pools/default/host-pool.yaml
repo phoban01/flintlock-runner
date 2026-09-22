@@ -27,9 +27,9 @@ data:
   # The Kubernetes version of that Host Image (its AMI's
   # gitlab-runner.flintlock.dev/kubernetes-version tag, image/versions.env).
   kubernetesVersion: v1.35.8
-  # KF-004: at least the Pod Provider's drain_timeout (1h in
-  # deploy/host-agent/config/kubelet.yaml.tmpl), with room for the idle pods
-  # to leave and the drain guard to go.
+  # KF-004: at least the Exec Agent's drain_timeout (1h in
+  # deploy/host-agent/config/agent.yaml.tmpl), with room for the drain guard
+  # to go.
   nodeDrainTimeoutSeconds: "4500"
   # KF-005: how long a Host's Node may stay not ready before its Machine is
   # replaced.

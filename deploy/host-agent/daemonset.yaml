@@ -1,15 +1,20 @@
 # The Host Agent (docs/requirements/12-cluster-fleet.md, section "Host
-# Agent"): one pod per Host with the Pod Provider and the Host Services.
+# Agent"): one pod per Host with the Exec Agent and the Host Services.
 #
 #= docs/requirements/12-cluster-fleet.md#cluster-host-agent
 #/ The Fleet Manifests SHALL run the Host Agent as a DaemonSet that
 #/ tolerates the Host taint, selects the Host label and contains the Pod
 #/ Provider and the Host Services of FL-100.
+# The Pod Provider part of KF-070 is superseded by the move to battery's
+# claim resources: the Exec Agent takes the Pod Provider's place in the Host
+# Agent (KF-170), and no Pod Provider runs here.
 #
-# This file is the Pod Provider and the plumbing every Host Service shares.
-# Each Host Service is a kustomize Component under services/, which adds its
-# containers, its configuration templates and its entry in the Pod Provider's
-# configuration; deploy/kustomization.yaml includes all four.
+# This file is the plumbing every container of the Host Agent shares. The
+# Exec Agent's container comes from deploy/agent (host-agent-patch.yaml),
+# included by kustomization.yaml. Each Host Service is a kustomize Component
+# under services/, which adds its containers, its configuration templates
+# and its entry in the Exec Agent's configuration; deploy/kustomization.yaml
+# includes all four.
 #
 # Least privilege (KF-113). Nothing here is privileged, and no container
 # adds a capability except the two noted where they are added: CAP_CHOWN
@@ -17,7 +22,7 @@
 # buildkitd. The host mounts are, each justified where it is declared:
 #
 #   /run/flr/host.env                    read-only, render only
-#   /run/flr/not-ready.d                 read-only, Pod Provider only
+#   /run/flr/not-ready.d                 read-only, Exec Agent only
 #   /var/lib/flintlock-runner/cache      read-write, cache preparation and
 #                                        the Host Services, each its own
 #                                        subdirectory
@@ -47,11 +52,11 @@ spec:
       labels:
         app.kubernetes.io/name: flintlock-host-agent
     spec:
-      # rbac.yaml and admission-policy.yaml name this account in this
-      # namespace; keep both.
+      # deploy/agent's rbac.yaml and admission-policy.yaml name this account
+      # in this namespace; keep both.
       serviceAccountName: flintlock-host-agent
-      # The token goes to the Pod Provider only, through the projected
-      # volume provider-token below.
+      # The token goes to the Exec Agent only, through its projected volume
+      # exec-agent-token (deploy/agent/host-agent-patch.yaml).
       automountServiceAccountToken: false
       nodeSelector:
         gitlab-runner.flintlock.dev/host: "true"
@@ -71,8 +76,9 @@ spec:
       dnsPolicy: ClusterFirstWithHostNet
       hostPID: false
       hostIPC: false
-      # KF-029: stopping the Pod Provider leaves every MicroVM alone, so
-      # there is nothing to wait for beyond the services' own shutdown.
+      # Stopping the Exec Agent leaves every MicroVM alone (its Stages end
+      # as stream failures, KF-176), so there is nothing to wait for beyond
+      # the services' own shutdown.
       terminationGracePeriodSeconds: 30
       securityContext:
         runAsNonRoot: true
@@ -93,7 +99,7 @@ spec:
         seLinuxOptions:
           level: "s0:c311,c827"
       initContainers:
-        # Renders the Pod Provider's and the Host Services' configuration for
+        # Renders the Exec Agent's and the Host Services' configuration for
         # this Host, bridge gateway address included (render.sh).
         - name: render
           image: busybox:1.37.0@sha256:9db7b59979c38555a39def84a31fb98b5296952f9e3afd4f6f11f05b07adfab0
@@ -160,70 +166,10 @@ spec:
               readOnly: true
             - name: cache
               mountPath: /var/lib/flintlock-runner/cache
-      containers:
-        # The Pod Provider, `flr kubelet` (KF-010 to KF-032).
-        - name: pod-provider
-          image: ghcr.io/phoban01/flintlock-runner/flr:dev
-          args: [kubelet, --kubelet-config, /etc/flr/rendered/kubelet.yaml]
-          env:
-            # KF-010: the Virtual Node is named after the Host's Node.
-            - name: FLINTLOCK_RUNNER_HOST_NODE
-              valueFrom:
-                fieldRef:
-                  fieldPath: spec.nodeName
-          ports:
-            - name: kubelet-api
-              containerPort: 10260
-              protocol: TCP
-          #= docs/requirements/12-cluster-fleet.md#cluster-hardening
-          #/ The Fleet Manifests SHALL run the Pod Provider's container as
-          #/ the user id that HI-063 admits to the local `flintlockd` endpoint, and
-          #/ SHALL run no other container of the Host Agent as that user id.
-          # The user id is POD_PROVIDER_UID of the Host Image, 10250 by
-          # default, written here by kustomize from pod-provider-uid.yaml;
-          # change it there, never here. It is set on this container only:
-          # the pod sets no user id, and every other container names its
-          # own, none of them this one. The files the Pod Provider reads, its
-          # token and its serving certificate, are mounted with mode 0444 so
-          # that this id can read them.
-          securityContext:
-            runAsNonRoot: true
-            runAsUser: 10250
-            runAsGroup: 10250
-            allowPrivilegeEscalation: false
-            readOnlyRootFilesystem: true
-            capabilities:
-              drop: [ALL]
-          resources:
-            requests:
-              cpu: 100m
-              memory: 128Mi
-            limits:
-              memory: 512Mi
-          volumeMounts:
-            - name: rendered
-              mountPath: /etc/flr/rendered
-              readOnly: true
-            # KF-016: the Host Image's units write their not-ready reasons
-            # here; the Pod Provider only reads them.
-            - name: not-ready
-              mountPath: /run/flr/not-ready.d
-              readOnly: true
-            - name: provider-token
-              mountPath: /var/run/secrets/kubernetes.io/serviceaccount
-              readOnly: true
-            - name: serving-tls
-              mountPath: /etc/flr/serving
-              readOnly: true
-            - name: kubelet-client-ca
-              mountPath: /etc/flr/kubelet-client-ca
-              readOnly: true
-            # The flr image is scratch and has no /tmp.
-            - name: pod-provider-tmp
-              mountPath: /tmp
+      # The Exec Agent's container, `flr agent`, is deploy/agent's patch
+      # (host-agent-patch.yaml); the Host Service Components add theirs.
+      containers: []
       volumes:
-        - name: pod-provider-tmp
-          emptyDir: {}
         # The ConfigMap of templates and scripts; the Host Service components
         # merge their own entries into it.
         - name: templates
@@ -237,14 +183,14 @@ spec:
             sizeLimit: 1Mi
         # Host mount: the Host Image's derived settings, written by
         # flr-host-config at every boot. Read by render only, for the bridge
-        # gateway address and the Host reserve. A Host without it has not
-        # configured itself, and the pod does not start.
+        # gateway address and the user id flintlockd admits. A Host without
+        # it has not configured itself, and the pod does not start.
         - name: host-env
           hostPath:
             path: /run/flr/host.env
             type: File
-        # Host mount: the not-ready reasons of the Host Image (KF-016),
-        # read-only, Pod Provider only.
+        # Host mount: the not ready reasons of the Host Image (KF-178),
+        # read-only, Exec Agent only.
         - name: not-ready
           hostPath:
             path: /run/flr/not-ready.d
@@ -257,44 +203,3 @@ spec:
           hostPath:
             path: /var/lib/flintlock-runner/cache
             type: Directory
-        # The Pod Provider's API credentials, in place of the automounted
-        # ones: the same three sources the kubelet projects for
-        # automountServiceAccountToken, mounted at the same path, so that
-        # client-go's in-cluster configuration finds them, but into the Pod
-        # Provider's container only. The token is the pod's bound
-        # ServiceAccount token, whose user information names the node the
-        # pod runs on (KF-134); the Pod Provider checks that at start.
-        - name: provider-token
-          projected:
-            defaultMode: 0444
-            sources:
-              - serviceAccountToken:
-                  path: token
-                  expirationSeconds: 3607
-              - configMap:
-                  name: kube-root-ca.crt
-                  items:
-                    - key: ca.crt
-                      path: ca.crt
-              - downwardAPI:
-                  items:
-                    - path: namespace
-                      fieldRef:
-                        fieldPath: metadata.namespace
-        # KF-031: the kubelet API's serving certificate and key. The operator
-        # provides this Secret; see deploy/README.md, "The Pod Provider's
-        # serving certificate". The pod does not start without it.
-        - name: serving-tls
-          secret:
-            secretName: flintlock-pod-provider-serving
-            defaultMode: 0444
-        # KF-031: the cluster's kubelet client certificate authority. On a
-        # kubeadm cluster this is the cluster CA, which every namespace gets
-        # as kube-root-ca.crt; patch this volume where the API server's
-        # kubelet client certificate is issued by another CA.
-        - name: kubelet-client-ca
-          configMap:
-            name: kube-root-ca.crt
-            items:
-              - key: ca.crt
-                path: ca.crt

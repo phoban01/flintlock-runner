@@ -4,28 +4,40 @@
 # token comes from the Secret flintlock-runner-gitlab-token through
 # FLINTLOCK_RUNNER_GITLAB_TOKEN (deploy/runner/deployment.yaml).
 #
-# Replace what says REPLACE. The two values in double quotes are written by
+# NOT YET DEPLOYABLE. On a cluster fleet the Runner claims MicroVMs from
+# battery with MicroVMClaims (12-cluster-fleet.md#battery-claims) and runs
+# each Stage through the Exec Agent of the claim's Host over the agent-exec
+# Guest Transport. Neither is in this file, because the Runner's
+# configuration cannot express them yet: the claim backend is not built
+# (work package claim-backend, waiting on battery's resource shapes), and
+# agent-exec is not a transport kind a Profile can name. Until they are,
+# this file has no pool_manager section, and `flr config show` refuses it
+# for want of one: with no backend named it falls back to the push fleet's
+# battery backend, and asks for battery's endpoint and a Host inventory. It
+# refuses it for nothing else, which `make manifests-check` asserts, and
+# deploy/kustomization.yaml leaves the Runner out; see The Runner in
+# deploy/README.md.
+#
+# Replace what says REPLACE. The one value in double quotes is written by
 # kustomize from deploy/runner/job-timeout.yaml; do not add other double
-# quotes to this file, because the replacement counts them. Run
-# `make manifests-check` after editing: it loads the rendered file with
-# `flr config show`.
+# quotes to this file, because the replacement counts them.
 gitlab:
   url: https://gitlab.example.com # REPLACE with your GitLab instance
   name: flintlock-runner
   concurrent: 8
   shutdown_timeout: "10800s"
 
-pool_manager:
-  # A cluster fleet: Pools are ReplicaSets in this namespace (KF-040), the
-  # Runner reaches no Host (KF-063) and needs no Inventory. The in-cluster
-  # configuration of the Runner's own pod is used (KF-080).
-  backend: kubernetes
-  kubernetes:
-    namespace: flintlock-system
-    job_timeout: "10800s"
+# PENDING claim-backend: the pool backend. What goes here, a backend that
+# creates MicroVMClaims in this namespace with the Runner's own in-cluster
+# identity, and its settings, is defined by that work package, not here; no
+# value written now would load. Nothing in this comment is read.
+#
+# pool_manager:
+#   backend: <the claim backend, once it exists>
 
-# The Profiles (KF-080). Every rootfs and kernel image is pulled by the Pool
-# pods on the Hosts; pin them by digest (CF-027).
+# The Profiles (KF-080). Each names what battery's Pool of that Profile boots;
+# pin the images by digest (CF-027). The Guest Transport is left to its
+# default until agent-exec can be named here (KF-185).
 profiles:
   - name: default
     arch: amd64
@@ -34,19 +46,15 @@ profiles:
     kernel:
       image: registry.example.com/REPLACE/kernel:REPLACE
     rootfs: registry.example.com/REPLACE/ubuntu-ci:REPLACE
-    # The Kubernetes pool backend runs every Stage over kube-exec, through
-    # the pod's exec subresource, and rejects any other kind (KF-128). It is
-    # the default on this backend; it is spelled out so the file says so.
-    transport:
-      kind: kube-exec
     pool:
       size: 2
 
 # What Jobs are told about the Host Services. The addresses come from the
-# Virtual Node's annotations (KF-062); these sections say which services the
-# Executor points Jobs at, and have to agree with the Host Service components
-# enabled in deploy/kustomization.yaml and with the HTTP cache upstreams in
-# deploy/host-agent/services/http-cache/upstreams.
+# annotations the Exec Agent keeps on the Host's Node (KF-179, KF-189);
+# these sections say which services the Executor points Jobs at, and have to
+# agree with the Host Service Components enabled in deploy/kustomization.yaml
+# and with the HTTP cache upstreams in
+# deploy/host-agent/services/http-cache/http-cache.upstreams.
 host_services:
   buildkit:
     port: 1234

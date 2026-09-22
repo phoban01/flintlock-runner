@@ -1,6 +1,6 @@
 # The buildkitd Host Service (FL-102, FL-103), as a Component of the Host
 # Agent. Leaving this Component out of deploy/kustomization.yaml removes the
-# container, its configuration and its entry in the Pod Provider's
+# container, its configuration and its entry in the Exec Agent's
 # configuration together (KF-075).
 apiVersion: kustomize.config.k8s.io/v1alpha1
 kind: Component
@@ -14,5 +14,5 @@ configMapGenerator:
     behavior: merge
     files:
       - buildkitd.toml.tmpl
-      - kubelet.host-service.buildkit.yaml
+      - agent.host-service.buildkit.yaml
       - cache-dirs.buildkit

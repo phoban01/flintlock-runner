@@ -14,6 +14,8 @@
 #     flintlock-runner-gitlab-token --from-literal=token=glrt-...
 #
 # The pod does not start without it.
+#
+# Not yet part of the default render: see deploy/runner/kustomization.yaml.
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -42,31 +44,28 @@ spec:
         app.kubernetes.io/component: runner
     spec:
       serviceAccountName: flintlock-runner
-      # The Runner talks to the API server (KF-040 to KF-049, KF-060).
+      # The Runner talks to the API server for its claims, and presents
+      # this token to the Exec Agents (KF-186).
       automountServiceAccountToken: true
       #= docs/requirements/12-cluster-fleet.md#cluster-runner
       #/ The Fleet Manifests SHALL give the Runner's pod a termination
       #/ grace period no shorter than the configured job timeout, so that a rollout
       #/ does not cut running Jobs short.
       # Written by kustomize from deploy/runner/job-timeout.yaml, the same
-      # value as pool_manager.kubernetes.job_timeout and
-      # gitlab.shutdown_timeout. The number here is only what an unrendered
-      # read of this file shows.
+      # value as gitlab.shutdown_timeout. The number here is only what an
+      # unrendered read of this file shows.
       terminationGracePeriodSeconds: 10800
       #= docs/requirements/12-cluster-fleet.md#cluster-runner
       #/ The Fleet Manifests SHALL NOT schedule the Runner onto Hosts.
-      # Hosts carry the label of HI-060, and their Virtual Nodes the label of
-      # KF-013; the Runner requires a node with neither. There is also no
-      # toleration below for the Host taint of KF-002 or the MicroVM taint of
-      # KF-014, so both taints keep it off as well.
+      # Hosts carry the label of HI-060; the Runner requires a node without
+      # it. There is also no toleration below for the Host taint of KF-002,
+      # so the taint keeps it off as well.
       affinity:
         nodeAffinity:
           requiredDuringSchedulingIgnoredDuringExecution:
             nodeSelectorTerms:
               - matchExpressions:
                   - key: gitlab-runner.flintlock.dev/host
-                    operator: DoesNotExist
-                  - key: gitlab-runner.flintlock.dev/virtual-node
                     operator: DoesNotExist
                   - key: kubernetes.io/os
                     operator: In

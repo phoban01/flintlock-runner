@@ -47,9 +47,9 @@ spec:
         #= docs/requirements/12-cluster-fleet.md#host-pool
         #/ The Fleet Manifests SHALL set no node drain timeout shorter than
         #/ the configured drain timeout on a Host pool's Machines.
-        # The configured drain timeout is the Pod Provider's drain_timeout
-        # (KF-093, deploy/host-agent/config/kubelet.yaml.tmpl), for which a
-        # claimed MicroVM holds a drain open; this has to be at least that,
+        # The configured drain timeout is the Exec Agent's drain_timeout
+        # (KF-181, deploy/host-agent/config/agent.yaml.tmpl), for which a
+        # Bound claim holds a drain open; this has to be at least that,
         # or Cluster API gives up on the drain and deletes the Machine under
         # running Jobs. `make manifests-check` compares the two.
         nodeDrainTimeoutSeconds: 4500

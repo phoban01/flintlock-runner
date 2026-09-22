@@ -1,7 +1,7 @@
 # The HTTP cache Host Service (FL-106), as a Component of the Host Agent:
 # nginx, which is what push provisioning runs. Leaving this Component out of
 # deploy/kustomization.yaml removes the container, its configuration and the
-# Pod Provider's entry together (KF-075).
+# Exec Agent's entry together (KF-075).
 apiVersion: kustomize.config.k8s.io/v1alpha1
 kind: Component
 
@@ -15,5 +15,5 @@ configMapGenerator:
     files:
       - nginx-http-cache.conf.tmpl
       - http-cache.upstreams
-      - kubelet.host-service.http_cache.yaml
+      - agent.host-service.http_cache.yaml
       - cache-dirs.http-cache

@@ -9,7 +9,7 @@
 # Tools come from the environment, as the Makefile pins and installs them:
 #   KUSTOMIZE, KUBECONFORM, YQ  the binaries
 #   FLR                         an flr binary, for loading the rendered
-#                               Runner and Pod Provider configurations
+#                               Runner and Exec Agent configurations
 #   K8S_SCHEMA_VERSION          the Kubernetes schema version, v1.35.x
 #   K8S_SCHEMA_LOCATION         kubeconform's location for the built-in kinds
 #   CRD_SCHEMA_LOCATION         kubeconform's location for the CRDs
@@ -67,11 +67,16 @@ else
 fi
 
 # ---- render ----
+# The Runner is not in deploy/ until the claim backend exists
+# (deploy/runner/kustomization.yaml), so it is rendered and checked on its
+# own.
 fleet=$work/fleet.yaml
 capi=$work/capi.yaml
+runner=$work/runner.yaml
 "$KUSTOMIZE" build "$deploy" >"$fleet"
 "$KUSTOMIZE" build "$deploy/capi" >"$capi"
-log "rendered deploy/ ($(grep -c '^kind:' "$fleet") objects) and deploy/capi ($(grep -c '^kind:' "$capi") objects)"
+"$KUSTOMIZE" build "$deploy/runner" >"$runner"
+log "rendered deploy/ ($(grep -c '^kind:' "$fleet") objects), deploy/capi ($(grep -c '^kind:' "$capi") objects) and deploy/runner ($(grep -c '^kind:' "$runner") objects)"
 
 # The test overlays under deploy/tests, each rendered to <name>.yaml.
 for k in "$deploy"/tests/*/kustomization.yaml; do
@@ -88,7 +93,7 @@ kubeconform_run() {
     -schema-location "$CRD_SCHEMA_LOCATION" \
     "$@"
 }
-kubeconform_run "$fleet" "$capi" >"$work/kubeconform.txt" 2>&1 || {
+kubeconform_run "$fleet" "$capi" "$runner" >"$work/kubeconform.txt" 2>&1 || {
   cat "$work/kubeconform.txt" >&2
   die "kubeconform failed"
 }
@@ -128,8 +133,10 @@ FLR_PROTECTED_CIDRS=10.0.0.0/16
 FLR_HOST_RESERVE_VCPU=3
 FLR_HOST_RESERVE_MEMORY_MB=6144
 FLR_HOST_SERVICE_PORTS=1234,3000,5000,3128
-FLR_HOST_CONTROL_PORTS=9090,8090,10248,10250,10255,10256,10260,9252,1338
+FLR_HOST_CONTROL_PORTS=9090,8090,10248,10250,10255,10256,10260,10270,9252,1338
 FLR_CACHE_VOLUME_PERCENT=15
+FLR_POD_PROVIDER_UID=10250
+FLR_HOST_SERVICE_UIDS=101,1000,10001,10002,100000-165535
 EOF
 }
 sample_host_env >"$work/host.env"
@@ -198,7 +205,7 @@ seconds() {
 }
 EOF
 
-export YQ KUSTOMIZE KUBECONFORM FLR root deploy work fleet capi templates templates_full rendered rendered_full gateway
+export YQ KUSTOMIZE KUBECONFORM FLR root deploy work fleet capi runner templates templates_full rendered rendered_full gateway
 
 failed=0
 passed=0

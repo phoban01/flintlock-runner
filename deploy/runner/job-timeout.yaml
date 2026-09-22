@@ -1,13 +1,13 @@
-# THE ONE PLACE TO SET THE RUNNER'S JOB TIMEOUT.
+# THE ONE PLACE TO SET THE RUNNER'S JOB TIMEOUT: the longest a Job of this
+# fleet may run.
 #
 # This object is never applied (local-config). deploy/runner/kustomization.yaml
-# copies `jobTimeout` into three places:
+# copies `jobTimeout` into two places:
 #
-#   - pool_manager.kubernetes.job_timeout in the Runner's configuration, the
-#     active deadline of a claimed pod whose Job carries no timeout (KF-044);
-#   - gitlab.shutdown_timeout in the same file, how long a stopping Runner
-#     lets running Jobs finish (GL shutdown);
-#   - terminationGracePeriodSeconds of the Runner's pod, the digits only.
+#   - gitlab.shutdown_timeout in the Runner's configuration, how long a
+#     stopping Runner lets running Jobs finish (GL-071, GL-072);
+#   - terminationGracePeriodSeconds of the Runner's pod, the digits only, so
+#     that the kubelet does not kill the Runner before that.
 #
 # Keep it in whole seconds with the `s` suffix: the configuration wants a Go
 # duration and the pod spec wants the number. `make manifests-check` fails when

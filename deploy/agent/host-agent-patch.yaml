@@ -1,25 +1,29 @@
 # The Exec Agent's container in the Host Agent: a strategic merge patch of
-# the Host Agent's DaemonSet, `flintlock-host-agent` in `flintlock-system`,
-# which the Fleet Manifests apply in place of the Pod Provider's container.
-# The DaemonSet runs on every Host, in the Host's network namespace (KF-070,
-# KF-071), so the agent runs on every Host and can listen on the Host's
-# internal address.
+# the Host Agent's DaemonSet, `flintlock-host-agent` in `flintlock-system`
+# (deploy/host-agent/daemonset.yaml), applied by deploy/agent's Component,
+# which deploy/host-agent/kustomization.yaml includes. The DaemonSet runs on
+# every Host, in the Host's network namespace (KF-070, KF-071), so the agent
+# runs on every Host and can listen on the Host's internal address.
 #
 # The agent is the one process on the Host the Host Image admits to
 # flintlockd: flintlockd listens on a loopback port that the Host's firewall
 # opens to one user id, POD_PROVIDER_UID in the Host configuration file,
 # 10250 by default (HI-042, HI-063). The container runs as that user id and
-# `flr agent` refuses to start as any other. No other container of the Host
-# Agent may run as it, which the Fleet Manifests' checks assert of the
-# assembled DaemonSet and internal/agent's manifest test asserts of this
-# patch.
+# `flr agent` refuses to start as any other; render.sh writes the Host's own
+# POD_PROVIDER_UID into its configuration as flintlockd_user_id, so a Host
+# that admits another id stops the agent at start. This file is the one place
+# the Fleet Manifests set the id: no other container of the Host Agent may
+# run as it, which `make manifests-check` asserts of the assembled DaemonSet,
+# together with the Host Image's default and every pool's host.conf, and
+# internal/agent's manifest test asserts of this patch.
 #
 # The serving certificate has to name the Host's internal address (KF-172).
 # It is issued per pod by cert-manager's csi-driver for the pod's IP, which
 # in the Host's network namespace is the Host's internal address, from an
-# Issuer named `flintlock-exec-agent` that the operator provides; the
-# Runner's `agent-exec` Guest Transport verifies it against that Issuer's
-# certificate authority (KF-186).
+# Issuer named `flintlock-exec-agent` in `flintlock-system` that the operator
+# provides; the Runner's `agent-exec` Guest Transport verifies it against
+# that Issuer's certificate authority (KF-186). This is a proposal nobody has
+# run: deploy/README.md, "The Exec Agent's serving certificate".
 
 #= docs/requirements/12-cluster-fleet.md#exec-agent
 #/ The Fleet Manifests SHALL run the Exec Agent in the Host Agent
@@ -38,14 +42,20 @@ spec:
         #/ endpoint of HI-042, and the Fleet Manifests SHALL run it as the user id
         #/ that HI-063 admits there and run no other container as that user id.
         - name: exec-agent
-          image: flr
-          args: ["agent", "--agent-config", "/etc/flintlock-runner/agent/agent.yaml"]
+          image: ghcr.io/phoban01/flintlock-runner/flr:dev
+          # The configuration render.sh makes for this Host from
+          # deploy/host-agent/config/agent.yaml.tmpl.
+          args: [agent, --agent-config, /etc/flr/rendered/agent.yaml]
           env:
+            # The Host's Node, whose annotations the agent keeps (KF-179)
+            # and whose name the claims it honours carry (KF-174).
             - name: FLINTLOCK_RUNNER_HOST_NODE
               valueFrom:
                 fieldRef:
                   fieldPath: spec.nodeName
           ports:
+            # KF-172: port in agent.yaml.tmpl, on the Host's internal
+            # address. In the Host Image's HOST_CONTROL_PORTS.
             - name: exec-api
               containerPort: 10270
               protocol: TCP
@@ -56,21 +66,62 @@ spec:
             allowPrivilegeEscalation: false
             readOnlyRootFilesystem: true
             capabilities:
-              drop: ["ALL"]
+              drop: [ALL]
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              memory: 512Mi
           volumeMounts:
-            - name: exec-agent-config
-              mountPath: /etc/flintlock-runner/agent
+            - name: rendered
+              mountPath: /etc/flr/rendered
               readOnly: true
-            - name: exec-agent-tls
-              mountPath: /etc/flintlock-runner/agent-tls
-              readOnly: true
+            # KF-178: the Host Image's units write their not ready reasons
+            # here; the agent only reads them.
             - name: not-ready
               mountPath: /run/flr/not-ready.d
               readOnly: true
+            - name: exec-agent-token
+              mountPath: /var/run/secrets/kubernetes.io/serviceaccount
+              readOnly: true
+            - name: exec-agent-tls
+              mountPath: /etc/flr/agent-tls
+              readOnly: true
+            # The flr image is scratch and has no /tmp.
+            - name: exec-agent-tmp
+              mountPath: /tmp
       volumes:
-        - name: exec-agent-config
-          configMap:
-            name: flintlock-exec-agent
+        # The agent's API credentials, in place of the automounted ones,
+        # which the pod turns off: the three sources the kubelet projects for
+        # automountServiceAccountToken, at the same path, so that client-go's
+        # in-cluster configuration finds them, but in this container only.
+        # The token is the pod's bound ServiceAccount token, whose user
+        # information names the node the pod runs on, which the admission
+        # policy (admission-policy.yaml, KF-180) reads and `flr agent`
+        # checks at start. Mode 0444, so that the agent's user id reads it.
+        - name: exec-agent-token
+          projected:
+            defaultMode: 0444
+            sources:
+              - serviceAccountToken:
+                  path: token
+                  expirationSeconds: 3607
+              - configMap:
+                  name: kube-root-ca.crt
+                  items:
+                    - key: ca.crt
+                      path: ca.crt
+              - downwardAPI:
+                  items:
+                    - path: namespace
+                      fieldRef:
+                        fieldPath: metadata.namespace
+        # KF-172: the serving certificate and key, issued for the pod's IP
+        # by cert-manager's csi-driver, which has to be installed, from the
+        # Issuer flintlock-exec-agent, which the operator provides. The files
+        # are group 10250, the agent's group. The pod does not start without
+        # the driver.
         - name: exec-agent-tls
           csi:
             driver: csi.cert-manager.io
@@ -81,7 +132,5 @@ spec:
               csi.cert-manager.io/ip-sans: ${POD_IP}
               csi.cert-manager.io/common-name: flintlock-exec-agent
               csi.cert-manager.io/fs-group: "10250"
-        - name: not-ready
-          hostPath:
-            path: /run/flr/not-ready.d
-            type: DirectoryOrCreate
+        - name: exec-agent-tmp
+          emptyDir: {}

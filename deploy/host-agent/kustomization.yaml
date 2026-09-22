@@ -1,34 +1,21 @@
-# The Host Agent without its Host Services: the DaemonSet with the Pod
-# Provider, its identity and permissions, and the shared configuration.
-# The Host Services are Components under services/, included by
+# The Host Agent without its Host Services: the DaemonSet with the Exec
+# Agent, its identity and permissions, and the shared configuration. The
+# Host Services are Components under services/, included by
 # deploy/kustomization.yaml.
+#
+# rbac.yaml and admission-policy.yaml in this directory are the Pod
+# Provider's, still on main for internal/kubelet's tests until the Virtual
+# Node design is withdrawn; they are deliberately not listed here. The Exec
+# Agent's own, from deploy/agent, take their place.
 apiVersion: kustomize.config.k8s.io/v1beta1
 kind: Kustomization
 
 resources:
   - serviceaccount.yaml
-  # rbac.yaml and admission-policy.yaml belong to the provider-hardening
-  # work package. admission-policy.yaml, the ValidatingAdmissionPolicy of
-  # KF-133, arrives with that package's branch; until it is merged this
-  # directory does not build.
-  - rbac.yaml
-  - admission-policy.yaml
   - daemonset.yaml
-  - pod-provider-uid.yaml
 
-# pod-provider-uid.yaml is the one place the Pod Provider's user id is set.
-replacements:
-  - source:
-      kind: ConfigMap
-      name: flintlock-pod-provider-uid
-      fieldPath: data.uid
-    targets:
-      - select:
-          kind: DaemonSet
-          name: flintlock-host-agent
-        fieldPaths:
-          - spec.template.spec.containers.[name=pod-provider].securityContext.runAsUser
-          - spec.template.spec.containers.[name=pod-provider].securityContext.runAsGroup
+components:
+  - ../agent
 
 configMapGenerator:
   - name: flintlock-host-agent-config
@@ -37,7 +24,7 @@ configMapGenerator:
       - config/render.sh
       - config/prepare-cache.sh
       - config/prewarm.sh
-      - config/kubelet.yaml.tmpl
+      - config/agent.yaml.tmpl
     options:
       labels:
         app.kubernetes.io/name: flintlock-host-agent

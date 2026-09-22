@@ -6,12 +6,17 @@
 # The Cluster API objects that make the Hosts go to the management cluster
 # instead, from deploy/capi/. deploy/README.md says what an operator supplies
 # before either applies.
+#
+# This renders the Host Agent, with the Exec Agent (deploy/agent) and the
+# Host Services, and not the Runner: the Runner's pool backend on a cluster
+# fleet, the claim backend, does not exist yet, so the fleet cannot run a Job
+# end to end. deploy/runner renders on its own and is added here when it
+# does; deploy/README.md, "The Runner".
 apiVersion: kustomize.config.k8s.io/v1beta1
 kind: Kustomization
 
 resources:
   - namespace.yaml
-  - runner
   - host-agent
 
 #= docs/requirements/12-cluster-fleet.md#cluster-host-agent
@@ -19,7 +24,7 @@ resources:
 #/ Agent SHALL NOT run it.
 # The Host Services (FL-100), one Component each. A Host Service that is not
 # wanted is disabled by removing its line here, which removes its
-# containers, its configuration and its entry in the Pod Provider's
+# containers, its configuration and its entry in the Exec Agent's
 # configuration together; set enabled: false for it in
 # deploy/runner/config.yaml too, so that Jobs are not pointed at it.
 components:
@@ -33,11 +38,12 @@ components:
 #/ image they use, including those of the Host Services, by digest.
 # Every third-party image is pinned by digest where it is used: busybox,
 # buildkit, Athens, nginx and zot in deploy/host-agent, and the drain guard's
-# pause image in the Pod Provider's configuration. Each digest was resolved
-# from its registry for the tag written beside it; to move one, resolve the
-# new tag's digest (`crane digest REPO:TAG`) and replace both.
+# pause image in the Exec Agent's configuration
+# (deploy/host-agent/config/agent.yaml.tmpl). Each digest was resolved from
+# its registry for the tag written beside it; to move one, resolve the new
+# tag's digest (`crane digest REPO:TAG`) and replace both.
 #
-# This project's image, for the Runner and the Pod Provider, goes by the tag
+# This project's image, for the Exec Agent and the Runner, goes by the tag
 # dev here. The Release rewrites it to a digest with `kustomize edit set
 # image` (KF-143), which is why it appears in image fields only.
 images:

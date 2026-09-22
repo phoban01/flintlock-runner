@@ -1,0 +1,23 @@
+# The Exec Agent (`flr agent`, docs/requirements/12-cluster-fleet.md#exec-agent)
+# as a Component of the Host Agent: its container in the Host Agent's
+# DaemonSet, its RBAC and its admission policy. deploy/host-agent includes it,
+# so every Host Agent has it (KF-170); it is not one of the optional Host
+# Service Components. Its configuration template is
+# deploy/host-agent/config/agent.yaml.tmpl, in the Host Agent's ConfigMap,
+# because render.sh makes it for each Host.
+#
+# rbac.yaml and admission-policy.yaml are the files internal/agent's tests
+# load unchanged, so what is deployed is what was tested. They replace the
+# Pod Provider's deploy/host-agent/rbac.yaml and admission-policy.yaml, which
+# match the same ServiceAccount and refuse the change to a Host's own Node
+# that the Exec Agent has to make; the two policies cannot be deployed
+# together.
+apiVersion: kustomize.config.k8s.io/v1alpha1
+kind: Component
+
+resources:
+  - rbac.yaml
+  - admission-policy.yaml
+
+patches:
+  - path: host-agent-patch.yaml

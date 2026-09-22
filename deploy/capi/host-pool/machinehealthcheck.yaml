@@ -4,8 +4,9 @@
 #/ configured interval.
 # The configured interval is unhealthyNodeConditions' timeoutSeconds, from
 # host-pool.yaml. It watches the Host's own Node; a Host whose flintlockd
-# cannot run (HI-011, HI-022) keeps a ready Node and reports the reason on
-# its Virtual Node instead (KF-016), which this cannot see.
+# cannot run (HI-011, HI-022) keeps a ready Node, and the Exec Agent reports
+# the reason as an annotation of that Node (KF-178), not as a condition, so
+# this cannot see it.
 apiVersion: cluster.x-k8s.io/v1beta2
 kind: MachineHealthCheck
 metadata:
