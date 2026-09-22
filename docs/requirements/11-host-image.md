@@ -59,9 +59,9 @@ operator creates once.
   that they can write it, under the base image's SELinux policy and without
   changing the domain of any container or the label of any other path.
 - **HI-066** The Host Image SHALL configure the container runtime interface
-  of containerd to run every container of a Kubernetes pod under SELinux
-  confinement, in the container domain the base image's policy assigns,
-  rather than unconfined.
+  of containerd to run every unprivileged container of a Kubernetes pod under
+  SELinux confinement, in the container domain the base image's policy
+  assigns or the one the pod names, rather than unconfined.
 
 HI-011 is the successor of FL-117: whether an instance can run MicroVMs is
 still decided on the host, but by a unit at boot rather than by a remote
@@ -75,6 +75,11 @@ unconfined: an enforcing Host would then enforce nothing between its pods,
 `buildkitd` running Jobs' image builds among them, and itself. The setting
 reaches only the pods the kubelet starts; `flintlockd` drives containerd
 through its own API, so the MicroVMs keep the confinement HI-013 gives them.
+containerd leaves a privileged container unlabelled by design, which is why
+HI-066 speaks of unprivileged containers: nothing in the Host Agent is
+privileged, and a privileged pod is unconfined whatever the Host does. A pod
+may name a container domain of its own, which KF-139 does for `buildkitd`
+alone.
 
 HI-065 exists because, with HI-066, the Host Agent's containers run in the
 ordinary container domain, which may read and write only files labelled for
