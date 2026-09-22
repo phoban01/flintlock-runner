@@ -53,11 +53,11 @@ operator creates once.
 - **HI-013** Where a component cannot run under the base image's SELinux
   policy, the Host Image SHALL ship a policy module that relaxes confinement
   for that component's domain only.
-- **HI-065** The Host Image SHALL label the Host environment file it writes
-  under `/run/flr` so that the Host Agent's containers can read it, and the
-  Host Service cache directory so that they can write it, under the base
-  image's SELinux policy and without changing the domain of any container
-  or the label of any other path.
+- **HI-065** The Host Image SHALL label the Host environment file and the
+  not ready reason directory it writes under `/run/flr` so that the Host
+  Agent's containers can read them, and the Host Service cache directory so
+  that they can write it, under the base image's SELinux policy and without
+  changing the domain of any container or the label of any other path.
 
 HI-011 is the successor of FL-117: whether an instance can run MicroVMs is
 still decided on the host, but by a unit at boot rather than by a remote
@@ -69,7 +69,9 @@ HI-065 exists because the Host Agent's containers run in the ordinary
 container domain, which may read and write only files labelled for
 containers: without it the Host Agent cannot read the bridge gateway the
 Host Image writes at boot, nor keep its caches, and fails on every enforcing
-Host. Labelling those two paths for containers is the narrow fix. Running
+Host, and the Pod Provider cannot read the not ready reasons of HI-011 and
+HI-022, which it treats as not ready, so no Virtual Node would ever become
+ready. Labelling those paths for containers is the narrow fix. Running
 the Host Agent as a super-privileged container would work too, and would
 remove SELinux from between the Host Services and the Host entirely.
 
