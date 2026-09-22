@@ -271,9 +271,9 @@ func (s *server) relayExec(ctx context.Context, down grpc.BidiStreamingServer[ex
 }
 
 //= docs/requirements/12-cluster-fleet.md#exec-agent
-//# If `flintlockd` does not open the exec stream of a request
-//# within the configured deadline, then the Exec Agent SHALL end the
-//# response as a stream failure.
+//# If `flintlockd` has not answered for the requested MicroVM and
+//# accepted the request's exec stream within the configured deadline, then
+//# the Exec Agent SHALL end the response as a stream failure.
 
 // openExec opens the exchange with flintlockd within the configured
 // deadline, and counts it open once flintlockd has answered for the

@@ -45,6 +45,15 @@ func waitReady(t *testing.T, h *agenttest.Host, want bool, reason string) {
 //# gateway address, or while a unit of the Host Image reports a not ready
 //# reason.
 
+//= docs/requirements/12-cluster-fleet.md#exec-agent
+//= type=test
+//# The Exec Agent SHALL publish the readiness of KF-178 on its
+//# Host's Node as the annotation `gitlab-runner.flintlock.dev/exec-agent-ready`
+//# set to `true` or `false`, with the reason and message of the last check in
+//# `gitlab-runner.flintlock.dev/exec-agent-reason` and
+//# `gitlab-runner.flintlock.dev/exec-agent-message`, and its own address in
+//# `gitlab-runner.flintlock.dev/exec-agent-address`.
+
 // TestReadiness walks one Host through each reason to be not ready and
 // back: a Host Image unit's reason, flintlockd not answering, a Host
 // Service not accepting connections; and a second Host whose flintlockd

@@ -377,9 +377,9 @@ func TestACutResponseIsNeverASuccess(t *testing.T) {
 
 //= docs/requirements/12-cluster-fleet.md#exec-agent
 //= type=test
-//# If `flintlockd` does not open the exec stream of a request
-//# within the configured deadline, then the Exec Agent SHALL end the
-//# response as a stream failure.
+//# If `flintlockd` has not answered for the requested MicroVM and
+//# accepted the request's exec stream within the configured deadline, then
+//# the Exec Agent SHALL end the response as a stream failure.
 
 // TestAHungFlintlockdFailsWithinTheDeadline is the second harness defect:
 // a flintlockd that accepts connections and answers nothing must not hold a

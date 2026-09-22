@@ -105,6 +105,14 @@ func checkReadiness(ctx context.Context, cfg *Config, fl *Flintlockd) readiness 
 //# enabled Host Service, under the names `buildkit`, `go_proxy`,
 //# `registry_mirror` and `http_cache`, as annotations on its Host's Node.
 
+//= docs/requirements/12-cluster-fleet.md#exec-agent
+//# The Exec Agent SHALL publish the readiness of KF-178 on its
+//# Host's Node as the annotation `gitlab-runner.flintlock.dev/exec-agent-ready`
+//# set to `true` or `false`, with the reason and message of the last check in
+//# `gitlab-runner.flintlock.dev/exec-agent-reason` and
+//# `gitlab-runner.flintlock.dev/exec-agent-message`, and its own address in
+//# `gitlab-runner.flintlock.dev/exec-agent-address`.
+
 // hostAnnotations are the annotations the agent keeps on its Host's Node:
 // one per enabled Host Service, keyed by kubelabels.HostServiceAnnotation
 // with the service's name and valued `address:port` on the bridge gateway,

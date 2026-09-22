@@ -159,7 +159,7 @@ readiness checks and drain guard move into the Exec Agent.
 
 | Key | Package | Owns | Depends on | Done when |
 |-----|---------|------|------------|-----------|
-| `exec-agent` | `internal/agent`, `cmd/flr agent` (from `internal/kubelet`) | KF-170..KF-181 | nothing (claim lookup behind an interface) | a caller without a Bound claim on the MicroVM runs nothing; a cut response is never a success; a hung `flintlockd` fails the request within its deadline |
+| `exec-agent` | `internal/agent`, `cmd/flr agent` (from `internal/kubelet`) | KF-170..KF-182 | nothing (claim lookup behind an interface) | a caller without a Bound claim on the MicroVM runs nothing; a cut response is never a success; a hung `flintlockd` fails the request within its deadline |
 | `agent-exec` | `internal/transport`, `internal/executor` | KF-185..KF-189, KF-190 | `exec-agent` (its protocol) | the `exec` transport's suite passes over `agent-exec` against the real Exec Agent |
 | `claim-backend` | `internal/poolmgr/claim` | KF-150..KF-156, KF-191 | the CRD shapes from battery | the Scheduler's scenarios pass against the fake battery |
 | `inventory` | where battery puts it | KF-160, KF-161 | battery | a cordoned or not ready Host leaves the inventory |

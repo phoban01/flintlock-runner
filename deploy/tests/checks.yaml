@@ -29,8 +29,8 @@ checks:
   #= docs/requirements/12-cluster-fleet.md#cluster-host-agent
   #= type=test
   #/ The Fleet Manifests SHALL run the Host Agent as a DaemonSet that
-  #/ tolerates the Host taint, selects the Host label and contains the Pod
-  #/ Provider and the Host Services of FL-100.
+  #/ tolerates the Host taint, selects the Host label and contains the Exec
+  #/ Agent and the Host Services of FL-100.
   #
   #= docs/requirements/12-cluster-fleet.md#cluster-runner
   #= type=test
@@ -161,12 +161,10 @@ checks:
   #= docs/requirements/12-cluster-fleet.md#cluster-host-agent
   #= type=test
   #/ The Fleet Manifests SHALL run the Host Agent as a DaemonSet that
-  #/ tolerates the Host taint, selects the Host label and contains the Pod
-  #/ Provider and the Host Services of FL-100.
+  #/ tolerates the Host taint, selects the Host label and contains the Exec
+  #/ Agent and the Host Services of FL-100.
   - name: the Host Agent tolerates the Host taint, selects Hosts and runs the Exec Agent and the four Host Services
     run: |
-      # KF-070 names the Pod Provider; that part is superseded, and the
-      # Exec Agent takes its place (KF-170). No Pod Provider runs.
       ds=$(obj "$fleet" DaemonSet flintlock-host-agent)
       [ -n "$ds" ] || fail "no DaemonSet flintlock-host-agent"
       [ "$(echo "$ds" | "$YQ" '.spec.template.spec.nodeSelector["gitlab-runner.flintlock.dev/host"]')" = true ] || fail "does not select the Host label"
@@ -186,8 +184,8 @@ checks:
   #= docs/requirements/12-cluster-fleet.md#cluster-host-agent
   #= type=test
   #/ The Fleet Manifests SHALL run the Host Agent as a DaemonSet that
-  #/ tolerates the Host taint, selects the Host label and contains the Pod
-  #/ Provider and the Host Services of FL-100.
+  #/ tolerates the Host taint, selects the Host label and contains the Exec
+  #/ Agent and the Host Services of FL-100.
   - name: the rendered Exec Agent configuration loads in flr agent and names every Host Service
     run: |
       [ -x "$FLR" ] || fail "FLR is not an flr binary"
