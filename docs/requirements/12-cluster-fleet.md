@@ -402,15 +402,25 @@ the Host, so it is not the threat this addresses.
   SHALL contain nothing but the `flr` binary, certificate authority
   certificates and time zone data.
 - **KF-142** The Release SHALL publish the Host Image to the project's
-  container registry, tagged with the release version and with the
-  Kubernetes version it carries.
-- **KF-143** The Release SHALL publish the Fleet Manifests as one release
-  asset in which every container image of this project is referenced by
-  digest.
+  container registry, tagged with the release version and with the release
+  version joined to the Kubernetes version it carries.
+- **KF-143** The Release SHALL publish the Fleet Manifests as two release
+  assets, one for the workload cluster and one for the Cluster API objects
+  of the management cluster, in which every container image of this project
+  is referenced by digest.
 - **KF-144** The Fleet Manifests SHALL reference every third-party container
   image they use, including those of the Host Services, by digest.
 - **KF-145** The Release SHALL NOT publish a `latest` tag or any other tag
   that moves.
+
+The Host Image carries the Kubernetes version in a tag such as
+`1.1.0-k8s-v1.35.8` rather than a bare `v1.35.8`: the bare tag would point at
+a different image with every release, which KF-145 forbids, while the joined
+one names exactly one build. The Cluster API objects are a separate asset
+because they are applied to the management cluster, and the rest to the
+workload cluster the Hosts join. The registry's packages have to be public,
+or readable by both clusters, for a fleet to pull them; that is set once on
+the registry and is not something a release can check.
 
 A release candidate publishes images too, so that a candidate can be tried
 on a cluster before its version is released. The Release does not publish
