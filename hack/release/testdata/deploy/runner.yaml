@@ -1,0 +1,38 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: flr
+spec:
+  selector:
+    matchLabels: {app: flr}
+  template:
+    metadata:
+      labels: {app: flr}
+    spec:
+      initContainers:
+        - name: init
+          image: ghcr.io/phoban01/flintlock-runner/flr:dev
+      containers:
+        - name: flr
+          image: ghcr.io/phoban01/flintlock-runner/flr:dev
+          args: [run]
+---
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: host-agent
+spec:
+  selector:
+    matchLabels: {app: host-agent}
+  template:
+    metadata:
+      labels: {app: host-agent}
+    spec:
+      containers:
+        - name: provider
+          image: ghcr.io/phoban01/flintlock-runner/flr:dev
+          args: [kubelet]
+        # A third-party image, already by digest; rendering leaves it alone.
+        # The digest is synthetic test data.
+        - name: third-party
+          image: registry.example/other@sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
