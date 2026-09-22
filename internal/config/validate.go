@@ -259,6 +259,7 @@ func (v *validator) profiles(c *Config) {
 		v.absPath(f+".cache_dir", p.CacheDir)
 		v.absPath(f+".helper_path", p.HelperPath)
 		v.profileOptional(f, p, images, i)
+		v.profileTransport(f, p, c.PoolManager.IsKubernetes())
 		if p.Default {
 			defaults++
 		}
@@ -349,16 +350,6 @@ func (v *validator) profileOptional(f string, p *Profile, images map[string]int,
 			v.errorf(f+".kernel.cmdline", "keys must not be empty")
 		}
 	}
-	switch p.Transport.Kind {
-	case TransportExec:
-	case TransportSSH:
-		v.required(f+".transport.ssh.private_key_file", p.Transport.SSH.PrivateKeyFile)
-		v.required(f+".transport.ssh.user", p.Transport.SSH.User)
-	case "":
-		v.errorf(f+".transport.kind", "is required (exec or ssh)")
-	default:
-		v.errorf(f+".transport.kind", "must be exec or ssh, got %q", p.Transport.Kind)
-	}
 	v.required(f+".user", p.User)
 	v.positive(f+".ready_timeout", p.ReadyTimeout)
 	for k := range p.HostSelector {
@@ -367,6 +358,38 @@ func (v *validator) profileOptional(f string, p *Profile, images map[string]int,
 		}
 	}
 	v.nonNegativeInt(f+".max_concurrency", p.MaxConcurrency)
+}
+
+//= docs/requirements/12-cluster-fleet.md#kube-allocation
+//# the Runner SHALL reject a configuration that names any other Guest Transport.
+
+// profileTransport checks a Profile's Guest Transport against the Pool
+// backend. The Kubernetes pool backend reaches every guest through its pod
+// and reaches no Host (KF-063), so kube-exec is the only transport it can
+// run, and a Profile that names exec or ssh there is refused rather than
+// quietly run over kube-exec. kube-exec is refused under battery, whose
+// MicroVMs are no pods.
+func (v *validator) profileTransport(f string, p *Profile, kube bool) {
+	field := f + ".transport.kind"
+	switch p.Transport.Kind {
+	case TransportExec, TransportSSH:
+		if kube {
+			v.errorf(field, "must be %s with pool_manager.backend %q, got %q", TransportKubeExec, PoolBackendKubernetes, p.Transport.Kind)
+			return
+		}
+		if p.Transport.Kind == TransportSSH {
+			v.required(f+".transport.ssh.private_key_file", p.Transport.SSH.PrivateKeyFile)
+			v.required(f+".transport.ssh.user", p.Transport.SSH.User)
+		}
+	case TransportKubeExec:
+		if !kube {
+			v.errorf(field, "%s needs pool_manager.backend %q", TransportKubeExec, PoolBackendKubernetes)
+		}
+	case "":
+		v.errorf(field, "is required (exec or ssh, or kube-exec with the kubernetes pool backend)")
+	default:
+		v.errorf(field, "must be exec or ssh, or kube-exec with the kubernetes pool backend, got %q", p.Transport.Kind)
+	}
 }
 
 //= docs/requirements/07-configuration.md#profiles-section
@@ -425,12 +448,16 @@ func (v *validator) poolSettings(f string, ps *PoolSettings) {
 
 func (v *validator) inventory(c *Config) {
 	hosts := c.Inventory.Hosts
-	if len(hosts) == 0 {
-		// The Kubernetes pool backend reaches no Host (KF-063): its Hosts
-		// are the cluster's Virtual Nodes, so there is nothing to list.
-		if c.PoolManager.IsKubernetes() {
-			return
+	// The Kubernetes pool backend reaches no Host (KF-063): its Hosts are
+	// the cluster's Virtual Nodes, so there is nothing to list, and a list
+	// would only name flintlockd endpoints the Runner must not dial.
+	if c.PoolManager.IsKubernetes() {
+		if len(hosts) > 0 {
+			v.errorf("inventory", "is not read with pool_manager.backend %q, whose Runner reaches no Host; remove it", PoolBackendKubernetes)
 		}
+		return
+	}
+	if len(hosts) == 0 {
 		v.errorf("inventory", "at least one Host is required, inline under inventory.hosts or in the file named by inventory.file")
 		return
 	}

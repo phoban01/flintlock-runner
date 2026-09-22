@@ -273,24 +273,9 @@ func (e *executor) allocate(ctx context.Context, sec *prepareSection) error {
 // Profile's directories in it.
 func (e *executor) startGuest(ctx context.Context, sec *prepareSection) error {
 	a := e.handle.Allocation()
-	client, done, err := e.p.deps.Hosts.Lease(a.Placement.Host)
+	target, err := e.guestTarget(a)
 	if err != nil {
-		return buildErr(common.RunnerSystemFailure, "host %s: %w", a.Placement.Host, err)
-	}
-	e.hostDone = done
-
-	target := transport.Target{
-		Kind:     transport.Kind(e.profile.Transport.Kind),
-		Host:     client,
-		VMUID:    a.VMUID,
-		Deadline: e.p.deps.Timeouts.Transport,
-	}
-	if target.Kind == transport.KindSSH {
-		ssh, err := sshOptions(e.profile)
-		if err != nil {
-			return buildErr(common.ConfigurationError, "profile %s: %w", e.profile.Name, err)
-		}
-		target.SSH = ssh
+		return err
 	}
 	tr, err := e.p.deps.Transports.New(ctx, target)
 	if err != nil {
@@ -306,6 +291,55 @@ func (e *executor) startGuest(ctx context.Context, sec *prepareSection) error {
 	sec.printf("Guest ready in %s", roundDuration(sec.report.ReadyIn))
 
 	return e.makeDirs(ctx)
+}
+
+// transportKind is the Guest Transport the Job's Stages run over: the one
+// WithGuestTransport names for every Profile, else the Profile's own.
+func (e *executor) transportKind() transport.Kind {
+	if e.p.transport != "" {
+		return e.p.transport
+	}
+	return transport.Kind(e.profile.Transport.Kind)
+}
+
+//= docs/requirements/12-cluster-fleet.md#kube-allocation
+//# Where the Kubernetes pool backend is configured, the Executor
+//# SHALL use the `kube-exec` Guest Transport for every Profile
+
+//= docs/requirements/12-cluster-fleet.md#kube-exec-transport
+//# Where the `kube-exec` Guest Transport is configured, the Runner
+//# SHALL NOT open any connection to a Host.
+
+// guestTarget is what the transport of the Job's MicroVM is built from.
+// kube-exec names the claimed pod, whose name is the Lease id, and takes no
+// Host client: the Host Registry is not even asked, so no connection to a
+// Host is made or borrowed for the Job (KF-063). Every other transport
+// reaches the guest through the Placement's Host, on which it takes a Lease
+// for the life of the Job (HO-014).
+func (e *executor) guestTarget(a scheduler.Allocation) (transport.Target, error) {
+	target := transport.Target{
+		Kind:     e.transportKind(),
+		Deadline: e.p.deps.Timeouts.Transport,
+	}
+	if target.Kind == transport.KindKubeExec {
+		target.VMUID = a.Lease.ID
+		return target, nil
+	}
+
+	client, done, err := e.p.deps.Hosts.Lease(a.Placement.Host)
+	if err != nil {
+		return target, buildErr(common.RunnerSystemFailure, "host %s: %w", a.Placement.Host, err)
+	}
+	e.hostDone = done
+	target.Host, target.VMUID = client, a.VMUID
+	if target.Kind == transport.KindSSH {
+		ssh, err := sshOptions(e.profile)
+		if err != nil {
+			return target, buildErr(common.ConfigurationError, "profile %s: %w", e.profile.Name, err)
+		}
+		target.SSH = ssh
+	}
+	return target, nil
 }
 
 // sshOptions loads the ssh transport's settings from the Profile (EX-049).

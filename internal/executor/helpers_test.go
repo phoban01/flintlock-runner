@@ -65,6 +65,8 @@ type fakeScheduler struct {
 	retained     []scheduler.Handle
 	// allocStarted is signalled when Allocate is entered.
 	allocStarted chan struct{}
+	// tune, when set, changes each Allocation before it is handed out.
+	tune func(*scheduler.Allocation)
 }
 
 func newFakeScheduler() *fakeScheduler {
@@ -122,6 +124,10 @@ func (s *fakeScheduler) Allocate(ctx context.Context, r *scheduler.Reservation, 
 			Placement:     scheduler.Placement{Host: "host-a", Source: scheduler.PlacementFromClaim},
 			ReservationID: r.ID,
 		},
+	}
+	h.alloc.Lease.ID = "lease-" + h.alloc.VMUID
+	if s.tune != nil {
+		s.tune(&h.alloc)
 	}
 	s.handles = append(s.handles, h)
 	return h, nil

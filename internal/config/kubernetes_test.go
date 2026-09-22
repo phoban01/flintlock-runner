@@ -1,6 +1,7 @@
 package config
 
 import (
+	"errors"
 	"strings"
 	"testing"
 	"time"
@@ -104,6 +105,9 @@ func TestKubernetesBackendRejected(t *testing.T) {
 	kube := func(mutate func(*KubernetesPools)) func(*Config) {
 		return func(c *Config) {
 			c.PoolManager.Backend = PoolBackendKubernetes
+			for i := range c.Profiles {
+				c.Profiles[i].Transport = Transport{Kind: TransportKubeExec}
+			}
 			c.PoolManager.Kubernetes = &KubernetesPools{
 				JobTimeout:      time.Hour,
 				CleanupMargin:   time.Minute,
@@ -157,5 +161,81 @@ func TestKubernetesBackendRejected(t *testing.T) {
 	field := f + ".cloud_init_config_maps[" + cfg.Profiles[0].Name + "]"
 	if errs := fieldErrors(t, cfg); !hasFieldError(errs, field, "RFC 1123 subdomain") {
 		t.Errorf("errors = %v, want %s rejected", errs, field)
+	}
+}
+
+//= docs/requirements/12-cluster-fleet.md#kube-allocation
+//= type=test
+//# Where the Kubernetes pool backend is configured, the Executor
+//# SHALL use the `kube-exec` Guest Transport for every Profile, and the
+//# Runner SHALL reject a configuration that names any other Guest Transport.
+
+// TestKubernetesBackendUsesKubeExec checks the configuration's half of
+// KF-128: with the Kubernetes pool backend, a Profile that names no Guest
+// Transport gets kube-exec, one that names kube-exec keeps it, and one that
+// names exec or ssh is refused rather than run over something else. The
+// other way round, kube-exec is refused under battery, whose MicroVMs are
+// no pods.
+func TestKubernetesBackendUsesKubeExec(t *testing.T) {
+	t.Parallel()
+	named := strings.ReplaceAll(kubernetesConfig(t, ""), "profiles:\n  - name: default\n",
+		"profiles:\n  - name: default\n    transport:\n      kind: kube-exec\n")
+	for what, data := range map[string]string{"unnamed": kubernetesConfig(t, ""), "named": named} {
+		cfg, err := Parse([]byte(data), t.TempDir(), WithEnv(noEnv))
+		if err != nil {
+			t.Fatalf("%s transport: %v", what, err)
+		}
+		if got := cfg.Profiles[0].Transport.Kind; got != TransportKubeExec {
+			t.Errorf("%s transport: kind = %q, want %q", what, got, TransportKubeExec)
+		}
+	}
+
+	for _, kind := range []TransportKind{TransportExec, TransportSSH} {
+		data := strings.ReplaceAll(kubernetesConfig(t, ""), "profiles:\n  - name: default\n",
+			"profiles:\n  - name: default\n    transport:\n      kind: "+string(kind)+"\n      ssh:\n        private_key_file: /etc/key\n")
+		_, err := Parse([]byte(data), t.TempDir(), WithEnv(noEnv))
+		var verr *ValidationError
+		if !errors.As(err, &verr) || !hasFieldError(verr.Errors, "profiles[0].transport.kind", "must be kube-exec") {
+			t.Errorf("transport %s with the kubernetes backend: %v, want profiles[0].transport.kind rejected", kind, err)
+		}
+	}
+
+	runRejectCases(t, []rejectCase{
+		{
+			"kube-exec under battery",
+			func(c *Config) { c.Profiles[0].Transport = Transport{Kind: TransportKubeExec} },
+			"profiles[0].transport.kind", "needs pool_manager.backend",
+		},
+		{
+			"an unknown transport",
+			func(c *Config) { c.Profiles[0].Transport = Transport{Kind: "telnet"} },
+			"profiles[0].transport.kind", "must be exec or ssh",
+		},
+	})
+}
+
+//= docs/requirements/12-cluster-fleet.md#kube-exec-transport
+//= type=test
+//# Where the `kube-exec` Guest Transport is configured, the Runner
+//# SHALL NOT open any connection to a Host.
+
+// TestKubernetesBackendRefusesAnInventory checks that a cluster fleet's
+// configuration cannot list a Host to dial: with the Kubernetes pool
+// backend an Inventory is an error rather than a set of flintlockd
+// endpoints quietly ignored or, worse, connected to.
+func TestKubernetesBackendRefusesAnInventory(t *testing.T) {
+	t.Parallel()
+	cfg := fullWith(t, func(c *Config) {
+		c.PoolManager.Backend = PoolBackendKubernetes
+		c.PoolManager.Kubernetes = &KubernetesPools{JobTimeout: time.Hour, CleanupMargin: time.Minute, RolloutInterval: time.Second}
+		for i := range c.Profiles {
+			c.Profiles[i].Transport = Transport{Kind: TransportKubeExec}
+		}
+	})
+	if len(cfg.Inventory.Hosts) == 0 {
+		t.Fatal("testdata/full.yaml has no inventory to refuse")
+	}
+	if errs := fieldErrors(t, cfg); !hasFieldError(errs, "inventory", "reaches no Host") {
+		t.Errorf("errors = %v, want the inventory refused", errs)
 	}
 }

@@ -25,6 +25,20 @@ type poolClient struct {
 	// setProfiles is nil for battery, which learns everything it needs from
 	// the PoolSpec.
 	setProfiles func([]config.Profile)
+	// kube is the Kubernetes API access of the Kubernetes pool backend, nil
+	// for battery. The kube-exec Guest Transport and the Virtual Node
+	// lookup share it, so that the Runner talks to one API server as one
+	// identity (KF-128).
+	kube *kubeAccess
+}
+
+// kubeAccess is how the Runner of a cluster fleet reaches the Kubernetes
+// API: one client configuration, its clientset and the namespace of its
+// Pools.
+type kubeAccess struct {
+	config    *rest.Config
+	client    kubernetes.Interface
+	namespace string
 }
 
 // newPoolClient builds the Pool backend pool_manager.backend selects: the
@@ -56,9 +70,10 @@ func newPoolClient(cfg *config.Config, log *slog.Logger) (*poolClient, error) {
 	if err != nil {
 		return nil, fmt.Errorf("kubernetes pool backend: %w", err)
 	}
+	namespace := kubeNamespace(k, cfg.Scheduler.Namespace, os.ReadFile)
 	backend, err := kube.New(kube.Options{
 		Client:              clientset,
-		Namespace:           kubeNamespace(k, cfg.Scheduler.Namespace, os.ReadFile),
+		Namespace:           namespace,
 		RunnerName:          cfg.GitLab.Name,
 		Profiles:            cfg.Profiles,
 		CloudInitConfigMaps: k.CloudInitConfigMaps,
@@ -71,7 +86,11 @@ func newPoolClient(cfg *config.Config, log *slog.Logger) (*poolClient, error) {
 	if err != nil {
 		return nil, fmt.Errorf("kubernetes pool backend: %w", err)
 	}
-	return &poolClient{Client: backend, setProfiles: backend.SetProfiles}, nil
+	return &poolClient{
+		Client:      backend,
+		setProfiles: backend.SetProfiles,
+		kube:        &kubeAccess{config: restConfig, client: clientset, namespace: namespace},
+	}, nil
 }
 
 // kubeRESTConfig is a Kubernetes client configuration: the named kubeconfig
