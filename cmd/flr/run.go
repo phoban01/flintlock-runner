@@ -166,6 +166,12 @@ func runRunner(c *cli.Context) error {
 	// sees SIGHUP and re-reads its own file, which has not changed.
 	apply := func(ctx context.Context, profiles []config.Profile, hosts []config.HostEntry) error {
 		r.inventory.set(hosts)
+		// The Kubernetes pool backend reads a Pool's architecture and Host
+		// selector from the Profiles, so it has to have the new ones before
+		// the Scheduler declares the Pools again.
+		if r.client.setProfiles != nil {
+			r.client.setProfiles(profiles)
+		}
 		return r.sched.Reload(ctx, profiles, hosts)
 	}
 	if err := live.attach(ctx, apply, built.Inventory.Hosts); err != nil {
@@ -184,7 +190,7 @@ func runRunner(c *cli.Context) error {
 
 // runner holds what `run` builds and has to close on the way out.
 type runner struct {
-	client    poolmgr.Client
+	client    *poolClient
 	hosts     flintlock.Registry
 	sched     scheduler.Scheduler
 	provider  executor.Provider
@@ -198,13 +204,9 @@ type runner struct {
 // its Shutdown stops it once every worker has stopped.
 func newRunner(ctx context.Context, cfg *config.Config, log *slog.Logger, onInit func(executor.Stopper)) (*runner, error) {
 	pm := cfg.PoolManager
-	client, err := poolmgr.NewClient(poolmgr.ClientConfig{
-		Endpoint: pm.Endpoint,
-		TLS:      pm.TLS,
-		Deadline: pm.Deadline,
-	})
+	client, err := newPoolClient(cfg, log)
 	if err != nil {
-		return nil, fmt.Errorf("pool manager client: %w", err)
+		return nil, err
 	}
 	health, err := poolmgr.NewHealth(poolmgr.HealthConfig{
 		Admin:            client,

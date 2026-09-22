@@ -6,6 +6,11 @@ GOTOOLCHAIN          ?= auto
 DUVET                ?= duvet
 GOLANGCI_LINT_VERSION ?= v2.13.2
 BIN                  ?= bin
+# SETUP_ENVTEST_VERSION pins controller-runtime's setup-envtest (release-0.24,
+# which goes with the k8s.io v0.36 modules in go.mod) and ENVTEST_K8S_VERSION
+# the kube-apiserver and etcd it downloads for `make envtest`.
+SETUP_ENVTEST_VERSION ?= v0.24.2-0.20260713111223-0f529e22d5c0
+ENVTEST_K8S_VERSION  ?= 1.36.x
 # IDS is the space- or comma-separated list of requirement identifiers for
 # `make coverage-gate`, for example IDS="SC-001 SC-002" or IDS=TD-001..010.
 IDS                  ?=
@@ -18,7 +23,7 @@ E2E_FLAGS            ?=
 
 export GOTOOLCHAIN
 
-.PHONY: help build test vet lint tidy-check duvet duvet-ci duvet-open e2e demo coverage-gate clean
+.PHONY: help build test envtest vet lint tidy-check duvet duvet-ci duvet-open e2e demo coverage-gate clean
 
 ## help: list targets
 help:
@@ -32,8 +37,16 @@ build:
 	$(GO) build -o $(BIN)/flintlock-devstack ./cmd/flintlock-devstack
 
 ## test: run every Go test with the race detector
+# The Kubernetes pool backend's tests need a kube-apiserver and etcd (KF-121).
+# `go test ./...` on its own finds the ones `make envtest` has downloaded and
+# skips those tests when there are none; here they are downloaded first and
+# required, so this target never skips them.
 test:
-	$(GO) test -race ./...
+	KUBEBUILDER_ASSETS="$$($(MAKE) -s envtest)" FLINTLOCK_RUNNER_REQUIRE_ENVTEST=1 $(GO) test -race ./...
+
+## envtest: download the kube-apiserver and etcd of the API server test environment and print their directory
+envtest:
+	@$(GO) run sigs.k8s.io/controller-runtime/tools/setup-envtest@$(SETUP_ENVTEST_VERSION) use $(ENVTEST_K8S_VERSION) -p path
 
 ## vet: run go vet
 vet:
