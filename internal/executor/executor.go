@@ -132,16 +132,36 @@ func (e *executor) Prepare(options common.ExecutorPrepareOptions) (err error) {
 
 // prepareErr turns an error from a step of Prepare into the error Prepare
 // returns: when the prepare timeout is what stopped the step, the timeout
-// is the cause the Job log names.
+// is the cause the Job log names, and when the Job's own timeout is, the
+// Job fails with job_execution_timeout (GL-043) rather than as the step's
+// failure. A step that failed at or past a deadline waits for ctx to say so
+// first (expired), so that a step the Host or the Pool Manager ended at the
+// deadline counts as ended by it.
 func prepareErr(ctx context.Context, err error) error {
-	if cause := context.Cause(ctx); cause != nil && !errors.Is(err, cause) {
-		var be *common.BuildError
-		if errors.As(err, &be) {
-			be.Inner = fmt.Errorf("%w (%w)", be.Inner, cause)
-			return be
-		}
+	if !expired(ctx) {
+		return err
 	}
-	return err
+	var be *common.BuildError
+	if !errors.As(err, &be) {
+		return err
+	}
+	cause := context.Cause(ctx)
+	if !errors.Is(err, cause) {
+		be.Inner = fmt.Errorf("%w (%w)", be.Inner, cause)
+	}
+	if jobTimedOut(ctx) {
+		be.FailureReason = common.JobExecutionTimeout
+	}
+	return be
+}
+
+// jobTimedOut reports whether ctx ended because the Job's own timeout
+// elapsed. gitlab-runner makes the Job's context with context.WithTimeout,
+// whose cause is the bare context.DeadlineExceeded; the Executor's prepare
+// timeout and gitlab-runner's prepare_timeout carry causes of their own,
+// and a Handle that is done or an abort cancels without a deadline at all.
+func jobTimedOut(ctx context.Context) bool {
+	return errors.Is(ctx.Err(), context.DeadlineExceeded) && errors.Is(context.Cause(ctx), context.DeadlineExceeded)
 }
 
 //= docs/requirements/01-gitlab-protocol.md#advertised-capabilities
@@ -610,7 +630,7 @@ func (e *executor) runStage(cmd common.ExecutorCommand, command transport.Comman
 
 	select {
 	case r := <-result:
-		if ctx.Err() != nil {
+		if expired(ctx) {
 			return stageCancelled(ctx)
 		}
 		return e.stageError(cmd.Stage, r)
@@ -629,6 +649,57 @@ func (e *executor) runStage(cmd common.ExecutorCommand, command transport.Comman
 		e.BuildLogger.Warningln(fmt.Sprintf("The %s stage did not stop within the graceful kill timeout of %s", cmd.Stage, grace))
 	}
 	return stageCancelled(ctx)
+}
+
+//= docs/requirements/01-gitlab-protocol.md#job-execution
+//# When a Job's context is cancelled because its timeout elapsed,
+//# the Runner SHALL report the failure reason `job_execution_timeout`.
+
+// expiryWait bounds how long expired waits for a context whose deadline has
+// passed to say that it is done. The context package cancels a context at
+// its deadline by a timer, which is late by the scheduler's timer slack,
+// normally well under a millisecond and a few milliseconds on a loaded
+// machine; the bound only keeps a context that never honours its deadline
+// from holding a Stage for ever.
+const expiryWait = 5 * time.Second
+
+// expired reports whether ctx has ended or has passed its deadline, and in
+// the second case waits until ctx says so before returning true, so that
+// the caller and everything above it (gitlab-runner's own checks of the
+// Job's context among them) see the same outcome.
+//
+// It exists because the Job's deadline is enforced in two places that race.
+// gitlab-runner cancels the Job's context by a timer at the deadline
+// (GL-042). The same deadline travels to the Host on the exec stream, both
+// as timeout_seconds (EX-046) and as gRPC's own grpc-timeout, and the
+// Host's gRPC server resets the stream (RST_STREAM) when the latter
+// expires. Now and then that reset reaches the Runner before the Runner's
+// own timer has fired: the Stage's operation fails with a stream error while
+// ctx.Err() is still nil, a Stage failure would be reported as a
+// runner_system_failure, and gitlab-runner, seeing a live context, would go
+// on to after_script and report that failure rather than the timeout. A
+// Stage that ends at or past its deadline was ended by the deadline,
+// whatever the Host did to the stream, so the clock decides; a stream that
+// fails before the deadline still is a stream failure (EX-023).
+//
+// The deadline is compared with the wall clock, not the Provider's clock,
+// because the context package set it from the wall clock.
+func expired(ctx context.Context) bool {
+	if ctx.Err() != nil {
+		return true
+	}
+	deadline, ok := ctx.Deadline()
+	if !ok || time.Now().Before(deadline) {
+		return false
+	}
+	wait := time.NewTimer(expiryWait)
+	defer wait.Stop()
+	select {
+	case <-ctx.Done():
+		return true
+	case <-wait.C:
+		return false
+	}
 }
 
 // stageCancelled is the error of a Stage stopped by its context: the
