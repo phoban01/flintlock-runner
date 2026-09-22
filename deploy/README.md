@@ -179,26 +179,25 @@ If a pool's `host.conf` sets `POD_PROVIDER_UID`, set the same value in
   unprivileged pod (HI-066), so the Host Agent's containers, and every other
   unprivileged pod on a Host, run confined as `container_t`; privileged
   containers stay unconfined. None of this has run on a booted Host.
-- **Rootless buildkitd under `container_t`.** This is the Host Service most
-  likely to be stopped by SELinux, and it cannot be settled without an
-  enforcing Host. From the base policy (`sesearch`), `container_t` may create
-  a user namespace and holds `sys_admin`, `setuid` and `setgid` inside it,
-  and may mount `fs_t` (overlay, ext4), `tmpfs_t` (tmpfs, mqueue) and
-  `container_file_t`, so rootlesskit and the overlayfs snapshotter should
-  start. `--oci-worker-no-process-sandbox` already avoids mounting a new
-  `/proc`, which `container_t` may not do, and buildkit drops `/sys` from a
-  rootless build step's spec. What is left is `/dev/pts`: every build step's
-  OCI spec mounts a new `devpts`, and `container_t` has no `mount` on
-  `devpts_t`, so each `RUN` step can be expected to fail with a denial.
-  buildkit's `--oci-worker-selinux` would mount it with a
-  `container_file_t` context instead, but gives each step a new random
-  category pair, which the Host Agent's fixed level cannot transition to.
-  The fix that is known to work is the base policy's `container_engine_t`,
-  the type container-selinux provides for container engines in containers
-  (it may mount any filesystem type), set as `seLinuxOptions.type` on the
-  buildkitd container alone. That changes a container's domain, which
-  HI-065 rules out, so it has not been done: the first enforcing Host should
-  run a build, and `ausearch -m avc -c runc` will say whether it is needed.
+- **buildkitd in `container_engine_t`.** Every build step of rootless
+  buildkitd mounts a fresh `devpts`, which `container_t` may not, so the
+  buildkitd container alone names the base policy's `container_engine_t`
+  (KF-139), with the pod's level repeated beside it: the kubelet takes a
+  container's `seLinuxOptions` whole, and containerd gives a container that
+  names a type but no level random categories. What the base policy was
+  checked to allow, with `sesearch`: containerd (`container_runtime_t`, an
+  unconfined domain) may transition to it; it may read
+  `container_ro_file_t`, read and write `container_file_t`, mount any
+  filesystem type (`devpts` included), create user namespaces and hold
+  `sys_admin`, `setuid` and `setgid` inside them. It is an
+  `mcs_constrained_type` like `container_t`, so at the fixed level it uses
+  the `s0` host paths and its own cache and nothing of another pod's; the
+  build steps, which buildkit starts with no label of their own (no
+  `--oci-worker-selinux`), stay in `container_engine_t` at that same level.
+  It is not a `svirt_sandbox_domain`, so what that attribute grants
+  `container_t` it does not get. Whether a build then runs without a denial
+  only an enforcing Host can show: run one and read
+  `ausearch -m avc -ts boot`.
 - **Builds and the metadata service.** Rootless buildkitd runs in the
   Host's network namespace, as push provisioning runs it. The Host Image
   drops traffic from the Host Services' user ids, and from buildkit's

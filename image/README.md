@@ -425,7 +425,8 @@ an enforcing kernel, that the Host Agent's containers show
 categories of their own, and that no AVC denials follow
 (`ausearch -m avc -ts boot`). An unprivileged CNI or storage DaemonSet that
 touches host paths is the most likely thing to need its own
-`seLinuxOptions`. Rootless `buildkitd` is a known risk under `container_t`;
+`seLinuxOptions`. The Host Agent's `buildkitd` names `container_engine_t`
+(KF-139), the base policy's domain for a container engine in a container;
 see "Known gaps" in `deploy/README.md`.
 
 ## Networking notes

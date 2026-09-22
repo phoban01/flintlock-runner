@@ -683,14 +683,21 @@ checks:
     run: |
       spec=$(obj "$fleet" DaemonSet flintlock-host-agent | "$YQ" '.spec.template.spec')
       all='(.containers + .initContainers)[]'
-      # No container is given a type, a user or a role: all keep container_t.
-      set_type=$(echo "$spec" | "$YQ" "[.securityContext.seLinuxOptions.type, .securityContext.seLinuxOptions.user, .securityContext.seLinuxOptions.role, ($all | .securityContext.seLinuxOptions)] | map(select(. != null)) | length")
-      [ "$set_type" = 0 ] || fail "a container or the pod sets an SELinux type, user or role, or a level of its own"
+      # The pod names no type, user or role, so its containers keep
+      # container_t; the one exception, buildkitd, is KF-139's check below.
+      set_type=$(echo "$spec" | "$YQ" "[.securityContext.seLinuxOptions.type, .securityContext.seLinuxOptions.user, .securityContext.seLinuxOptions.role] | map(select(. != null)) | length")
+      [ "$set_type" = 0 ] || fail "the pod sets an SELinux type, user or role"
       # One fixed MCS level for the pod, so that what one Host Agent pod
       # writes into the cache the next one can read.
       level=$(echo "$spec" | "$YQ" '.securityContext.seLinuxOptions.level // ""')
       echo "the Host Agent's level: $level"
       echo "$level" | grep -Eq '^s0:c[0-9]+,c[0-9]+$' || fail "the Host Agent's level '$level' is not s0 with two categories"
+      # A container that names SELinux options replaces the pod's whole, so
+      # it has to repeat the pod's level, or it would get random categories.
+      others=$(echo "$spec" | "$YQ" "$all | select(.securityContext.seLinuxOptions) | .name + \"=\" + (.securityContext.seLinuxOptions.level // \"none\")" | xargs)
+      for o in $others; do
+        [ "${o#*=}" = "$level" ] || fail "${o%%=*} names SELinux options with level ${o#*=}, not the pod's $level"
+      done
       # Every host path it mounts has a file context in the Host Image's
       # module, and tmpfiles.d restores it.
       fc=$root/image/selinux/flr.fc
@@ -700,6 +707,25 @@ checks:
         grep -q "^$re[(	]" "$fc" || fail "$p has no file context of its own in image/selinux/flr.fc"
         grep -q "^z $p " "$tmpf" || fail "tmpfiles.d does not restore the label of $p"
       done
+
+  #= docs/requirements/12-cluster-fleet.md#cluster-hardening
+  #= type=test
+  #/ The Fleet Manifests SHALL run the `buildkitd` container of the
+  #/ Host Agent in the `container_engine_t` SELinux domain, and SHALL NOT name a
+  #/ domain for any other container.
+  - name: only buildkitd names an SELinux domain, and it is container_engine_t
+    run: |
+      spec=$(obj "$fleet" DaemonSet flintlock-host-agent | "$YQ" '.spec.template.spec')
+      typed=$(echo "$spec" | "$YQ" '(.containers + .initContainers)[] | select(.securityContext.seLinuxOptions.type) | .name + "=" + .securityContext.seLinuxOptions.type' | xargs)
+      echo "containers naming a domain: $typed"
+      [ "$typed" = "buildkitd=container_engine_t" ] || fail "want exactly buildkitd=container_engine_t, got '$typed'"
+      [ "$(echo "$spec" | "$YQ" '.securityContext.seLinuxOptions.type // "none"')" = none ] || fail "the pod names a domain for every container"
+      # No user or role either, anywhere.
+      [ "$(echo "$spec" | "$YQ" '[(.containers + .initContainers)[] | .securityContext.seLinuxOptions | select(.user or .role)] | length')" = 0 ] ||
+        fail "a container names an SELinux user or role"
+      # Without buildkitd there is no exception at all.
+      [ -z "$(q "$work/without-buildkit.yaml" 'select(.kind == "DaemonSet") | .. | select(has("seLinuxOptions")) | .seLinuxOptions.type // empty')" ] ||
+        fail "the Host Agent without buildkit names a domain"
 
   #= docs/requirements/12-cluster-fleet.md#cluster-release
   #= type=test
