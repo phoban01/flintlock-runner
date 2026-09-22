@@ -17,8 +17,49 @@ pattern = "pkg/**/*.go"
 # The Host Image (11-host-image.md) and the Fleet Manifests
 # (12-cluster-fleet.md) are not Go. Containerfiles, systemd units, shell and
 # YAML all take `#` comments, so they cite requirements with `#=` and `#/`.
+#
+# duvet reads every path a pattern matches and fails on a directory, and
+# `image/**/*` matches the directories under image/ too. The patterns below
+# therefore name files only: by extension where directory names carry dots
+# (tmpfiles.d, kubelet.service.d), by directory elsewhere.
 [[source]]
-pattern = "image/**/*"
+pattern = "image/Containerfile"
+comment-style = { meta = "#=", content = "#/" }
+
+[[source]]
+pattern = "image/*.*"
+comment-style = { meta = "#=", content = "#/" }
+
+[[source]]
+pattern = "image/build/*"
+comment-style = { meta = "#=", content = "#/" }
+
+[[source]]
+pattern = "image/selinux/*"
+comment-style = { meta = "#=", content = "#/" }
+
+[[source]]
+pattern = "image/rootfs/usr/libexec/flr/*"
+comment-style = { meta = "#=", content = "#/" }
+
+[[source]]
+pattern = "image/rootfs/usr/share/flr/*"
+comment-style = { meta = "#=", content = "#/" }
+
+[[source]]
+pattern = "image/rootfs/usr/lib/**/*.service"
+comment-style = { meta = "#=", content = "#/" }
+
+[[source]]
+pattern = "image/rootfs/usr/lib/**/*.conf"
+comment-style = { meta = "#=", content = "#/" }
+
+[[source]]
+pattern = "image/rootfs/etc/**/*.toml"
+comment-style = { meta = "#=", content = "#/" }
+
+[[source]]
+pattern = "image/rootfs/etc/**/*.cfg"
 comment-style = { meta = "#=", content = "#/" }
 
 [[source]]
