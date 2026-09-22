@@ -4,6 +4,7 @@ package harness
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"testing"
 	"time"
@@ -14,8 +15,8 @@ import (
 	"github.com/phoban01/flintlock-runner/internal/testing/fakegitlab"
 )
 
-// The tests in this file demonstrate defects the cluster stack found in
-// production code. They fail today, so they run only where
+// The tests in this file demonstrate defects in production code that the
+// scenarios found. They fail today, so they run only where
 // FLINTLOCK_RUNNER_E2E_KNOWN_BUGS is set to 1; once a defect is fixed its
 // test passes and moves into the scenarios.
 
@@ -90,6 +91,41 @@ func TestKnownBugKubernetesSeveredExecCountsAsSuccess(t *testing.T) {
 	rec := wait(t, s, id)
 	if rec.Status == fakegitlab.StatusSuccess {
 		t.Errorf("the job succeeded although its script was cut off before its last line:\n%s", rec.Trace)
+	}
+}
+
+// TestKnownBugJobTimeoutReportedAsSystemFailure: a Job that runs past its
+// timeout has to be reported with job_execution_timeout (GL-043). On the
+// battery stack it now and then is reported as runner_system_failure,
+// with "stage step_script: guest transport failed before the exit status
+// was known: ... exec stream failed: ... stream terminated by RST_STREAM"
+// in its log, and after_script failing on "opening exec stream: ...
+// context deadline exceeded". The likely cause, not confirmed: the exec
+// transport passes the time left on the Job's context to the guest as
+// timeout_seconds (EX-046), so the Host ends the stream at about the moment
+// the Job's context expires, and when the stream's end wins that race the
+// Executor reports a transport failure rather than the timeout. It was seen
+// once in about seven full runs of the scenarios; the test runs the
+// scenario's Job many times to give the race its chance.
+func TestKnownBugJobTimeoutReportedAsSystemFailure(t *testing.T) {
+	knownBug(t)
+	opts := FakeTier()
+	opts.RunnerBinary = runnerBinary
+	s := New(t, opts)
+	if err := startRunner(s); err != nil {
+		t.Fatal(err)
+	}
+	for i := range 20 {
+		rec := runJob(t, s, Job{
+			Name:        fmt.Sprintf("slow-%d", i),
+			Script:      []string{`echo "sleeping past the timeout"`, `sleep 120`},
+			AfterScript: []string{`echo "after_script ran"`},
+			Timeout:     5 * time.Second,
+		})
+		if rec.FailureReason != "job_execution_timeout" {
+			t.Fatalf("run %d: a job past its timeout ended %s with reason %q, want job_execution_timeout\n%s",
+				i, rec.Status, rec.FailureReason, rec.Trace)
+		}
 	}
 }
 
