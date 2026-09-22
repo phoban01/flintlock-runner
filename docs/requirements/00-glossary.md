@@ -46,6 +46,9 @@ directory. It contains no requirements.
 - **Fleet Manifests** — the Kubernetes manifests in this repository that
   deploy a cluster fleet: the Host pool's Cluster API objects, the Host
   Agent, the Runner and their access rules.
+- **Release** — what the release workflow publishes for a version tag: the
+  archives and requirements report of `docs/RELEASING.md` and, for a cluster
+  fleet, the container images and the rendered Fleet Manifests.
 
 ## External systems {#external-systems}
 
