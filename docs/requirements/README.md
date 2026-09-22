@@ -30,7 +30,7 @@ the coverage report.
 Use exactly one of these shapes per requirement. The subject is always one of
 the defined system names from the glossary (the Runner, the Executor, the
 Scheduler, the Guest Transport, the Fleet Controller, the Host Image, the
-Pod Provider, the Host Agent, the Fleet Manifests).
+Pod Provider, the Host Agent, the Fleet Manifests, the Release).
 
 | Pattern | Shape |
 |---------|-------|

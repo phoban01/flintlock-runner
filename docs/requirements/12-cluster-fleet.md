@@ -189,6 +189,30 @@ one pod exactly one update succeeds. The active deadline is the backstop for
 a Runner that dies without releasing, and KF-032 is the prompt path for the
 same failure.
 
+## Allocation {#kube-allocation}
+
+- **KF-126** Where the Kubernetes pool backend is configured, the Scheduler
+  SHALL record the claimed pod's Virtual Node as the Placement without
+  looking it up in the Inventory, and SC-034 SHALL NOT apply.
+- **KF-127** When claiming for a Job, the Scheduler SHALL pass the Job's own
+  timeout to the Kubernetes pool backend, and the backend SHALL set the
+  active deadline of KF-044 to that timeout plus the configured cleanup
+  margin, using its configured default only for a Job that has none.
+- **KF-128** Where the Kubernetes pool backend is configured, the Executor
+  SHALL use the `kube-exec` Guest Transport for every Profile, and the
+  Runner SHALL reject a configuration that names any other Guest Transport.
+
+A cluster fleet has no Inventory, so SC-034, which fails an allocation whose
+Host the Inventory does not know, would fail every one; KF-126 takes its
+place. The Virtual Node is enough to run the Job, because `kube-exec` reaches
+the guest through the pod and KF-062 finds the Host Services on the Virtual
+Node. KF-127 matters because the active deadline ends the pod: a Job that is
+allowed three hours must not have its MicroVM deleted at the two-hour
+default. The margin is there because the deadline must outlast the Job, not
+equal it: the claim is made before the Job's own clock starts, and a Job
+that times out still runs its `after_script` and uploads its failure
+artifacts in the same MicroVM.
+
 ## Guest Transport {#kube-exec-transport}
 
 - **KF-060** Where the `kube-exec` Guest Transport is configured, the
@@ -298,6 +322,49 @@ would need credentials for it.
   to the bridge gateway, to write the cache directory and to reach the
   local `flintlockd` endpoint.
 
+## Hardening {#cluster-hardening}
+
+- **KF-130** The Pod Provider SHALL authorize every kubelet API request with
+  a SubjectAccessReview of the requesting identity for the `nodes/proxy`
+  resource on its Virtual Node and the verb the request maps to, and SHALL
+  refuse the request unless the review allows it.
+- **KF-131** If the SubjectAccessReview of a request cannot be completed,
+  then the Pod Provider SHALL refuse the request.
+- **KF-132** The Fleet Manifests SHALL grant the Pod Provider permission to
+  create SubjectAccessReviews in addition to the permissions of KF-111.
+- **KF-133** The Fleet Manifests SHALL include a ValidatingAdmissionPolicy
+  that rejects any request by a Pod Provider to create, update, patch or
+  delete a Node other than its own Virtual Node, or a pod that is neither
+  bound to its own Virtual Node nor its own guard pod.
+- **KF-134** The Fleet Manifests SHALL give each Pod Provider an identity
+  that names its Host, so that the policy of KF-133 can tell one Host's Pod
+  Provider from another's.
+- **KF-135** The Fleet Manifests SHALL run the Pod Provider's container as
+  the user id that HI-063 admits to the local `flintlockd` endpoint, and
+  SHALL run no other container of the Host Agent as that user id.
+
+KF-031 checks who a client is; KF-130 checks what that client may do, as a
+real kubelet does. Without it any certificate from the kubelet client
+certificate authority, which in most clusters is the cluster's own, opens a
+shell in every Job on the Host.
+
+Kubernetes RBAC cannot express "only the pods bound to this node", so the
+Role behind KF-111 is necessarily cluster-wide and KF-111 is met by the code
+rather than by the grant. KF-133 moves that boundary into the API server,
+where a compromised Host can no longer cross it. The expected mechanism is a
+bound ServiceAccount token, whose user information carries the name of the
+node the Host Agent pod runs on
+(`authentication.kubernetes.io/node-name`), compared in the policy with the
+object's node; the Virtual Node's name is that node's name with the
+`-microvms` suffix of KF-010.
+
+KF-135 and HI-063 close the last way round KF-031: `flintlockd` has no
+authentication of its own, and a loopback listener is reachable by every
+process in the Host's network namespace, including any pod with host
+networking that a DaemonSet puts there. Admitting one user id keeps out
+unprivileged host-network pods; a privileged pod can already do anything on
+the Host, so it is not the threat this addresses.
+
 ## Test doubles {#cluster-test-doubles}
 
 - **KF-120** The Pod Provider SHALL be tested against a Kubernetes API
@@ -317,6 +384,41 @@ would need credentials for it.
 - **KF-125** The harness SHALL include a scenario in which the Pod Provider
   restarts while a Job runs, and SHALL assert that the Job's MicroVM is
   adopted and the Job finishes.
+- **KF-136** The Pod Provider's authorization SHALL be tested against a
+  Kubernetes API server test environment with one client identity that the
+  review allows and one that it refuses, and SHALL be shown to run nothing
+  for the second.
+- **KF-137** The Fleet Manifests SHALL include a test, run against a
+  Kubernetes API server test environment, in which the policy of KF-133
+  admits a Pod Provider's change to its own Host's Virtual Node and pods and
+  refuses the same change to another Host's.
+
+## Release {#cluster-release}
+
+- **KF-140** The Release SHALL publish a container image of `flr` for
+  `linux/amd64` and `linux/arm64` to the project's container registry,
+  tagged with the release version.
+- **KF-141** The container image of `flr` SHALL run as a non-root user and
+  SHALL contain nothing but the `flr` binary, certificate authority
+  certificates and time zone data.
+- **KF-142** The Release SHALL publish the Host Image to the project's
+  container registry, tagged with the release version and with the
+  Kubernetes version it carries.
+- **KF-143** The Release SHALL publish the Fleet Manifests as one release
+  asset in which every container image of this project is referenced by
+  digest.
+- **KF-144** The Fleet Manifests SHALL reference every third-party container
+  image they use, including those of the Host Services, by digest.
+- **KF-145** The Release SHALL NOT publish a `latest` tag or any other tag
+  that moves.
+
+A release candidate publishes images too, so that a candidate can be tried
+on a cluster before its version is released. The Release does not publish
+an AMI: making one needs an AWS account, which the release workflow does not
+have, so an operator runs `make image-ami` against the published Host Image
+in their own account (HI-009). Every reference that a cluster fleet pulls is
+immutable, so a Host or a Runner started from a release's manifests runs
+exactly what that release tested.
 
 ## Relation to the other documents {#relation-to-other-documents}
 
@@ -327,7 +429,7 @@ This section is not normative.
 | Pool declaration, PL-010 to PL-017 | ReplicaSets, KF-040 to KF-043, KF-050, KF-051 |
 | Claim, heartbeat, release and lease expiry in `04-pool-manager.md` | KF-044 to KF-048, KF-032 |
 | Pool availability and events in `04-pool-manager.md` | pod watch, KF-049 |
-| Placement resolution in `03-scheduler.md` | the claimed pod's Virtual Node, KF-046 |
+| Placement resolution in `03-scheduler.md`, SC-034 | the claimed pod's Virtual Node, KF-046, KF-126 |
 | Host client and Inventory, `05-hosts.md` | none; the Runner reaches no Host, KF-063 |
 | `exec` Guest Transport in `02-executor.md` | `kube-exec`, KF-060, KF-061 |
 | Discovery, FL-001 to FL-006, FL-116 | the Virtual Nodes |
