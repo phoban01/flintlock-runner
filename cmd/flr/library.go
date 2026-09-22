@@ -53,6 +53,12 @@ package main
 
 //= docs/requirements/01-gitlab-protocol.md#job-execution
 //= type=implication
+//= reason=common.Build.executeUserScripts derives the after_script context from the Job's context, which context.WithTimeout has already cancelled, and common.Build.executeStage returns ctx.Err() before it asks the executor for anything.
+//# When a Job's timeout has elapsed, the Runner SHALL NOT run that
+//# Job's `after_script` Stage.
+
+//= docs/requirements/01-gitlab-protocol.md#job-execution
+//= type=implication
 //= reason=the bash shell's get_sources script embeds the Job token in the clone URL, and the executor runs that script inside the MicroVM over the Guest Transport.
 //# The Runner SHALL clone the repository inside the MicroVM using
 //# the Job token embedded by the generated `get_sources` script.

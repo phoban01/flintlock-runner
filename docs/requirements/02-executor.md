@@ -88,6 +88,47 @@ EX-027 follows from the Pool model: a warm MicroVM was booted before the Job
 existed, so nothing about the Job can be in its cloud-init data, and the
 Stage scripts are the only channel that exists after boot.
 
+## The Job's timeout {#job-timeout}
+
+- **EX-070** If a step of `Prepare` fails at or after the Job's timeout has
+  elapsed, then the Executor SHALL fail the Job with the failure reason
+  `job_execution_timeout` rather than with the failure reason that step
+  would otherwise carry.
+- **EX-071** If a Stage's operation fails at or after the Job's timeout has
+  elapsed, then the Executor SHALL report the Stage as ended by the Job's
+  context rather than as a stream failure.
+- **EX-072** While the Job's timeout has elapsed and the Job's context does
+  not yet report that it is done, the Executor SHALL wait for that context
+  to report it, bounded by a fixed expiry wait, before returning the outcome
+  of a step or a Stage.
+- **EX-073** When `Run` is called for a Stage whose context is already done,
+  the Executor SHALL return that context's cause without reporting a Stage
+  failure of its own.
+
+The Job's deadline is enforced in two places that race. The Runner cancels
+the Job's context by a timer when the timeout elapses (GL-042), and the same
+deadline travels to the Host on the exec stream (EX-053), where the Host's
+gRPC server resets the stream once it passes. Either can be first. When the
+Host is first, the step or the Stage fails with a stream error while the
+Job's context still looks live, and without EX-070 and EX-071 a Job that ran
+out of time would be reported as `runner_system_failure` under EX-013,
+EX-015 or EX-023 instead of `job_execution_timeout` under GL-043. The clock
+decides: a step or a Stage that ended at or after the deadline was ended by
+the deadline, whatever the Host did to the stream, and one that ended before
+it is a genuine failure of that step or Stage.
+
+EX-072 exists because the Runner is not the last reader of the Job's
+context. The Build checks it again to pick the Job's failure reason, so the
+Executor returning before the context's own timer has fired would leave the
+two disagreeing. The wait is bounded so that a context that never honours
+its deadline cannot hold a Job for ever.
+
+EX-073 covers the Stages the Build starts once the Job's context is already
+done. The Build skips such a Stage before the Executor sees it, so EX-073
+holds by construction for `after_script` after a Job timeout (GL-047); it is
+written down because a Stage the Executor does begin can still find its
+context done first, and the answer has to be the same one in both places.
+
 ## Finish and cleanup {#finish-and-cleanup}
 
 - **EX-030** When `Cleanup` is called, the Executor SHALL release the Job's
@@ -139,6 +180,9 @@ Stage scripts are the only channel that exists after boot.
   that emits liveness heartbeats on the exec control channel, because
   `flintlockd` ends an exec session whose control channel has been idle
   for longer than its deadline.
+- **EX-053** The `exec` Guest Transport SHALL carry the operation's deadline
+  to the Host both in the `timeout_seconds` field of `ExecStart` and in
+  gRPC's own `grpc-timeout` on the exec stream.
 
 The `exec` transport is the default because the exec service is served by
 `flintlockd` over the MicroVM's vsock and needs no guest networking that is
@@ -154,6 +198,13 @@ to completion. Where it does not, upstream falls back to a deadline derived
 from the `timeout_seconds` EX-046 sends, and a quiet Stage can be killed
 before its own timeout. A CI Job is quiet for long stretches by nature, so
 the guest agent is not optional in a Profile's image.
+
+EX-053 is not an extra call: the deadline reaches the Host twice because the
+operation's context is handed to the RPC, and grpc-go writes a context
+deadline into the stream's `grpc-timeout` header. It is written down because
+the Host's gRPC server enforces that header by resetting the stream, which
+is a second enforcer of the same deadline and the reason the job timeout
+section exists.
 
 EX-045 is narrow for a reason. The exec service's own framing says that
 `exit_code` terminates the stream while an `error` may be sent, typically

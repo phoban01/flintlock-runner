@@ -293,6 +293,43 @@ func TestTimeoutSecondsComesFromTheContext(t *testing.T) {
 
 //= docs/requirements/02-executor.md#guest-transport
 //= type=test
+//# The `exec` Guest Transport SHALL carry the operation's deadline
+//# to the Host both in the `timeout_seconds` field of `ExecStart` and in
+//# gRPC's own `grpc-timeout` on the exec stream.
+
+// TestTheDeadlineAlsoReachesTheStream checks the second copy of the
+// deadline, the one nothing in the transport writes: the operation's
+// context is what opens the stream, so grpc-go puts the same deadline in
+// the stream's grpc-timeout and the Host's server ends the stream when it
+// passes. That is the enforcer the Executor races (EX-071), so the
+// transport has to keep handing the deadline to the RPC.
+func TestTheDeadlineAlsoReachesTheStream(t *testing.T) {
+	t.Parallel()
+	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
+	defer cancel()
+	want, _ := ctx.Deadline()
+
+	var streamDeadline time.Time
+	var hasDeadline bool
+	stream := newScriptedStream(exitCode(0))
+	stub := &stubHost{name: "h1", exec: func(streamCtx context.Context) (flintlock.ExecStream, error) {
+		streamDeadline, hasDeadline = streamCtx.Deadline()
+		return stream, nil
+	}}
+	tr := newExecTransport(t, transport.Target{Host: stub, VMUID: "vm"})
+	if _, err := tr.Run(ctx, transport.Command{Path: "true"}); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if !hasDeadline {
+		t.Fatal("the context that opened the stream carried no deadline, so nothing would set grpc-timeout")
+	}
+	if !streamDeadline.Equal(want) {
+		t.Errorf("the stream's deadline is %v, want the operation's %v", streamDeadline, want)
+	}
+}
+
+//= docs/requirements/02-executor.md#guest-transport
+//= type=test
 //# The `exec` Guest Transport SHALL treat an `exit_code`
 //# payload as the command's exit status and SHALL treat an `error` payload
 //# as a transport failure only where the stream ends without an `exit_code`.
