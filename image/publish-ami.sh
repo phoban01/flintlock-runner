@@ -47,7 +47,7 @@ while [ "$#" -gt 0 ]; do
   *) usage ;;
   esac
 done
-[ -n "$bucket" ] && [ -n "$region" ] || usage
+if [ -z "$bucket" ] || [ -z "$region" ]; then usage; fi
 
 run() {
   if [ "$dry_run" = 1 ]; then

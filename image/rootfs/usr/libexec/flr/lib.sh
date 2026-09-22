@@ -76,7 +76,7 @@ valid_ports() {
   [ -z "$1" ] && return 0
   [[ $1 =~ ^[0-9]+(,[0-9]+)*$ ]] || return 1
   for p in ${1//,/ }; do
-    [ "$((10#$p))" -ge 1 ] && [ "$((10#$p))" -le 65535 ] || return 1
+    if [ "$((10#$p))" -lt 1 ] || [ "$((10#$p))" -gt 65535 ]; then return 1; fi
   done
 }
 

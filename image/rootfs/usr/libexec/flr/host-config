@@ -86,7 +86,7 @@ valid_ports "$service_ports" || bad "HOST_SERVICE_PORTS is not a comma-separated
 valid_ports "$control_ports" || bad "HOST_CONTROL_PORTS is not a comma-separated list of ports"
 [ -n "$control_ports" ] || bad "HOST_CONTROL_PORTS is empty"
 cache_percent=${CONF[CACHE_VOLUME_PERCENT]}
-is_uint "$cache_percent" && [ "$cache_percent" -le 50 ] || bad "CACHE_VOLUME_PERCENT is not a whole number up to 50"
+if ! is_uint "$cache_percent" || [ "$cache_percent" -gt 50 ]; then bad "CACHE_VOLUME_PERCENT is not a whole number up to 50"; fi
 
 # The addressing of internal/fleet/scripts/data.go: the gateway is the first
 # address, DHCP hands out the rest, leaving the first ten of a subnet larger
