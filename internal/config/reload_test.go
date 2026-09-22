@@ -368,8 +368,12 @@ func TestServeSIGHUPListensForTheSignal(t *testing.T) {
 
 	// signal.Notify may not have run yet when the first SIGHUP is sent, so
 	// keep sending until the reload happens or the test times out. The
-	// process cannot die from the signal: this test's own handler is
-	// registered first, which stops the default action.
+	// process cannot die from the signal while this test's own handler is
+	// registered, which stops the default action. Each signal is sent only
+	// once the one before it has reached that handler: a reload can come
+	// from an earlier signal than the last one sent, and a signal still in
+	// flight when both handlers are stopped would take the default action
+	// and kill the test binary.
 	own := make(chan os.Signal, 1)
 	signal.Notify(own, syscall.SIGHUP)
 	defer signal.Stop(own)
@@ -378,6 +382,11 @@ func TestServeSIGHUPListensForTheSignal(t *testing.T) {
 	for seen := false; !seen; {
 		if err := syscall.Kill(syscall.Getpid(), syscall.SIGHUP); err != nil {
 			t.Fatalf("kill: %v", err)
+		}
+		select {
+		case <-own:
+		case <-deadline:
+			t.Fatal("the SIGHUP sent never arrived")
 		}
 		select {
 		case <-reloaded:
