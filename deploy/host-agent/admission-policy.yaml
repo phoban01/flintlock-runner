@@ -1,0 +1,116 @@
+# Admission policy of the Pod Provider (`flr kubelet`), which runs in the Host
+# Agent.
+#
+# rbac.yaml has to grant every Host's Pod Provider the same cluster-wide
+# rules, because RBAC cannot say "this Host's Virtual Node" or "the pods bound
+# to it". This policy says it, in the API server: a Pod Provider may create,
+# update, patch or delete only its own Host's Virtual Node, the pods bound to
+# that Virtual Node and its own drain guard pod. A compromised Host keeps what
+# it already had and gets nothing of another Host's.
+#
+# Which Host a request comes from is read from the requester's identity, not
+# from anything the request says. The Host Agent's pod authenticates with the
+# bound ServiceAccount token the kubelet projects into it, and the API server
+# puts the node that pod runs on into the token's user information as the
+# extra `authentication.kubernetes.io/node-name`. That is the
+# ServiceAccountTokenPodNodeInfo feature, on by default since Kubernetes 1.30
+# and generally available since 1.32; the 1.36 API server the tests run
+# against has no gate for it at all, so no flag is needed. The Virtual
+# Node is that node's name with the suffix `-microvms` (KF-010) and the guard
+# pod is `flintlock-drain-guard-` and that node's name, on that node (KF-091).
+# A request by the Pod Provider's ServiceAccount whose identity carries no
+# node, a legacy Secret token or a TokenRequest not bound to a pod, is
+# refused outright.
+#
+# The Host Agent's ServiceAccount, `flintlock-host-agent` in
+# `flintlock-system`, is the subject of rbac.yaml. The provider's test suite
+# loads this file unchanged, runs every scenario under it and tests it with
+# real bound tokens (KF-137).
+
+#= docs/requirements/12-cluster-fleet.md#cluster-hardening
+#/ The Fleet Manifests SHALL include a ValidatingAdmissionPolicy
+#/ that rejects any request by a Pod Provider to create, update, patch or
+#/ delete a Node other than its own Virtual Node, or a pod that is neither
+#/ bound to its own Virtual Node nor its own guard pod.
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: flintlock-pod-provider-own-host
+spec:
+  # A policy that cannot be evaluated refuses.
+  failurePolicy: Fail
+  matchConstraints:
+    # A patch is an UPDATE to admission. The subresources are every one whose
+    # object is the Node or the pod itself; the provider's RBAC grants only
+    # the status ones, and this holds should that ever widen.
+    resourceRules:
+      - apiGroups: [""]
+        apiVersions: ["*"]
+        operations: ["CREATE", "UPDATE", "DELETE"]
+        resources: ["nodes", "nodes/status", "pods", "pods/status", "pods/ephemeralcontainers", "pods/resize"]
+  matchConditions:
+    - name: pod-provider
+      expression: request.userInfo.username == 'system:serviceaccount:flintlock-system:flintlock-host-agent'
+  variables:
+    #= docs/requirements/12-cluster-fleet.md#cluster-hardening
+    #/ The Fleet Manifests SHALL give each Pod Provider an identity
+    #/ that names its Host, so that the policy of KF-133 can tell one Host's Pod
+    #/ Provider from another's.
+    # The node of the requester's pod, or empty when its identity names none.
+    - name: host
+      expression: >-
+        has(request.userInfo.extra)
+        && 'authentication.kubernetes.io/node-name' in request.userInfo.extra
+        && size(request.userInfo.extra['authentication.kubernetes.io/node-name']) == 1
+        ? request.userInfo.extra['authentication.kubernetes.io/node-name'][0] : ''
+    - name: virtualNode
+      expression: variables.host + '-microvms'
+    - name: guardPod
+      expression: "'flintlock-drain-guard-' + variables.host"
+    # What the request touches: the object as it was and as it would be for
+    # an update, so that nothing is moved onto or off the Host either.
+    - name: touched
+      expression: >-
+        request.operation == 'DELETE' ? [oldObject]
+        : request.operation == 'UPDATE' ? [oldObject, object]
+        : [object]
+  validations:
+    - expression: variables.host != ''
+      reason: Forbidden
+      message: >-
+        the Pod Provider's identity names no Host: it has to authenticate with
+        the bound ServiceAccount token of a pod scheduled to its Host's Node
+    - expression: >-
+        request.resource.resource != 'nodes'
+        || variables.touched.all(n, n.metadata.name == variables.virtualNode)
+      reason: Forbidden
+      messageExpression: >-
+        'the Pod Provider of ' + variables.host + ' may change no Node but its
+        Virtual Node ' + variables.virtualNode
+    - expression: >-
+        request.resource.resource != 'pods'
+        || variables.touched.all(p, has(p.spec.nodeName) && (
+             p.spec.nodeName == variables.virtualNode
+             || (p.spec.nodeName == variables.host && p.metadata.name == variables.guardPod)))
+      reason: Forbidden
+      messageExpression: >-
+        'the Pod Provider of ' + variables.host + ' may change only pods bound
+        to ' + variables.virtualNode + ' and its guard pod ' + variables.guardPod
+    # The only pod a Pod Provider creates is its guard, which runs a pause
+    # container and needs no credential. Refusing it a token and volumes
+    # keeps a guard pod from carrying another ServiceAccount's token onto
+    # the Host.
+    - expression: >-
+        request.resource.resource != 'pods' || request.operation != 'CREATE'
+        || (has(object.spec.automountServiceAccountToken) && !object.spec.automountServiceAccountToken
+            && (!has(object.spec.volumes) || size(object.spec.volumes) == 0))
+      reason: Forbidden
+      message: the Pod Provider's guard pod mounts no ServiceAccount token and no volume
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: flintlock-pod-provider-own-host
+spec:
+  policyName: flintlock-pod-provider-own-host
+  validationActions: [Deny]
