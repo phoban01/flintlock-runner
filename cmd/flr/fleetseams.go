@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"os"
 	"runtime"
@@ -64,6 +65,9 @@ type fleetSeams struct {
 	PoolManager func(cfg *config.Config) (poolmgr.Client, error)
 	Hosts       func() flintlock.Dialer
 	Transports  func() transport.Factory
+	// ClusterVerifier builds `fleet verify` for a cluster fleet; nil builds
+	// the real one with the Runner's Kubernetes identity.
+	ClusterVerifier func(cfg *config.Config, timeout time.Duration, out io.Writer) (clusterVerifier, error)
 	// Leases counts leased MicroVMs on a drained Host.
 	Leases func(pm poolmgr.Client) drain.LeaseReporter
 	// Now is the clock for the Inventory's generated_at.

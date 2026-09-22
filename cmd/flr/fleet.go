@@ -651,8 +651,17 @@ func fleetInventory(cfg *config.Config) *fleet.Inventory {
 	return &fleet.Inventory{Hosts: cfg.Inventory.Hosts}
 }
 
-// fleetVerify is `fleet verify` (FL-070 to FL-073).
+// fleetVerify is `fleet verify` (FL-070 to FL-073), or, where the
+// Kubernetes pool backend is configured, the verification of a cluster
+// fleet (KF-100 to KF-102).
 func fleetVerify(c *cli.Context, s fleetSeams) error {
+	kube, err := selectsKubernetes(c.GlobalString("config"))
+	if err != nil {
+		return err
+	}
+	if kube {
+		return verifyCluster(context.Background(), c, s, c.Duration("timeout"))
+	}
 	cfg, err := loadFleetConfig(c, nil, true)
 	if err != nil {
 		return err
