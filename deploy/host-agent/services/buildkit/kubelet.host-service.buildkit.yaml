@@ -1,0 +1,3 @@
+  buildkit:
+    enabled: true
+    port: 1234

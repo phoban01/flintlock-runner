@@ -1,0 +1,37 @@
+# The EC2 side of one Host pool (KF-001): one instance type and the Host
+# Image's AMI by explicit id, never by lookup.
+#
+#= docs/requirements/12-cluster-fleet.md#cluster-least-privilege
+#/ The Fleet Manifests SHALL NOT grant any workload an AWS
+#/ permission.
+# No iamInstanceProfile: a Host has no AWS role, so nothing on it, the Host
+# Agent's host-network pods included, can get AWS credentials from the
+# instance metadata service. That is also why cloudInit skips Secrets
+# Manager: fetching the bootstrap data from it would need an instance
+# profile. The bootstrap data holds a short-lived kubeadm join token and the
+# Host configuration file, which holds no secret (HI-052).
+apiVersion: infrastructure.cluster.x-k8s.io/v1beta2
+kind: AWSMachineTemplate
+metadata:
+  name: POOL
+spec:
+  template:
+    spec:
+      # A metal instance with an instance-store device for the thin pool
+      # (HI-020) and the Host Service cache (HI-024).
+      instanceType: m6id.metal
+      ami:
+        id: ami-REPLACE
+      cloudInit:
+        insecureSkipSecretsManager: true
+      # No SSH key; a Host is reached through the cluster.
+      sshKeyName: ""
+      rootVolume:
+        size: 100
+        type: gp3
+      # IMDSv2 only, one hop: a pod's network namespace cannot reach it,
+      # though a host-network pod can, and finds no credentials there.
+      instanceMetadataOptions:
+        httpEndpoint: enabled
+        httpTokens: required
+        httpPutResponseHopLimit: 1

@@ -1,0 +1,23 @@
+# buildkitd's configuration, rendered on each Host by render.sh; ported from
+# internal/fleet/scripts/templates/host_services.sh.tmpl.
+
+root = "/var/lib/flintlock-runner/cache/buildkit"
+
+[grpc]
+  # KF-071: the guest bridge gateway only.
+  address = ["tcp://@BRIDGE_GATEWAY@:1234"]
+
+# FL-102: rootless, the overlayfs snapshotter, and garbage collection
+# bounded by the storage limit, in MB.
+[worker.oci]
+  enabled = true
+  rootless = true
+  snapshotter = "overlayfs"
+  gc = true
+  gckeepstorage = 20480
+
+[worker.containerd]
+  enabled = false
+# FL-103: images resolve through this Host's registry mirror first, when the
+# registry mirror Component is included.
+@BLOCK:buildkit-registry-mirrors@

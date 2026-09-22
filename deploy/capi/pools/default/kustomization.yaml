@@ -1,0 +1,11 @@
+# The Host pool `default`: the objects of deploy/capi/host-pool with the
+# settings of host-pool.yaml.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+resources:
+  - ../../host-pool
+  - host-pool.yaml
+
+components:
+  - ../../host-pool-params

@@ -1,0 +1,5 @@
+# FL-104: the upstream registries the mirror is a pull-through cache of,
+# one https URL per line. Docker Hub is registry-1.docker.io. Upstreams that
+# need credentials get them from the Secret
+# flintlock-registry-mirror-credentials (deploy/README.md).
+https://registry-1.docker.io

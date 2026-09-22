@@ -1,0 +1,38 @@
+# How a Host of the pool joins the workload cluster.
+apiVersion: bootstrap.cluster.x-k8s.io/v1beta2
+kind: KubeadmConfigTemplate
+metadata:
+  name: POOL
+spec:
+  template:
+    spec:
+      format: cloud-config
+      #= docs/requirements/12-cluster-fleet.md#host-pool
+      #/ The Fleet Manifests SHALL write the Host configuration file of
+      #/ HI-050 through the bootstrap configuration of the MachineDeployment.
+      # cloud-init writes it at first boot, before the Host Image's
+      # flr-host-config unit reads it. The content is the pool's host.conf
+      # in host-pool.yaml; the format is in image/README.md, "Host
+      # configuration file". It holds settings and no secret (HI-052).
+      files:
+        - path: /etc/flintlock-runner/host.conf
+          owner: root:root
+          permissions: "0644"
+          content: HOST_CONF
+      joinConfiguration:
+        nodeRegistration:
+          name: "{{ ds.meta_data.local_hostname }}"
+          #= docs/requirements/12-cluster-fleet.md#host-pool
+          #/ The Fleet Manifests SHALL join every Host with the taint
+          #/ `gitlab-runner.flintlock.dev/host=true:NoSchedule`, so that only pods that
+          #/ tolerate it run on a Host's own Node.
+          # The Host Image puts the labels on the Node (HI-060); the taint is
+          # the cluster's policy and is applied here.
+          taints:
+            - key: gitlab-runner.flintlock.dev/host
+              value: "true"
+              effect: NoSchedule
+          kubeletExtraArgs:
+            # The AWS cloud controller manager sets the provider id.
+            - name: cloud-provider
+              value: external

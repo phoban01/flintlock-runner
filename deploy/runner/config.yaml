@@ -1,0 +1,64 @@
+# The Runner's configuration file (docs/requirements/07-configuration.md),
+# mounted from the ConfigMap flintlock-runner-config at
+# /etc/flintlock-runner/config.yaml. It holds no secret: the GitLab runner
+# token comes from the Secret flintlock-runner-gitlab-token through
+# FLINTLOCK_RUNNER_GITLAB_TOKEN (deploy/runner/deployment.yaml).
+#
+# Replace what says REPLACE. The two values in double quotes are written by
+# kustomize from deploy/runner/job-timeout.yaml; do not add other double
+# quotes to this file, because the replacement counts them. Run
+# `make manifests-check` after editing: it loads the rendered file with
+# `flr config show`.
+gitlab:
+  url: https://gitlab.example.com # REPLACE with your GitLab instance
+  name: flintlock-runner
+  concurrent: 8
+  shutdown_timeout: "10800s"
+
+pool_manager:
+  # A cluster fleet: Pools are ReplicaSets in this namespace (KF-040), the
+  # Runner reaches no Host (KF-063) and needs no Inventory. The in-cluster
+  # configuration of the Runner's own pod is used (KF-080).
+  backend: kubernetes
+  kubernetes:
+    namespace: flintlock-system
+    job_timeout: "10800s"
+
+# The Profiles (KF-080). Every rootfs and kernel image is pulled by the Pool
+# pods on the Hosts; pin them by digest (CF-027).
+profiles:
+  - name: default
+    arch: amd64
+    vcpu: 2
+    memory_mb: 4096
+    kernel:
+      image: registry.example.com/REPLACE/kernel:REPLACE
+    rootfs: registry.example.com/REPLACE/ubuntu-ci:REPLACE
+    # The Kubernetes pool backend runs every Stage over kube-exec (KF-128);
+    # this field is replaced when the kube-exec Guest Transport lands in the
+    # configuration.
+    transport:
+      kind: exec
+    pool:
+      size: 2
+
+# What Jobs are told about the Host Services. The addresses come from the
+# Virtual Node's annotations (KF-062); these sections say which services the
+# Executor points Jobs at, and have to agree with the Host Service components
+# enabled in deploy/kustomization.yaml and with the HTTP cache upstreams in
+# deploy/host-agent/services/http-cache/upstreams.
+host_services:
+  buildkit:
+    port: 1234
+  go_proxy:
+    port: 3000
+  registry_mirror:
+    port: 5000
+  http_cache:
+    port: 3128
+
+observability:
+  # /metrics, /healthz and /readyz, probed by the Deployment.
+  listen_address: :9252
+
+state_dir: /var/lib/flintlock-runner

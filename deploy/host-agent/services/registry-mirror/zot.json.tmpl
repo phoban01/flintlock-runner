@@ -1,0 +1,24 @@
+{
+  "distSpecVersion": "1.1.0",
+  "storage": {
+    "rootDirectory": "/var/lib/flintlock-runner/cache/registry",
+    "gc": true,
+    "dedupe": true
+  },
+  "http": {
+    "address": "@BRIDGE_GATEWAY@",
+    "port": "5000"
+  },
+  "log": {
+    "level": "info"
+  },
+  "extensions": {
+    "sync": {
+      "enable": true,
+      "credentialsFile": "/etc/flr/secrets/registry-mirror/credentials.json",
+      "registries": [
+@BLOCK:zot-sync-registries@
+      ]
+    }
+  }
+}

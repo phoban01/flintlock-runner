@@ -1,0 +1,11 @@
+# FL-106: the HTTP cache's upstreams, one per line:
+#
+#   NAME  URL  MAX_SIZE  TTL_SECONDS
+#
+# NAME is [a-z0-9_]+ and becomes the path prefix /NAME/ on the cache; MAX_SIZE
+# is an nginx size such as 10g. The Runner's configuration names the same
+# upstreams under host_services.http_cache.upstreams, which is what gives
+# Jobs one variable per upstream (EX-064).
+#
+# For example:
+#   ubuntu https://archive.ubuntu.com/ubuntu 20g 86400
