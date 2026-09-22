@@ -101,12 +101,21 @@ func (s *impl) claim(
 		}
 	}()
 
+	claimCtx := ctx
+	if job.Timeout > 0 {
+		claimCtx = poolmgr.WithJobTimeout(ctx, job.Timeout)
+	}
+
 	for {
 		// The wake-up channel is taken before the attempt, so an event that
 		// arrives while the claim is in flight still wakes the wait below.
 		wake := s.deps.Tracker.Wait(p.PoolRef)
 
-		claim, err := s.deps.PoolManager.ClaimVM(ctx, p.PoolRef)
+		//= docs/requirements/12-cluster-fleet.md#kube-allocation
+		//# When claiming for a Job, the Scheduler SHALL pass the Job's own
+		//# timeout to the Kubernetes pool backend
+
+		claim, err := s.deps.PoolManager.ClaimVM(claimCtx, p.PoolRef)
 		if err == nil {
 			if waiting {
 				s.metrics.PoolWaited(p.PoolRef, s.clk.Now().Sub(start))

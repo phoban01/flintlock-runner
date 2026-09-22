@@ -557,6 +557,7 @@ func (v *validator) kubernetesPools(c *Config) {
 	if k.JobTimeout > 0 && k.JobTimeout < time.Second {
 		v.errorf(f+".job_timeout", "must be at least one second, got %s", k.JobTimeout)
 	}
+	v.positive(f+".cleanup_margin", k.CleanupMargin)
 	v.positive(f+".rollout_interval", k.RolloutInterval)
 	profiles := map[string]bool{}
 	for _, p := range c.Profiles {
