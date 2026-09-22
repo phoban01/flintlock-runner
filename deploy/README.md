@@ -175,9 +175,30 @@ If a pool's `host.conf` sets `POD_PROVIDER_UID`, set the same value in
   `not-ready.d` read-only, the cache directory writable, all at `s0`. The
   Host Agent's pod keeps `container_t` with a fixed MCS level,
   `s0:c311,c827`, so that its caches survive a restart of the pod; see
-  "SELinux" in `image/README.md`. The Host Image's containerd does not set
-  `enable_selinux`, and until it does the runtime does not apply the
-  container domain at all. None of this has run on a booted Host.
+  "SELinux" in `image/README.md`. The Host Image's containerd labels every
+  unprivileged pod (HI-066), so the Host Agent's containers, and every other
+  unprivileged pod on a Host, run confined as `container_t`; privileged
+  containers stay unconfined. None of this has run on a booted Host.
+- **Rootless buildkitd under `container_t`.** This is the Host Service most
+  likely to be stopped by SELinux, and it cannot be settled without an
+  enforcing Host. From the base policy (`sesearch`), `container_t` may create
+  a user namespace and holds `sys_admin`, `setuid` and `setgid` inside it,
+  and may mount `fs_t` (overlay, ext4), `tmpfs_t` (tmpfs, mqueue) and
+  `container_file_t`, so rootlesskit and the overlayfs snapshotter should
+  start. `--oci-worker-no-process-sandbox` already avoids mounting a new
+  `/proc`, which `container_t` may not do, and buildkit drops `/sys` from a
+  rootless build step's spec. What is left is `/dev/pts`: every build step's
+  OCI spec mounts a new `devpts`, and `container_t` has no `mount` on
+  `devpts_t`, so each `RUN` step can be expected to fail with a denial.
+  buildkit's `--oci-worker-selinux` would mount it with a
+  `container_file_t` context instead, but gives each step a new random
+  category pair, which the Host Agent's fixed level cannot transition to.
+  The fix that is known to work is the base policy's `container_engine_t`,
+  the type container-selinux provides for container engines in containers
+  (it may mount any filesystem type), set as `seLinuxOptions.type` on the
+  buildkitd container alone. That changes a container's domain, which
+  HI-065 rules out, so it has not been done: the first enforcing Host should
+  run a build, and `ausearch -m avc -c runc` will say whether it is needed.
 - **Builds and the metadata service.** Rootless buildkitd runs in the
   Host's network namespace, as push provisioning runs it. The Host Image
   drops traffic from the Host Services' user ids, and from buildkit's

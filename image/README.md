@@ -385,9 +385,48 @@ may read and write `container_file_t`. None of it has been enforced on a
 booted Host: the first boot on real hardware should be followed by
 `ausearch -m avc -ts boot`, and anything it shows is a bug in this section.
 
-The labels only matter where the container runtime runs the Host Agent as
-`container_t`, which containerd does only with `enable_selinux = true` in its
-CRI configuration. `/etc/containerd/config.toml` does not set it today.
+### Pods run confined (HI-066)
+
+containerd labels a pod only when its CRI plugin is told to; without it
+every container the kubelet starts is unlabelled and runs unconfined, and an
+enforcing Host enforces nothing between its pods and itself.
+`/etc/containerd/config.toml` sets `enable_selinux = true` in
+`[plugins."io.containerd.grpc.v1.cri"]`, the `PluginConfig.EnableSelinux`
+of containerd v1.7.22's CRI plugin (`pkg/cri/config/config.go`; false by
+default, when the plugin calls `selinux.SetDisabled()`). With it, every
+container of every pod the kubelet starts on a Host runs in the domain the
+base policy's `lxc_contexts` names, `container_t`, at a level with
+categories of its own, unless the pod's `seLinuxOptions` ask for another
+level or type. That covers the Host Agent (at its fixed level), the CNI
+and kube-proxy DaemonSets, and anything else scheduled onto a Host. The
+one exception is containerd's own: a container with `privileged: true`
+gets no label (`pkg/cri/sbserver/container_create.go`) and runs unconfined,
+as a privileged container is meant to. kube-proxy and most CNI agents are
+privileged; the Host Agent is not.
+
+The MicroVMs are not affected. `flintlockd` v0.15.1 talks to containerd's
+own API for its content store, images, snapshots and leases only; it never
+creates a containerd container or task (`NewContainer` appears only in its
+client interface and mock), and it starts Firecracker and Cloud Hypervisor
+itself as child processes (`process.DetachedStart` in
+`infrastructure/microvm/firecracker/create.go`, `exec.Command` in
+`infrastructure/microvm/cloudhypervisor/create.go`). `enable_selinux` is
+read by the CRI plugin alone, so the hypervisor processes keep the
+`unconfined_service_t` of `flintlockd.service` described above.
+
+The check stage runs `containerd config dump` in the image, which merges the
+file over containerd's defaults without starting it, and requires the CRI
+plugin's `enable_selinux` to be `true`; it also checks that the base
+policy's container process context is `container_t`.
+
+Not verified until a Host boots: that containerd starts with the setting on
+an enforcing kernel, that the Host Agent's containers show
+`system_u:system_r:container_t:s0:c311,c827` (`ps -eZ`), that other pods get
+categories of their own, and that no AVC denials follow
+(`ausearch -m avc -ts boot`). An unprivileged CNI or storage DaemonSet that
+touches host paths is the most likely thing to need its own
+`seLinuxOptions`. Rootless `buildkitd` is a known risk under `container_t`;
+see "Known gaps" in `deploy/README.md`.
 
 ## Networking notes
 

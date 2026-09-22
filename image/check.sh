@@ -285,6 +285,34 @@ else
   fail "SELinux context cases"
 fi
 expect "container-selinux is installed" rpm -q container-selinux
+
+#= docs/requirements/11-host-image.md#kernel-and-kvm
+#= type=test
+#/ The Host Image SHALL configure the container runtime interface
+#/ of containerd to run every container of a Kubernetes pod under SELinux
+#/ confinement, in the container domain the base image's policy assigns,
+#/ rather than unconfined.
+# The effective value, as the pinned containerd reads its configuration:
+# `config dump` merges the file over the defaults without starting the
+# daemon. Where it cannot run, the file itself is read.
+# cri_selinux prints enable_selinux of the CRI plugin's own table.
+cri_selinux() {
+  awk '/^\[/ { t = $0 } t ~ /^\[plugins\."io\.containerd\.grpc\.v1\.cri"\]$/ && $1 == "enable_selinux" { print $3 }' "$1"
+}
+if containerd --config /etc/containerd/config.toml config dump >"$work/containerd-dump.toml" 2>"$work/containerd-dump.err"; then
+  sed -i 's/^[[:space:]]*//' "$work/containerd-dump.toml"
+  got=$(cri_selinux "$work/containerd-dump.toml")
+  if [ "$got" = true ]; then ok "containerd's effective CRI configuration has enable_selinux = true"; else fail "containerd's effective CRI enable_selinux is '$got'"; fi
+else
+  skip "containerd config dump cannot run here: $(head -n1 "$work/containerd-dump.err")"
+  sed 's/^[[:space:]]*//' /etc/containerd/config.toml >"$work/containerd-file.toml"
+  got=$(cri_selinux "$work/containerd-file.toml")
+  if [ "$got" = true ]; then ok "/etc/containerd/config.toml sets enable_selinux = true for the CRI plugin"; else fail "/etc/containerd/config.toml sets CRI enable_selinux to '$got'"; fi
+fi
+# The container domain comes from the base policy's container contexts,
+# which containerd reads through go-selinux; nothing in the image overrides
+# them.
+expect "the base policy assigns containers container_t" has /etc/selinux/targeted/contexts/lxc_contexts '^process = "system_u:system_r:container_t:s0"$'
 if command -v sesearch >/dev/null 2>&1; then
   expect "container_t may read container_ro_file_t" sh -c "sesearch -A -s container_t -t container_ro_file_t -c file -p read | grep -q allow"
   expect "container_t may write container_file_t" sh -c "sesearch -A -s container_t -t container_file_t -c file -p write | grep -q allow"
