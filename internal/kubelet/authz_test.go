@@ -214,8 +214,10 @@ func TestAuthorizerCachesDecisionsBriefly(t *testing.T) {
 		return status
 	}
 
-	if exec() != http.StatusOK || exec() != http.StatusOK {
-		t.Fatal("allowed identity refused")
+	for range 2 {
+		if exec() != http.StatusOK {
+			t.Fatal("allowed identity refused")
+		}
 	}
 	if n := rev.reviews.Load(); n != 1 {
 		t.Errorf("%d reviews for two requests inside the allow TTL, want 1", n)
