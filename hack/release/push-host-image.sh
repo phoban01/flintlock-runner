@@ -14,7 +14,8 @@
 # when either already exists, rather than re-point it at a new build.
 #
 # CONTAINER_ENGINE (podman or docker, as for `make image`) says where
-# LOCAL_IMAGE is. The pushing is done by skopeo; see registry.sh.
+# LOCAL_IMAGE is. podman pushes from its own store; everything else, the
+# docker path and every registry-to-registry step, is skopeo (registry.sh).
 set -euo pipefail
 
 here=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
@@ -62,8 +63,18 @@ work=$(mktemp -d)
 trap 'rm -rf "$work"' EXIT
 
 echo "push-host-image: $local_image -> $repo:${tags[0]}"
-skopeo_cmd copy "$(tls_flag dest-tls-verify)" --digestfile "$work/digest" \
-	"$source_ref" "docker://$repo:${tags[0]}"
+# podman pushes from its own store. skopeo reading containers-storage has to
+# enter the rootless store's user namespace, which the AppArmor profile of an
+# Ubuntu runner denies it ("Error during unshare(...): Operation not
+# permitted"); podman is allowed to. Every other step reads the registry, not
+# the local store, and stays with skopeo.
+if [ "$source_ref" = "containers-storage:$local_image" ]; then
+	"${CONTAINER_ENGINE:-podman}" push "--tls-verify=${REGISTRY_TLS_VERIFY:-true}" \
+		--digestfile "$work/digest" "$local_image" "docker://$repo:${tags[0]}"
+else
+	skopeo_cmd copy "$(tls_flag dest-tls-verify)" --digestfile "$work/digest" \
+		"$source_ref" "docker://$repo:${tags[0]}"
+fi
 digest=$(cat "$work/digest")
 if ! [[ $digest =~ ^sha256:[0-9a-f]{64}$ ]]; then
 	echo "push-host-image: skopeo reported digest \"$digest\"" >&2
