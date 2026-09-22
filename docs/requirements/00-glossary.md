@@ -46,6 +46,16 @@ directory. It contains no requirements.
 - **Fleet Manifests** — the Kubernetes manifests in this repository that
   deploy a cluster fleet: the Host pool's Cluster API objects, the Host
   Agent, the Runner and their access rules.
+- **Exec Agent** — the process in the Host Agent on each Host of a cluster
+  fleet that relays a Runner's exec request to `MicroVMExec` on the local
+  `flintlockd`, after checking that the caller holds a Bound claim on the
+  MicroVM, and reports the Host's readiness. It supersedes the Pod Provider.
+- **Inventory Controller** — the controller that registers Hosts with
+  battery's inventory while they are ready and removes them when they are
+  cordoned, deleted or not ready.
+- **Claim backend** — the implementation of the `poolmgr.Client` interface
+  in which a Lease is a battery `MicroVMClaim` on a `Pool`. It supersedes the
+  Kubernetes pool backend.
 - **Release** — what the release workflow publishes for a version tag: the
   archives and requirements report of `docs/RELEASING.md` and, for a cluster
   fleet, the container images and the rendered Fleet Manifests.
