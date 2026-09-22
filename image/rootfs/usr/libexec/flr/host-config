@@ -1,0 +1,122 @@
+#!/usr/bin/bash
+# flr-host-config.service: validate the Host configuration file and publish
+# the result, with the addressing derived from the guest subnet, as
+# /run/flr/host.env for every other unit of the Host Image.
+FLR_UNIT=flr-host-config
+# shellcheck source=image/rootfs/usr/libexec/flr/lib.sh
+. "${FLR_LIB:-/usr/libexec/flr/lib.sh}"
+
+#= docs/requirements/11-host-image.md#host-configuration
+#/ The Host Image SHALL read per-Host settings from one Host
+#/ configuration file that cloud-init writes at first boot, containing the
+#/ guest subnet, the thin pool device, the protected CIDRs and the Host
+#/ reserve.
+KEYS="GUEST_SUBNET THIN_POOL_DEVICE PROTECTED_CIDRS HOST_RESERVE_VCPU HOST_RESERVE_MEMORY_MB HOST_SERVICE_PORTS HOST_CONTROL_PORTS CACHE_VOLUME_PERCENT"
+declare -A CONF=()
+
+#= docs/requirements/11-host-image.md#host-configuration
+#/ The Host Image SHALL NOT read any secret from the Host
+#/ configuration file or from instance user-data.
+# The file is parsed, never sourced, and only the keys above are taken from
+# it: a line with any other key is skipped without its value being kept,
+# logged or passed on. Nothing in the image reads instance user-data; that
+# is cloud-init's business alone.
+read_conf() {
+  local file=$1 line key value n=0
+  while IFS= read -r line || [ -n "$line" ]; do
+    n=$((n + 1))
+    line=${line%%#*}
+    [[ $line =~ ^[[:space:]]*$ ]] && continue
+    if ! [[ $line =~ ^[[:space:]]*([A-Z][A-Z0-9_]*)[[:space:]]*=[[:space:]]*(.*)$ ]]; then
+      refuse "host configuration invalid: $file line $n is not KEY=value"
+    fi
+    key=${BASH_REMATCH[1]}
+    value=${BASH_REMATCH[2]}
+    value=${value%"${value##*[![:space:]]}"}
+    if [[ $value =~ ^\"(.*)\"$ ]] || [[ $value =~ ^\'(.*)\'$ ]]; then
+      value=${BASH_REMATCH[1]}
+    fi
+    case " $KEYS " in
+    *" $key "*) CONF[$key]=$value ;;
+    *) log "$file line $n: ignoring unknown key $key" ;;
+    esac
+  done <"$file"
+}
+
+[ -r "$FLR_HOST_DEFAULTS" ] || die "$FLR_HOST_DEFAULTS is missing from the image"
+read_conf "$FLR_HOST_DEFAULTS"
+
+#= docs/requirements/11-host-image.md#host-configuration
+#/ If the Host configuration file is absent, then the Host Image
+#/ SHALL boot with its defaults for every setting.
+if [ -e "$FLR_HOST_CONF" ]; then
+  read_conf "$FLR_HOST_CONF"
+else
+  log "$FLR_HOST_CONF is absent; using the image defaults for every setting"
+fi
+
+bad() { refuse "host configuration invalid: $*"; }
+is_uint() { [[ $1 =~ ^[0-9]+$ ]]; }
+
+#= docs/requirements/11-host-image.md#image-networking
+#/ The Host Image SHALL use a default guest subnet that the Host
+#/ configuration file can override, so that it can be kept clear of the
+#/ cluster's node, pod and service ranges.
+subnet=${CONF[GUEST_SUBNET]}
+valid_cidr4 "$subnet" || bad "GUEST_SUBNET $subnet is not an IPv4 CIDR"
+prefix=${subnet#*/}
+[ "$prefix" -le 29 ] || bad "GUEST_SUBNET $subnet is smaller than /29"
+[ "$prefix" -ge 8 ] || bad "GUEST_SUBNET $subnet is larger than /8"
+
+device=${CONF[THIN_POOL_DEVICE]}
+if [ -n "$device" ] && ! [[ $device =~ ^/dev/[A-Za-z0-9._/-]+$ ]]; then
+  bad "THIN_POOL_DEVICE $device is not a /dev path"
+fi
+
+cidrs=${CONF[PROTECTED_CIDRS]// /}
+for c in ${cidrs//,/ }; do
+  valid_cidr4 "$c" || bad "PROTECTED_CIDRS entry $c is not an IPv4 CIDR"
+done
+
+is_uint "${CONF[HOST_RESERVE_VCPU]}" || bad "HOST_RESERVE_VCPU is not a whole number"
+is_uint "${CONF[HOST_RESERVE_MEMORY_MB]}" || bad "HOST_RESERVE_MEMORY_MB is not a whole number"
+service_ports=${CONF[HOST_SERVICE_PORTS]// /}
+control_ports=${CONF[HOST_CONTROL_PORTS]// /}
+valid_ports "$service_ports" || bad "HOST_SERVICE_PORTS is not a comma-separated list of ports"
+valid_ports "$control_ports" || bad "HOST_CONTROL_PORTS is not a comma-separated list of ports"
+[ -n "$control_ports" ] || bad "HOST_CONTROL_PORTS is empty"
+cache_percent=${CONF[CACHE_VOLUME_PERCENT]}
+if ! is_uint "$cache_percent" || [ "$cache_percent" -gt 50 ]; then bad "CACHE_VOLUME_PERCENT is not a whole number up to 50"; fi
+
+# The addressing of internal/fleet/scripts/data.go: the gateway is the first
+# address, DHCP hands out the rest, leaving the first ten of a subnet larger
+# than /26 for static use.
+mask=$(((0xffffffff << (32 - prefix)) & 0xffffffff))
+base=$(($(ip4_to_int "${subnet%/*}") & mask))
+size=$((1 << (32 - prefix)))
+gateway=$(int_to_ip4 $((base + 1)))
+dhcp_start=$((base + 2))
+[ "$size" -gt 64 ] && dhcp_start=$((base + 10))
+
+mkdir -p "$FLR_RUN"
+tmp=$(mktemp "$FLR_RUN/.host.env.XXXXXX")
+cat >"$tmp" <<EOF
+# Written by flr-host-config.service at every boot. Do not edit.
+FLR_GUEST_SUBNET=$(int_to_ip4 "$base")/$prefix
+FLR_PREFIX=$prefix
+FLR_NETMASK=$(int_to_ip4 "$mask")
+FLR_GATEWAY=$gateway
+FLR_DHCP_START=$(int_to_ip4 "$dhcp_start")
+FLR_DHCP_END=$(int_to_ip4 $((base + size - 2)))
+FLR_THIN_POOL_DEVICE=$device
+FLR_PROTECTED_CIDRS=$cidrs
+FLR_HOST_RESERVE_VCPU=$((10#${CONF[HOST_RESERVE_VCPU]}))
+FLR_HOST_RESERVE_MEMORY_MB=$((10#${CONF[HOST_RESERVE_MEMORY_MB]}))
+FLR_HOST_SERVICE_PORTS=$service_ports
+FLR_HOST_CONTROL_PORTS=$control_ports
+FLR_CACHE_VOLUME_PERCENT=$((10#$cache_percent))
+EOF
+chmod 0644 "$tmp"
+mv -f "$tmp" "$FLR_HOST_ENV"
+ready
+log "guest subnet $(int_to_ip4 "$base")/$prefix, gateway $gateway, thin pool device ${device:-auto-detect}"

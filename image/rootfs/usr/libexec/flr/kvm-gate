@@ -1,0 +1,39 @@
+#!/usr/bin/bash
+# flr-kvm.service: decide on the Host, at boot, whether it can run MicroVMs.
+# The successor of the kvm_status check in internal/fleet/scripts.
+FLR_UNIT=flr-kvm
+# shellcheck source=image/rootfs/usr/libexec/flr/lib.sh
+. "${FLR_LIB:-/usr/libexec/flr/lib.sh}"
+
+FLR_KVM_DEVICE=${FLR_KVM_DEVICE:-/dev/kvm}
+
+# flintlockd runs as root and hands /dev/kvm to every MicroVM, so the device
+# has to be a character device that root can open for reading and writing;
+# the open fails when the node exists but no KVM driver is behind it, which
+# is what a virtualized instance without nested virtualization looks like.
+kvm_status() {
+  if [ ! -e "$FLR_KVM_DEVICE" ]; then
+    echo "$FLR_KVM_DEVICE does not exist"
+  elif [ ! -c "$FLR_KVM_DEVICE" ]; then
+    echo "$FLR_KVM_DEVICE is not a character device"
+  elif ! { : <>"$FLR_KVM_DEVICE"; } 2>/dev/null; then
+    echo "$FLR_KVM_DEVICE cannot be opened for reading and writing"
+  else
+    echo ok
+  fi
+}
+
+# kvm.ko alone creates no device; the vendor module does. Both are tried
+# here as well as in modules-load.d because only one of them can load.
+modprobe -q kvm_intel 2>/dev/null || modprobe -q kvm_amd 2>/dev/null || true
+
+#= docs/requirements/11-host-image.md#kernel-and-kvm
+#/ If `/dev/kvm` is absent or unusable at boot, then the Host Image
+#/ SHALL NOT start `flintlockd` and SHALL report the Host as not ready with
+#/ the reason that KVM is unavailable.
+status=$(kvm_status)
+if [ "$status" != ok ]; then
+  refuse "KVM is unavailable: $status"
+fi
+ready
+log "$FLR_KVM_DEVICE is usable"

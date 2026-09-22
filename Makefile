@@ -101,3 +101,36 @@ demo:
 ## clean: remove build outputs and generated duvet files
 clean:
 	rm -rf $(BIN) .duvet/requirements .duvet/reports
+
+# ---------------------------------------------------------------------------
+# The Host Image (image/, docs/requirements/11-host-image.md), in a block of
+# its own.
+#
+# CONTAINER_ENGINE builds it: podman when installed, docker otherwise.
+# HOST_IMAGE is the tag it gets. HOST_IMAGE_BUILD_ARGS passes every
+# *_VERSION of image/versions.env as a --build-arg, so that the Containerfile
+# can turn them into OCI labels (HI-005). IMAGE_AMI_ARGS are the arguments of
+# image/publish-ami.sh, for example "--bucket B --region R".
+CONTAINER_ENGINE     ?= $(shell command -v podman 2>/dev/null || command -v docker 2>/dev/null || echo podman)
+HOST_IMAGE           ?= localhost/flintlock-runner-host:dev
+HOST_IMAGE_BUILD_ARGS = $(shell sed -n 's/^\([A-Z_]*_VERSION\)=\(.*\)$$/--build-arg \1=\2/p' image/versions.env)
+IMAGE_AMI_ARGS       ?=
+
+.PHONY: image image-check image-lint image-ami
+
+## image: build the x86_64 bootc Host Image, check stage included (needs neither KVM nor AWS; emulated on other architectures)
+image:
+	$(CONTAINER_ENGINE) build --platform linux/amd64 $(HOST_IMAGE_BUILD_ARGS) -f image/Containerfile -t $(HOST_IMAGE) image
+
+## image-check: run the check stage again in the built Host Image and compare its OCI labels with image/versions.env
+image-check:
+	$(CONTAINER_ENGINE) run --rm --platform linux/amd64 $(HOST_IMAGE) /usr/libexec/flr/check
+	CONTAINER_ENGINE=$(CONTAINER_ENGINE) image/check-labels.sh $(HOST_IMAGE)
+
+## image-lint: lint the Host Image sources without building (bash -n, shellcheck, the digest pin, thin-pool cases, systemd-analyze)
+image-lint:
+	image/lint.sh
+
+## image-ami: publish HOST_IMAGE as an AMI with bootc-image-builder; needs AWS and IMAGE_AMI_ARGS, see image/README.md
+image-ami:
+	CONTAINER_ENGINE=$(CONTAINER_ENGINE) image/publish-ami.sh $(HOST_IMAGE) $(IMAGE_AMI_ARGS)

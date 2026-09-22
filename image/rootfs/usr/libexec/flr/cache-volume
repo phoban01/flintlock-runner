@@ -1,0 +1,41 @@
+#!/usr/bin/bash
+# flr-cache.service: the Host Service cache directory, on a plain logical
+# volume of the thin pool's volume group, which is to say on the same
+# instance-store device. It survives a reboot and an in-place upgrade with
+# the pool, and dies with the instance like the pool does.
+FLR_UNIT=flr-cache
+# shellcheck source=image/rootfs/usr/libexec/flr/lib.sh
+. "${FLR_LIB:-/usr/libexec/flr/lib.sh}"
+load_host_env
+
+vg=$FLR_VG
+lv=cache
+dir=$FLR_CACHE_DIR
+
+#= docs/requirements/11-host-image.md#image-storage
+#/ The Host Image SHALL create the Host Service cache directory on
+#/ instance-store storage and SHALL keep all `flintlockd` and containerd
+#/ state under `/var`.
+# The state half is configuration rather than code: flintlockd.service
+# passes --state-dir /var/lib/flintlock and /etc/containerd/config.toml sets
+# root = /var/lib/containerd.
+mkdir -p "$dir"
+if mountpoint -q "$dir"; then
+  log "$dir is mounted"
+  exit 0
+fi
+if ! lvs "$vg/$lv" >/dev/null 2>&1; then
+  [ "$FLR_CACHE_VOLUME_PERCENT" -gt 0 ] || die "CACHE_VOLUME_PERCENT is 0 and no $vg/$lv volume exists"
+  # A group made by an older layout may have no room left; take what is
+  # free rather than fail, and fail only when nothing is.
+  lvcreate -q -y -n "$lv" "$vg" -l "${FLR_CACHE_VOLUME_PERCENT}%VG" 2>/dev/null ||
+    lvcreate -q -y -n "$lv" "$vg" -l 100%FREE ||
+    die "no free space in volume group $vg for the cache volume"
+fi
+lvchange -ay "$vg/$lv" >/dev/null 2>&1 || true
+# An existing filesystem is kept as it is; only a blank volume is formatted.
+if [ -z "$(blkid -p -o value -s TYPE "/dev/$vg/$lv" 2>/dev/null || true)" ]; then
+  mkfs.ext4 -q -L flr-cache "/dev/$vg/$lv"
+fi
+mount -o defaults "/dev/$vg/$lv" "$dir"
+log "mounted /dev/$vg/$lv at $dir"

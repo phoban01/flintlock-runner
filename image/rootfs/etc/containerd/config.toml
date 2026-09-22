@@ -1,0 +1,40 @@
+# containerd for both flintlockd and the kubelet. Ported from
+# write_containerd_config in flintlock's provision.sh, plus the CRI settings
+# the kubelet needs.
+#
+#= docs/requirements/11-host-image.md#image-storage
+#/ The Host Image SHALL create the Host Service cache directory on
+#/ instance-store storage and SHALL keep all `flintlockd` and containerd
+#/ state under `/var`.
+version = 2
+
+root = "/var/lib/containerd"
+state = "/run/containerd"
+
+[grpc]
+  address = "/run/containerd/containerd.sock"
+
+[metrics]
+  address = "127.0.0.1:1338"
+
+[plugins]
+  # The thin pool flr-thin-pool.service creates: volume group "flintlock",
+  # logical volume "thinpool". flintlockd puts MicroVM volumes on it.
+  [plugins."io.containerd.snapshotter.v1.devmapper"]
+    pool_name = "flintlock-thinpool"
+    root_path = "/var/lib/containerd/snapshotter/devmapper"
+    base_image_size = "10GB"
+    discard_blocks = true
+
+  # The kubelet's pods stay on overlayfs and use the systemd cgroup driver,
+  # which is kubeadm's default for the kubelet.
+  [plugins."io.containerd.grpc.v1.cri"]
+    [plugins."io.containerd.grpc.v1.cri".containerd]
+      snapshotter = "overlayfs"
+      [plugins."io.containerd.grpc.v1.cri".containerd.runtimes.runc]
+        runtime_type = "io.containerd.runc.v2"
+        [plugins."io.containerd.grpc.v1.cri".containerd.runtimes.runc.options]
+          SystemdCgroup = true
+    [plugins."io.containerd.grpc.v1.cri".cni]
+      bin_dir = "/opt/cni/bin"
+      conf_dir = "/etc/cni/net.d"
