@@ -83,10 +83,14 @@ func repoRoot(t *testing.T) string {
 // poolManagerSide are the packages that may create and delete MicroVMs,
 // because being the Pool Manager is their whole job: the fake Host, which
 // serves both RPCs, and the fake Pool Manager, which calls them (TD-002).
+// The Pod Provider of a cluster fleet is on this side too: it is the process
+// on a Host that creates a MicroVM for each pod and deletes it with the pod
+// (KF-020, KF-027), and it is never linked into a Runner's code path.
 // Everything else in the module is the Runner.
 var poolManagerSide = []string{
 	filepath.Join("internal", "flintlock", "fake"),
 	filepath.Join("internal", "poolmgr"),
+	filepath.Join("internal", "kubelet"),
 }
 
 // runnerSideFiles lists every non-test Go file in the module that is not

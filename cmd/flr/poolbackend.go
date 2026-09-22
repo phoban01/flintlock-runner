@@ -48,7 +48,7 @@ func newPoolClient(cfg *config.Config, log *slog.Logger) (*poolClient, error) {
 	if pm.Kubernetes != nil {
 		k = *pm.Kubernetes
 	}
-	restConfig, err := kubeRESTConfig(k)
+	restConfig, err := kubeRESTConfig(k.Kubeconfig, k.Context)
 	if err != nil {
 		return nil, fmt.Errorf("kubernetes pool backend: %w", err)
 	}
@@ -73,15 +73,17 @@ func newPoolClient(cfg *config.Config, log *slog.Logger) (*poolClient, error) {
 	return &poolClient{Client: backend, setProfiles: backend.SetProfiles}, nil
 }
 
-// kubeRESTConfig is the client configuration: the named kubeconfig file and
-// context, or the Runner's own pod (KF-080).
-func kubeRESTConfig(k config.KubernetesPools) (*rest.Config, error) {
-	if k.Kubeconfig == "" {
+// kubeRESTConfig is a Kubernetes client configuration: the named kubeconfig
+// file, in the named context or its current one, or the in-cluster
+// configuration of the pod the process runs in when no file is named. Both
+// the Runner (KF-080) and the Pod Provider use it.
+func kubeRESTConfig(kubeconfig, context string) (*rest.Config, error) {
+	if kubeconfig == "" {
 		return rest.InClusterConfig()
 	}
 	return clientcmd.NewNonInteractiveDeferredLoadingClientConfig(
-		&clientcmd.ClientConfigLoadingRules{ExplicitPath: k.Kubeconfig},
-		&clientcmd.ConfigOverrides{CurrentContext: k.Context},
+		&clientcmd.ClientConfigLoadingRules{ExplicitPath: kubeconfig},
+		&clientcmd.ConfigOverrides{CurrentContext: context},
 	).ClientConfig()
 }
 
