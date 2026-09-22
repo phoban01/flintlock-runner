@@ -16,6 +16,7 @@ import (
 	"k8s.io/apimachinery/pkg/labels"
 
 	"github.com/phoban01/flintlock-runner/internal/config"
+	"github.com/phoban01/flintlock-runner/internal/kubelabels"
 	"github.com/phoban01/flintlock-runner/internal/poolmgr"
 )
 
@@ -186,7 +187,7 @@ func nodeSelector(profile config.Profile) map[string]string {
 	}
 	for key, value := range profile.HostSelector {
 		if !strings.Contains(key, "/") {
-			key = Domain + "/" + key
+			key = kubelabels.Prefix + key
 		}
 		sel[key] = value
 	}
@@ -258,12 +259,12 @@ func deadlineSeconds(d time.Duration) int64 {
 }
 
 // formatLease renders a time as the value of AnnotationLease.
-func formatLease(t time.Time) string { return t.UTC().Format(time.RFC3339Nano) }
+func formatLease(t time.Time) string { return kubelabels.FormatLease(t) }
 
 // LeaseTime reads a pod's lease annotation: when it was claimed or last
 // heartbeated. It reports false for a pod that carries none. The Pod Provider
 // compares it with its lease duration (KF-032).
 func LeaseTime(pod *corev1.Pod) (time.Time, bool) {
-	t, err := time.Parse(time.RFC3339Nano, pod.Annotations[AnnotationLease])
+	t, err := kubelabels.ParseLease(pod.Annotations[AnnotationLease])
 	return t, err == nil
 }

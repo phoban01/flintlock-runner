@@ -38,7 +38,10 @@ const (
 	runnerName = "runner-a"
 	// waitFor bounds every eventually; tick is how often it looks.
 	waitFor = 30 * time.Second
-	tick    = 20 * time.Millisecond
+	// consistentFor is how long a consistently watches for a change that
+	// must not come.
+	consistentFor = 500 * time.Millisecond
+	tick          = 20 * time.Millisecond
 )
 
 // The API server is shared by the tests of the package, each of which works

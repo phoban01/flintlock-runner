@@ -5,89 +5,81 @@ import (
 	"encoding/hex"
 	"strings"
 
+	"github.com/phoban01/flintlock-runner/internal/kubelabels"
 	"github.com/phoban01/flintlock-runner/internal/poolmgr"
 )
 
-// Domain prefixes every label, annotation and taint of this project.
-const Domain = "gitlab-runner.flintlock.dev"
-
-// Labels of a Pool's ReplicaSet and of its pods. The first two are the
-// labels battery's MicroVM templates carry (PL-014), under the same keys.
+// The keys the Pod Provider reads are shared with it through
+// internal/kubelabels. They are repeated here under the same names, so that
+// the backend and its tests read as one vocabulary.
 const (
-	// LabelRunner names the Runner that declared the Pool (KF-043).
-	LabelRunner = poolmgr.LabelRunner
-	// LabelProfile names the Profile the Pool was derived from (KF-043).
+	// LabelRunner names the Runner that declared the Pool and LabelProfile
+	// the Profile it was derived from (KF-043). They are the labels battery's
+	// MicroVM templates carry (PL-014), under the same keys.
+	LabelRunner  = poolmgr.LabelRunner
 	LabelProfile = poolmgr.LabelProfile
 	// LabelState is StateIdle on a warm pod and StateClaimed on a leased
 	// one. It is part of the ReplicaSet's selector, so changing it is what
 	// takes a pod out of its Pool (KF-043, KF-044).
-	LabelState = Domain + "/state"
+	LabelState   = kubelabels.LabelState
+	StateIdle    = kubelabels.StateIdle
+	StateClaimed = kubelabels.StateClaimed
 	// LabelTemplateHash is the hash of the pod template a pod was created
 	// from. A pod whose hash is not its ReplicaSet's is a pod of a previous
 	// template: it is never claimed (KF-044) and is rolled out (KF-050).
-	LabelTemplateHash = Domain + "/template-hash"
+	LabelTemplateHash = kubelabels.Prefix + "template-hash"
 	// LabelVirtualNode is set to "true" on every Virtual Node (KF-013).
-	LabelVirtualNode = Domain + "/virtual-node"
+	LabelVirtualNode = kubelabels.LabelVirtualNode
 	// LabelHostNode is the name of the Host's own Node on its Virtual Node
 	// (KF-013). There is one value per Host, which makes it the topology
 	// key Pool pods are spread over (KF-042).
-	LabelHostNode = Domain + "/host-node"
+	LabelHostNode = kubelabels.LabelHostNode
 	// LabelArch is the well-known architecture label, which the Pod Provider
 	// copies to the Virtual Node (KF-013).
 	LabelArch = "kubernetes.io/arch"
+	// TaintMicroVM is the key of the Virtual Node's taint, with the value
+	// "true" and the effect NoSchedule (KF-014).
+	TaintMicroVM = kubelabels.TaintMicroVM
 )
-
-// Values of LabelState.
-const (
-	StateIdle    = "idle"
-	StateClaimed = "claimed"
-)
-
-// TaintMicroVM is the key of the Virtual Node's taint, with the value "true"
-// and the effect NoSchedule (KF-014).
-const TaintMicroVM = Domain + "/microvm"
 
 // Annotations of a Pool pod that the Pod Provider builds the MicroVM from
 // (KF-020, KF-023). The root filesystem image, the vCPU count and the memory
 // are the pod's container image and limits and need no annotation.
 const (
-	// AnnotationKernelImage is the kernel OCI image.
-	AnnotationKernelImage = Domain + "/kernel-image"
-	// AnnotationKernelFilename is the kernel file inside that image, where
-	// the Profile names one.
-	AnnotationKernelFilename = Domain + "/kernel-filename"
+	AnnotationKernelImage    = kubelabels.AnnotationKernelImage
+	AnnotationKernelFilename = kubelabels.AnnotationKernelFilename
 	// AnnotationKernelCmdline is the additional kernel command line: the
 	// Profile's arguments as space-separated key=value words in key order.
-	AnnotationKernelCmdline = Domain + "/kernel-cmdline"
-	// AnnotationInitrdImage and AnnotationInitrdFilename are the initial
-	// ramdisk, where the Profile has one.
-	AnnotationInitrdImage    = Domain + "/initrd-image"
-	AnnotationInitrdFilename = Domain + "/initrd-filename"
+	AnnotationKernelCmdline = kubelabels.AnnotationKernelCmdline
 	// AnnotationHypervisor is the flintlock provider name. It is absent
 	// where the Profile leaves the choice to the Host.
-	AnnotationHypervisor = Domain + "/hypervisor"
+	AnnotationHypervisor = kubelabels.AnnotationHypervisor
 	// AnnotationCloudInit names the ConfigMap that holds the MicroVM's
 	// cloud-init user data (KF-023).
-	AnnotationCloudInit = Domain + "/cloud-init-configmap"
+	AnnotationCloudInit = kubelabels.AnnotationCloudInitConfigMap
+	// AnnotationInitrdImage and AnnotationInitrdFilename are the initial
+	// ramdisk, where the Profile has one. internal/kubelabels has no key for
+	// them yet, so nothing reads them.
+	AnnotationInitrdImage    = kubelabels.Prefix + "initrd-image"
+	AnnotationInitrdFilename = kubelabels.Prefix + "initrd-filename"
+	// AnnotationLease is the lease annotation of a claimed pod: the time of
+	// the claim or of the last heartbeat (KF-044, KF-047). The Pod Provider
+	// deletes a claimed pod whose lease is older than its lease duration
+	// (KF-032).
+	AnnotationLease = kubelabels.AnnotationLease
 )
-
-// AnnotationLease is the lease annotation of a claimed pod: the time of the
-// claim or of the last heartbeat, in RFC 3339 with nanoseconds, UTC (KF-044,
-// KF-047). The Pod Provider deletes a claimed pod whose lease annotation is
-// older than its lease duration (KF-032).
-const AnnotationLease = Domain + "/lease-renewed-at"
 
 // Annotations of a Pool's ReplicaSet. They carry what GetPool has to return
 // and a ReplicaSet has no field for.
 const (
-	annotationPoolName        = Domain + "/pool-name"
-	annotationPoolNamespace   = Domain + "/pool-namespace"
-	annotationHeartbeat       = Domain + "/heartbeat-interval"
-	annotationHeartbeatExpiry = Domain + "/heartbeat-expiry"
+	annotationPoolName        = kubelabels.Prefix + "pool-name"
+	annotationPoolNamespace   = kubelabels.Prefix + "pool-namespace"
+	annotationHeartbeat       = kubelabels.Prefix + "heartbeat-interval"
+	annotationHeartbeatExpiry = kubelabels.Prefix + "heartbeat-expiry"
 	// annotationRolledAt is when an idle pod of a previous template was last
 	// deleted. It lives on the ReplicaSet so that several instances of one
 	// Runner share a single rate (KF-050).
-	annotationRolledAt = Domain + "/rolled-at"
+	annotationRolledAt = kubelabels.Prefix + "rolled-at"
 )
 
 // containerName is the name of a Pool pod's only container (KF-020).

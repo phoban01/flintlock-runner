@@ -13,6 +13,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"sort"
+	"sync"
 	"testing"
 
 	"k8s.io/client-go/kubernetes"
@@ -24,8 +25,9 @@ const (
 	// AssetsEnv is the variable envtest reads the directory of the
 	// kube-apiserver and etcd binaries from. `make envtest` prints it.
 	AssetsEnv = "KUBEBUILDER_ASSETS"
-	// RequireEnv, set to 1, makes a test fail rather than skip when the
-	// binaries are missing. CI sets it, so that CI never skips.
+	// RequireEnv is the variable that, set to 1, makes a test fail rather
+	// than skip when the binaries are missing. CI sets it, so that CI never
+	// skips.
 	RequireEnv = "FLINTLOCK_RUNNER_REQUIRE_ENVTEST"
 )
 
@@ -38,7 +40,10 @@ type Env struct {
 	// User instead, so that it runs with the Runner's permissions only.
 	Admin kubernetes.Interface
 
-	env *envtest.Environment
+	// users serialises AddUser, whose certificate authority is not safe for
+	// the concurrent use parallel tests make of it.
+	users sync.Mutex
+	env   *envtest.Environment
 }
 
 // Assets finds the envtest binaries: the directory AssetsEnv names or,
@@ -102,7 +107,9 @@ func (e *Env) Stop() error { return e.env.Stop() }
 // transport before building a client from it.
 func (e *Env) User(t testing.TB, name string) *rest.Config {
 	t.Helper()
+	e.users.Lock()
 	user, err := e.env.AddUser(envtest.User{Name: name}, nil)
+	e.users.Unlock()
 	if err != nil {
 		t.Fatalf("adding user %s: %v", name, err)
 	}

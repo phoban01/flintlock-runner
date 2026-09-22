@@ -22,6 +22,11 @@ import (
 // right on its own.
 const defaultInterval = 20 * time.Millisecond
 
+//= docs/requirements/12-cluster-fleet.md#cluster-test-doubles
+//# The Kubernetes pool backend SHALL be tested against a
+//# Kubernetes API server test environment, with a test reconciler standing in
+//# for the ReplicaSet controller where no controller manager runs.
+
 // ReplicaSets is the test reconciler that stands in for the ReplicaSet
 // controller in one namespace (KF-121). It does the three things the backend
 // relies on: it creates pods from a ReplicaSet's current template until as
@@ -202,10 +207,22 @@ type Kubelet struct {
 	paused atomic.Bool
 }
 
+//= docs/requirements/12-cluster-fleet.md#cluster-test-doubles
+//# The harness SHALL include a scenario in which two Runners claim
+//# from a Pool of one, and SHALL assert that exactly one obtains the pod.
+
 // Pause stops new pods from being bound and made ready, so that a test can
 // hold a Pool's replacement back; Resume lets them through again. Deletions
-// are finished either way.
-func (k *Kubelet) Pause()  { k.paused.Store(true) }
+// are finished either way. It is what makes the scenario of two Runners and
+// a Pool of one decidable: the claim that wins takes the pod out of the
+// ReplicaSet, which replaces it at once, and unless that replacement is kept
+// from becoming ready the Runner that lost could be handed it and the
+// scenario would see two claims succeed without either being wrong. Each
+// Runner in that scenario is a backend with a client of its own from
+// Env.User.
+func (k *Kubelet) Pause() { k.paused.Store(true) }
+
+// Resume lets the pods Pause held back be bound and made ready.
 func (k *Kubelet) Resume() { k.paused.Store(false) }
 
 // Run syncs until ctx ends.
