@@ -58,6 +58,21 @@ spec:
               type: Unconfined
             appArmorProfile:
               type: Unconfined
+            #= docs/requirements/12-cluster-fleet.md#cluster-hardening
+            #/ The Fleet Manifests SHALL run the `buildkitd` container of the
+            #/ Host Agent in the `container_engine_t` SELinux domain, and SHALL NOT name a
+            #/ domain for any other container.
+            # Every build step mounts a fresh devpts, which container_t may
+            # not; container_engine_t is the base policy's domain for a
+            # container engine in a container, still confined and still
+            # held to MCS. The level repeats the pod's (daemonset.yaml): the
+            # kubelet takes a container's seLinuxOptions whole, not merged
+            # with the pod's, and containerd gives a container that names a
+            # type but no level fresh random categories, which would lose the
+            # cache to the next pod.
+            seLinuxOptions:
+              type: container_engine_t
+              level: "s0:c311,c827"
           env:
             - name: XDG_RUNTIME_DIR
               value: /run/user/1000

@@ -79,7 +79,9 @@ spec:
         seccompProfile:
           type: RuntimeDefault
         # SELinux (HI-065). The containers keep the ordinary container
-        # domain, container_t; only the MCS level is fixed. A pod otherwise
+        # domain, container_t, except buildkitd, which names
+        # container_engine_t and repeats this level (KF-139, in
+        # services/buildkit); only the MCS level is fixed here. A pod otherwise
         # gets two random categories each time it starts, and what the Host
         # Services write into the cache directory carries them, so the next
         # Host Agent pod, with other categories, could neither read its

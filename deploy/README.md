@@ -175,9 +175,29 @@ If a pool's `host.conf` sets `POD_PROVIDER_UID`, set the same value in
   `not-ready.d` read-only, the cache directory writable, all at `s0`. The
   Host Agent's pod keeps `container_t` with a fixed MCS level,
   `s0:c311,c827`, so that its caches survive a restart of the pod; see
-  "SELinux" in `image/README.md`. The Host Image's containerd does not set
-  `enable_selinux`, and until it does the runtime does not apply the
-  container domain at all. None of this has run on a booted Host.
+  "SELinux" in `image/README.md`. The Host Image's containerd labels every
+  unprivileged pod (HI-066), so the Host Agent's containers, and every other
+  unprivileged pod on a Host, run confined as `container_t`; privileged
+  containers stay unconfined. None of this has run on a booted Host.
+- **buildkitd in `container_engine_t`.** Every build step of rootless
+  buildkitd mounts a fresh `devpts`, which `container_t` may not, so the
+  buildkitd container alone names the base policy's `container_engine_t`
+  (KF-139), with the pod's level repeated beside it: the kubelet takes a
+  container's `seLinuxOptions` whole, and containerd gives a container that
+  names a type but no level random categories. What the base policy was
+  checked to allow, with `sesearch`: containerd (`container_runtime_t`, an
+  unconfined domain) may transition to it; it may read
+  `container_ro_file_t`, read and write `container_file_t`, mount any
+  filesystem type (`devpts` included), create user namespaces and hold
+  `sys_admin`, `setuid` and `setgid` inside them. It is an
+  `mcs_constrained_type` like `container_t`, so at the fixed level it uses
+  the `s0` host paths and its own cache and nothing of another pod's; the
+  build steps, which buildkit starts with no label of their own (no
+  `--oci-worker-selinux`), stay in `container_engine_t` at that same level.
+  It is not a `svirt_sandbox_domain`, so what that attribute grants
+  `container_t` it does not get. Whether a build then runs without a denial
+  only an enforcing Host can show: run one and read
+  `ausearch -m avc -ts boot`.
 - **Builds and the metadata service.** Rootless buildkitd runs in the
   Host's network namespace, as push provisioning runs it. The Host Image
   drops traffic from the Host Services' user ids, and from buildkit's
