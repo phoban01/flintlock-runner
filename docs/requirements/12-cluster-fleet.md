@@ -25,6 +25,18 @@ This mode is an alternative to `04-pool-manager.md`, `05-hosts.md` and
 `06-fleet.md`, which stay in force for fleets that are not run from a
 cluster. The table at the end maps each of them to its counterpart here.
 
+**Superseded on 2026-09-22.** The cluster fleet is moving from the Virtual
+Node design described first in this document to battery's claim resources,
+specified in the sections from `#battery-claims` onwards: battery stays the
+scheduler and the authority over Pools, the Runner claims a MicroVM through a
+`MicroVMClaim`, and a per-Host Exec Agent relays each Stage to `flintlockd`.
+These sections are superseded by that design: Virtual Node, MicroVM pods,
+Pools, Allocation, Guest Transport, the Pod Provider parts of Host Agent,
+Drain, Verification, Least privilege (KF-110, KF-111), Hardening (KF-130 to
+KF-137) and Test doubles (KF-120 to KF-125). Their code is still on `main`
+and still cites them, so they are withdrawn in the change that removes that
+code, once the claim design passes the harness, rather than now.
+
 ## Host pool {#host-pool}
 
 - **KF-001** The Fleet Manifests SHALL define each Host pool as one Cluster
@@ -416,6 +428,147 @@ the Host, so it is not the threat this addresses.
   Kubernetes API server test environment, in which the policy of KF-133
   admits a Pod Provider's change to its own Host's Virtual Node and pods and
   refuses the same change to another Host's.
+
+## Battery claim resources {#battery-claims}
+
+- **KF-150** Where the claim backend is configured, the Scheduler SHALL
+  obtain a MicroVM for a Job by creating a `MicroVMClaim` whose
+  `spec.poolRef` names the Pool of the Job's Profile, and SHALL treat the
+  claim as granted only once its status reports the phase `Bound`.
+- **KF-151** The Scheduler SHALL take the claimed MicroVM's uid and its Host,
+  the node name and the Exec Agent address, from the status of the Bound
+  claim and from nothing else.
+- **KF-152** While a Job holds a Bound claim, the Scheduler SHALL renew the
+  claim's lease at the Profile's heartbeat interval.
+- **KF-153** When a Job ends, the Scheduler SHALL delete its claim, which
+  releases the MicroVM to battery.
+- **KF-154** If a claim's status reports the phase `Expired`, or the claim
+  disappears while its Job runs, then the Scheduler SHALL treat the Lease as
+  lost as SC-061 requires.
+- **KF-155** If battery cannot bind a claim because the Pool has no warm
+  MicroVM, then the Scheduler SHALL treat the Pool as exhausted as SC-021
+  requires and SHALL delete the claim when it stops waiting.
+- **KF-156** The claim backend SHALL implement the `poolmgr.Client`
+  interface, so that the Scheduler's requirements in `03-scheduler.md` hold
+  unchanged over it.
+
+battery keeps its MicroVMs internal: the Kubernetes surface is `Pool` and
+`MicroVMClaim` only, and there is no `MicroVM` resource. A claim names what
+it gets, a MicroVM, and where from, a Pool, the way a PersistentVolumeClaim
+names a volume and its storage class. The shapes of both resources are
+battery's to define and are still open: the API group and version, the
+field that renews a lease, how an exhausted Pool is reported on a pending
+claim, who declares the Pools (the Runner from its Profiles, as PL-010 does
+over gRPC today, or the operator), and how a claim records the identity that
+created it, which KF-174 depends on. The requirements above are written
+against the behaviour, not the field names, and the claim backend is built
+behind an interface so that the names can follow battery.
+
+## Inventory {#battery-inventory}
+
+- **KF-160** The Inventory Controller SHALL register a Host with battery's
+  inventory only while the Host's Node carries the Host label of HI-060, is
+  schedulable, and its Exec Agent reports the Host ready.
+- **KF-161** When a Host's Node is cordoned or deleted, or its Exec Agent
+  reports the Host not ready, the Inventory Controller SHALL remove the Host
+  from battery's inventory, so that battery places nothing new there.
+
+Where the Inventory Controller runs, in battery as its node component or in
+this repository, is open; the requirements hold either way.
+
+## Exec Agent {#exec-agent}
+
+- **KF-170** The Fleet Manifests SHALL run the Exec Agent in the Host Agent
+  on every Host.
+- **KF-171** The Exec Agent SHALL reach `flintlockd` only through the local
+  endpoint of HI-042, and the Fleet Manifests SHALL run it as the user id
+  that HI-063 admits there and run no other container as that user id.
+- **KF-172** The Exec Agent SHALL serve its exec API over TLS on the Host's
+  internal address, with a serving certificate that names that address.
+- **KF-173** The Exec Agent SHALL authenticate every request with a
+  TokenReview of the bearer token it carries, and SHALL refuse a request
+  that does not authenticate.
+- **KF-174** The Exec Agent SHALL run a command in a MicroVM only for an
+  identity that created a `MicroVMClaim` which is `Bound`, has not expired,
+  and names that MicroVM's uid and this Host, and SHALL refuse every other
+  request.
+- **KF-175** If the TokenReview or the claim lookup of a request cannot be
+  completed, then the Exec Agent SHALL refuse the request.
+- **KF-176** The Exec Agent SHALL relay a request's streams to
+  `MicroVMExec.ExecCommand` on the local `flintlockd` and SHALL end every
+  response with an exit status frame, sent only after `flintlockd` has
+  reported the command's exit.
+- **KF-177** If `flintlockd` does not open the exec stream of a request
+  within the configured deadline, then the Exec Agent SHALL end the response
+  as a stream failure.
+- **KF-178** The Exec Agent SHALL report its Host not ready while the local
+  `flintlockd` does not answer `ServerInfo` with the exec service enabled,
+  while an enabled Host Service does not accept connections on the bridge
+  gateway address, or while a unit of the Host Image reports a not ready
+  reason.
+- **KF-179** The Exec Agent SHALL publish the address and port of each
+  enabled Host Service, under the names `buildkit`, `go_proxy`,
+  `registry_mirror` and `http_cache`, as annotations on its Host's Node.
+- **KF-180** The Fleet Manifests SHALL include a ValidatingAdmissionPolicy
+  that lets an Exec Agent's identity change only the annotations of its own
+  Host's Node, under the project's prefix, and nothing else of any Node.
+- **KF-181** While claims are `Bound` on its Host, the Exec Agent SHALL hold
+  an eviction-based drain of the Host's Node open, and SHALL let it complete
+  when none remain or when the configured drain timeout elapses.
+
+The Exec Agent is what the Pod Provider becomes once there are no pods to
+realise: it keeps the relay to `MicroVMExec`, the fail-closed TLS front, the
+readiness checks and the drain guard, and drops the Virtual Node and the pod
+lifecycle. Authorization gets finer in the move. The Pod Provider could only
+ask whether a caller may reach a node (KF-130); the Exec Agent asks whether
+the caller holds the claim on the MicroVM it wants, so a Runner's
+credentials reach the MicroVMs it holds and no others.
+
+KF-176 and KF-177 answer two defects the harness found in the Pod Provider's
+relay. A pod exec session that was cut, because the provider restarted,
+ended exactly as a successful one does, with no status, and the Job was
+reported as having succeeded; here the exit status is a frame of its own and
+its absence is a failure. And the relay opened its stream to `flintlockd`
+with no deadline, so a Host that stopped answering held a Job until its
+timeout; here opening the stream is bounded.
+
+The Runner reaches each Exec Agent on the Host's internal address, which is
+a network route the operator has to allow from wherever the Runner runs, and
+a serving certificate per Host, which KF-172 requires and the Fleet
+Manifests provide. An agent that dials out to the Runner instead would need
+neither and is the alternative if that route is not wanted.
+
+## Agent exec transport {#agent-exec-transport}
+
+- **KF-185** Where the claim backend is configured, the Executor SHALL run
+  each Stage through the Exec Agent of the Host named in the Job's claim,
+  with the Stage script on standard input.
+- **KF-186** The `agent-exec` Guest Transport SHALL authenticate to the Exec
+  Agent with the Runner's ServiceAccount token and SHALL verify the agent's
+  serving certificate against the configured certificate authority.
+- **KF-187** The `agent-exec` Guest Transport SHALL treat a response that
+  ends without an exit status frame as a stream failure, as EX-023 requires.
+- **KF-188** The `agent-exec` Guest Transport SHALL meet every requirement
+  that `02-executor.md` places on the `exec` Guest Transport for output
+  streaming, exit status, cancellation and timeouts.
+- **KF-189** The Executor SHALL read the Host Service addresses for a Job
+  from the annotations of KF-179 on the Node of the Job's Host.
+
+## Claim test doubles {#claim-test-doubles}
+
+- **KF-190** The Exec Agent and the `agent-exec` Guest Transport SHALL be
+  tested against a Kubernetes API server test environment serving the
+  claim resources from a test definition, and the fake Host, with no KVM
+  and no battery.
+- **KF-191** The claim backend SHALL be tested against a fake battery that
+  serves the `Pool` and `MicroVMClaim` resources and binds claims from warm
+  MicroVMs on the fake Hosts.
+- **KF-192** The harness SHALL run every scenario of TD-051 over the claim
+  backend, the `agent-exec` Guest Transport, the Exec Agent and the fake
+  Host.
+- **KF-193** The harness SHALL include a scenario in which the Exec Agent
+  restarts while a Stage runs, and SHALL assert that the Job fails with a
+  stream failure and is never reported as having succeeded.
 
 ## Release {#cluster-release}
 

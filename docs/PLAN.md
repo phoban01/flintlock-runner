@@ -141,6 +141,39 @@ release workflow. The version it ships in is decided when the candidate is
 cut. Nothing in this phase has run on a real Host or a real kubelet; a
 release candidate is where the hardware tier (`TD-052`) first applies to it.
 
+### Phase 5: battery claim resources
+
+Decided 2026-09-22: the cluster fleet moves from the Virtual Node design to
+battery's claim resources (`12-cluster-fleet.md` from `#battery-claims`).
+battery stays the scheduler and the authority over Pools; the Runner claims
+a MicroVM with a `MicroVMClaim` and runs each Stage through a per-Host Exec
+Agent. The shapes of battery's `Pool` and `MicroVMClaim` are being settled
+with battery upstream; until they are, anything that depends on a field name
+is built behind an interface and tested against a test definition of the
+resources.
+
+What carries over unchanged: the Host Image, the Cluster API host pool, the
+Host Services, packaging and release, and the Runner's Scheduler and
+Executor above `poolmgr.Client`. The Pod Provider's relay, TLS front,
+readiness checks and drain guard move into the Exec Agent.
+
+| Key | Package | Owns | Depends on | Done when |
+|-----|---------|------|------------|-----------|
+| `exec-agent` | `internal/agent`, `cmd/flr agent` (from `internal/kubelet`) | KF-170..KF-181 | nothing (claim lookup behind an interface) | a caller without a Bound claim on the MicroVM runs nothing; a cut response is never a success; a hung `flintlockd` fails the request within its deadline |
+| `agent-exec` | `internal/transport`, `internal/executor` | KF-185..KF-189, KF-190 | `exec-agent` (its protocol) | the `exec` transport's suite passes over `agent-exec` against the real Exec Agent |
+| `claim-backend` | `internal/poolmgr/claim` | KF-150..KF-156, KF-191 | the CRD shapes from battery | the Scheduler's scenarios pass against the fake battery |
+| `inventory` | where battery puts it | KF-160, KF-161 | battery | a cordoned or not ready Host leaves the inventory |
+| `manifests-2` | `deploy/` (reworks the held `pr/manifests`) | KF-001..KF-005, KF-070..KF-076, KF-080..KF-082, KF-112, KF-113, KF-144 | `exec-agent` | manifests render and pass the schema check with the Exec Agent in place of the Pod Provider |
+| `claim-harness` | `internal/testing/harness` (reworks the held `wp/kube-harness`) | KF-192, KF-193 | `claim-backend`, `agent-exec` | every TD-051 scenario green over the claim stack |
+| `withdraw-vk` | removes `internal/kubelet`, `internal/poolmgr/kube`, `kube-exec` and their manifests | withdraws KF-010..KF-032, KF-040..KF-052, KF-060..KF-063, KF-090..KF-094, KF-100..KF-102, KF-110, KF-111, KF-120..KF-128, KF-130..KF-137 | `claim-harness` | nothing on `main` cites a withdrawn requirement |
+
+`exec-agent` starts now and `agent-exec` as soon as its protocol is fixed.
+`claim-backend` and `inventory` wait for the CRD shapes. The held branches
+of Phase 4 are not merged as they stand: `pr/manifests` becomes
+`manifests-2`, `wp/kube-harness` becomes `claim-harness`, and
+`wp/kube-verify` is dropped until verification is specified for the claim
+design. `wp/hardening-2` (HI-064..HI-066, KF-139) carries over.
+
 ## Running agents
 
 From a Claude Code session: one agent per work package, each with

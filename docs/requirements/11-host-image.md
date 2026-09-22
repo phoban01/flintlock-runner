@@ -181,7 +181,10 @@ Host is the Pod Provider's kubelet endpoint (KF-031) instead. The pinned
 loopback port is open to every process in the Host's network namespace;
 HI-063 narrows it to one user id with a firewall rule on the socket's owner.
 A unix socket with file permissions would be the better boundary, and is
-the one to move to when `flintlockd` can listen on one.
+the one to move to when `flintlockd` can listen on one. In the claim design
+of `12-cluster-fleet.md` the Exec Agent takes the Pod Provider's place as
+`flintlockd`'s only client and runs as the same user id (KF-171); HI-063's
+wording follows when the Pod Provider is withdrawn.
 
 HI-040 is the one place where this design refuses to be Kubernetes-native.
 Firecracker processes are children of `flintlockd`; inside a pod they would
