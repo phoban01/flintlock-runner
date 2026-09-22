@@ -11,6 +11,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 )
@@ -43,6 +44,28 @@ func BuildRunner(ctx context.Context, dir string) (string, error) {
 	cmd.Stderr = &stderr
 	if err := cmd.Run(); err != nil {
 		return "", fmt.Errorf("harness: go build %s: %w\n%s", runnerPackage, err, stderr.String())
+	}
+	return out, nil
+}
+
+// helperPackage is the import path of the gitlab-runner-helper stand-in.
+const helperPackage = "github.com/phoban01/flintlock-runner/internal/testing/harness/helperstub"
+
+// BuildHelper builds the gitlab-runner-helper stand-in (helperstub) into dir
+// and returns its path, for Options.HelperBinary.
+func BuildHelper(ctx context.Context, dir string) (string, error) {
+	root, err := moduleRoot()
+	if err != nil {
+		return "", err
+	}
+	out := filepath.Join(dir, "gitlab-runner-helper")
+	cmd := exec.CommandContext(ctx, "go", "build", "-o", out, helperPackage)
+	cmd.Dir = root
+	var stderr bytes.Buffer
+	cmd.Stdout = &stderr
+	cmd.Stderr = &stderr
+	if err := cmd.Run(); err != nil {
+		return "", fmt.Errorf("harness: go build %s: %w\n%s", helperPackage, err, stderr.String())
 	}
 	return out, nil
 }
@@ -93,9 +116,10 @@ func (s *Stack) runnerBinary(ctx context.Context) (string, error) {
 
 // runnerProc is the Runner subprocess.
 type runnerProc struct {
-	cmd  *exec.Cmd
-	log  *os.File
-	done chan struct{}
+	cmd     *exec.Cmd
+	log     *os.File
+	logPath string
+	done    chan struct{}
 	// waitErr is cmd.Wait's result, readable once done is closed.
 	waitErr error
 }
@@ -124,16 +148,54 @@ func (s *Stack) StartRunner(ctx context.Context) error {
 		return errors.New("harness: stack is shut down")
 	}
 	s.mu.Unlock()
+	return s.spawnRunner(ctx, s.ConfigPath, s.RunnerLog, func(r *runnerProc) { s.runner = r })
+}
 
+//= docs/requirements/12-cluster-fleet.md#cluster-test-doubles
+//# The harness SHALL include a scenario in which two Runners claim
+//# from a Pool of one, and SHALL assert that exactly one obtains the pod.
+
+// StartAnotherRunner starts one more Runner beside the one StartRunner
+// started, as a second replica of the Runner's Deployment is (KF-123): the
+// same runner name, token and Pools, with a state directory, a metrics
+// address, a configuration file and a log of its own. It returns the path of
+// its log. Shutdown stops it with the first.
+func (s *Stack) StartAnotherRunner(ctx context.Context) (string, error) {
+	s.mu.Lock()
+	n := len(s.extra) + 2
+	s.mu.Unlock()
+	cfg := *s.Config
+	cfg.StateDir = filepath.Join(s.Root, fmt.Sprintf("state-%d", n))
+	metrics, err := freeLoopbackAddr()
+	if err != nil {
+		return "", err
+	}
+	cfg.Observability.ListenAddress = metrics
+	path := filepath.Join(s.Root, fmt.Sprintf("config-%d.yaml", n))
+	if err := writeConfigFile(path, &cfg); err != nil {
+		return "", err
+	}
+	logPath := filepath.Join(s.Root, fmt.Sprintf("runner-%d.log", n))
+	if err := s.spawnRunner(ctx, path, logPath, func(r *runnerProc) { s.extra = append(s.extra, r) }); err != nil {
+		return "", err
+	}
+	return logPath, nil
+}
+
+// spawnRunner starts `flr --config <config> run` with its output in
+// logPath, unless the Stack is shut down, and hands the process to record
+// under the Stack's lock, so that Shutdown sees every Runner it has to
+// stop.
+func (s *Stack) spawnRunner(ctx context.Context, configPath, logPath string, record func(*runnerProc)) error {
 	bin, err := s.runnerBinary(ctx)
 	if err != nil {
 		return err
 	}
-	logFile, err := os.OpenFile(s.RunnerLog, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
+	logFile, err := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
 	if err != nil {
 		return fmt.Errorf("harness: runner log: %w", err)
 	}
-	cmd := exec.Command(bin, "--config", s.ConfigPath, "run")
+	cmd := exec.Command(bin, "--config", configPath, "run")
 	cmd.Dir = s.Root
 	cmd.Env = runnerEnv(os.Environ(), s.homeDir())
 	var out io.Writer = logFile
@@ -154,13 +216,13 @@ func (s *Stack) StartRunner(ctx context.Context) error {
 		_ = logFile.Close()
 		return fmt.Errorf("harness: starting %s: %w", bin, err)
 	}
-	r := &runnerProc{cmd: cmd, log: logFile, done: make(chan struct{})}
+	r := &runnerProc{cmd: cmd, log: logFile, logPath: logPath, done: make(chan struct{})}
 	go func() {
 		r.waitErr = cmd.Wait()
 		close(r.done)
 	}()
-	s.runner = r
-	s.logf("flr started (pid %d, log %s)", cmd.Process.Pid, s.RunnerLog)
+	record(r)
+	s.logf("flr started (pid %d, log %s)", cmd.Process.Pid, logPath)
 	return nil
 }
 
@@ -197,33 +259,55 @@ func (s *Stack) runnerExitError() error {
 	s.mu.Lock()
 	r := s.runner
 	s.mu.Unlock()
+	return r.exitError()
+}
+
+// exitError describes an exit of r that the harness did not ask for, with
+// the end of its log; nil while r runs.
+func (r *runnerProc) exitError() error {
 	if r == nil || !r.exited() {
 		return nil
 	}
 	return fmt.Errorf("harness: flr exited unexpectedly (%v); last lines of %s:\n%s",
-		exitDescription(r.waitErr), s.RunnerLog, s.RunnerLogTail(20))
+		exitDescription(r.waitErr), r.logPath, logTail(r.logPath, 20))
 }
 
-// stopRunner sends SIGTERM to the Runner's process group and waits up to
-// grace for it to exit (GL-070, GL-071), then kills the group. It returns
-// an error when the Runner had exited before it was asked to, had to be
-// killed, or exited with a non-zero status. The group is killed on every
-// path, so a process the Runner left behind dies with it.
+// stopRunner stops every Runner of the Stack at once, each as stop does,
+// and returns every failure joined.
 func (s *Stack) stopRunner(grace time.Duration) error {
 	s.mu.Lock()
-	r := s.runner
-	s.mu.Unlock()
-	if r == nil {
-		return nil
+	procs := append([]*runnerProc(nil), s.extra...)
+	if s.runner != nil {
+		procs = append([]*runnerProc{s.runner}, procs...)
 	}
+	s.mu.Unlock()
+	errs := make([]error, len(procs))
+	var wg sync.WaitGroup
+	for i, r := range procs {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			errs[i] = s.stop(r, grace)
+		}()
+	}
+	wg.Wait()
+	return errors.Join(errs...)
+}
+
+// stop sends SIGTERM to a Runner's process group and waits up to grace for
+// it to exit (GL-070, GL-071), then kills the group. It returns an error
+// when the Runner had exited before it was asked to, had to be killed, or
+// exited with a non-zero status. The group is killed on every path, so a
+// process the Runner left behind dies with it.
+func (s *Stack) stop(r *runnerProc, grace time.Duration) error {
 	defer func() { _ = r.log.Close() }()
 
 	crashed := r.exited()
 	var errs []error
 	if crashed {
-		errs = append(errs, s.runnerExitError())
+		errs = append(errs, r.exitError())
 	} else {
-		s.logf("stopping flr (SIGTERM, up to %s)", grace)
+		s.logf("stopping flr pid %d (SIGTERM, up to %s)", r.cmd.Process.Pid, grace)
 		_ = signalGroup(r.cmd.Process.Pid, syscall.SIGTERM)
 		select {
 		case <-r.done:
@@ -246,7 +330,7 @@ func (s *Stack) stopRunner(grace time.Duration) error {
 	}
 	if !crashed && r.exited() && r.waitErr != nil && len(errs) == 0 {
 		errs = append(errs, fmt.Errorf("harness: flr exited on SIGTERM with %s; last lines of %s:\n%s",
-			exitDescription(r.waitErr), s.RunnerLog, s.RunnerLogTail(20)))
+			exitDescription(r.waitErr), r.logPath, logTail(r.logPath, 20)))
 	}
 	return errors.Join(errs...)
 }
@@ -286,8 +370,11 @@ func exitDescription(err error) string {
 }
 
 // RunnerLogTail returns the last n lines of the Runner's log.
-func (s *Stack) RunnerLogTail(n int) string {
-	f, err := os.Open(s.RunnerLog)
+func (s *Stack) RunnerLogTail(n int) string { return logTail(s.RunnerLog, n) }
+
+// logTail returns the last n lines of the file at path.
+func logTail(path string, n int) string {
+	f, err := os.Open(path)
 	if err != nil {
 		return fmt.Sprintf("(no runner log: %v)", err)
 	}

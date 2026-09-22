@@ -29,6 +29,23 @@ func hardwareTier(t testing.TB, lookup func(string) (string, bool)) Options {
 	return opts
 }
 
+// KubernetesTier returns the Options for running scenarios on the cluster
+// stack (KF-122) over c: FakeTier's, on the Kubernetes pool backend. It
+// skips t when there is no Cluster, which StartCluster reports with
+// ErrNoCluster where the envtest binaries are missing and CI does not
+// require them.
+func KubernetesTier(t testing.TB, c *Cluster, why string) Options {
+	t.Helper()
+	if c == nil {
+		t.Skipf("kubernetes stack skipped: %s", why)
+	}
+	opts := FakeTier()
+	opts.PoolManagerEndpoint = ""
+	opts.Backend = BackendKubernetes
+	opts.Cluster = c
+	return opts
+}
+
 // FakeTier returns the Options for running scenarios against fake Hosts,
 // which always runs. It honours EnvRunnerBinary, and EnvPoolManager
 // (TD-053) unless a hardware Inventory is set as well: a real Pool Manager

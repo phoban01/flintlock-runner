@@ -60,11 +60,23 @@ func (s *Stack) Shutdown(ctx context.Context) error {
 	if s.Config != nil {
 		grace += s.Config.GitLab.ShutdownTimeout
 	}
+	began := time.Now()
 	add(s.stopRunner(grace))
-	add(s.checkLeases(ctx))
-	add(s.stopPoolManager())
-	add(s.stopHosts())
+	s.logf("flr stopped in %s", time.Since(began).Round(time.Millisecond))
+	if s.kube != nil {
+		add(s.checkKubeLeases(ctx))
+		began = time.Now()
+		add(s.stopKube(ctx))
+		s.logf("pools, pod providers and hosts stopped in %s", time.Since(began).Round(time.Millisecond))
+	} else {
+		add(s.checkLeases(ctx))
+		add(s.stopPoolManager())
+		add(s.stopHosts())
+	}
 	add(s.checkSandboxes(ctx))
+	if s.serviceClose != nil {
+		s.serviceClose()
+	}
 	s.GitLab.Close()
 	if s.opts.KeepRoot {
 		s.logf("kept %s", s.Root)
@@ -226,6 +238,10 @@ func (s *Stack) teardown() {
 	_ = s.stopRunner(0)
 	_ = s.stopPoolManager()
 	_ = s.stopHosts()
+	_ = s.stopKube(context.Background())
+	if s.serviceClose != nil {
+		s.serviceClose()
+	}
 	if s.GitLab != nil {
 		s.GitLab.Close()
 	}

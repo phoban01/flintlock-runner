@@ -29,6 +29,11 @@ type Job struct {
 	// Variables are added to the Job's variables, after the ones the
 	// harness sets, so they can override them.
 	Variables map[string]string
+	// Artifacts are the Job's `artifacts:` and Dependencies the Jobs whose
+	// artifacts it downloads. Both run gitlab-runner-helper in the guest
+	// (Options.HelperBinary).
+	Artifacts    []spec.Artifact
+	Dependencies []spec.Dependency
 }
 
 // defaultJobTimeout is the Job timeout when Job.Timeout is zero.
@@ -38,7 +43,8 @@ const defaultJobTimeout = 10 * time.Minute
 // script and after_script Steps, the Job timeout, a GitLab-like set of
 // predefined variables and GIT_STRATEGY=none, so that get_sources makes the
 // project directory without cloning a repository that does not exist. The
-// Job carries no artifacts and no cache, which need gitlab-runner-helper.
+// Job carries artifacts and dependencies only where j names them, and never
+// a cache, which needs a distributed cache the harness has no fake of.
 func BuildJob(id int64, j Job) *spec.Job {
 	name := j.Name
 	if name == "" {
@@ -112,10 +118,12 @@ func BuildJob(id int64, j Job) *spec.Job {
 			Sha:     vars["CI_COMMIT_SHA"],
 			RefType: spec.RefTypeBranch,
 		},
-		RunnerInfo: spec.RunnerInfo{Timeout: secs},
-		Steps:      steps,
-		Image:      spec.Image{Name: j.Image},
-		Variables:  variables,
+		RunnerInfo:   spec.RunnerInfo{Timeout: secs},
+		Steps:        steps,
+		Image:        spec.Image{Name: j.Image},
+		Variables:    variables,
+		Artifacts:    append(spec.Artifacts(nil), j.Artifacts...),
+		Dependencies: append(spec.Dependencies(nil), j.Dependencies...),
 	}
 }
 

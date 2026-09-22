@@ -20,6 +20,21 @@
 // real Pool Manager endpoint to use instead of the fake one. OptionsFromEnv
 // reads them; nothing else in the package looks at the environment.
 //
+// Options.Backend selects the stack the Runner runs over. The zero value is
+// the battery stack above. BackendKubernetes is the cluster stack (KF-122):
+// the Runner on the Kubernetes pool backend and the kube-exec Guest
+// Transport, with nothing but a kubeconfig for a user bound to its shipped
+// Role; a real kube-apiserver and etcd (Cluster, shared by many Stacks, each
+// in a namespace of its own) with a test reconciler for the ReplicaSet
+// controller and a stand-in for the scheduler; and on each fake Host the
+// real Pod Provider, running in the test process under the Host Agent's
+// shipped RBAC and admission policy, which the API server's exec proxy
+// reaches as it reaches a kubelet. The same scenarios run on both stacks.
+// On the cluster stack Shutdown checks for claimed pods instead of Leases,
+// then deletes the Pools, which the Runner leaves behind by design, so that
+// a sandbox still on a fake Host afterwards is a MicroVM no Pod Provider
+// deleted.
+//
 // The fake Host runs every command as a local process on the machine the
 // harness runs on, rooted in the MicroVM's sandbox directory but not
 // confined to it. gitlab-runner's generated scripts use absolute paths for

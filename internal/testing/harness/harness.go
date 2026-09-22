@@ -107,6 +107,27 @@ type Options struct {
 	// Configure, when set, may change the generated configuration before
 	// it is written, for scenarios that need a different setting.
 	Configure func(*config.Config)
+
+	// Backend selects the Pool backend: the fake Pool Manager (the zero
+	// value) or the Kubernetes cluster stack (KF-122), which needs Cluster.
+	Backend Backend
+	// Cluster is the API server test environment the Kubernetes stack runs
+	// on. Many Stacks share one.
+	Cluster *Cluster
+	// ProviderLeaseDuration is the Pod Providers' lease duration (KF-032)
+	// on the Kubernetes stack; zero means DefaultProviderLeaseDuration.
+	ProviderLeaseDuration time.Duration
+	// HostServices makes the buildkit and Go module proxy Host Services
+	// available on every Host and enables them in the configuration: a
+	// listener on loopback stands in for each, and the Hosts publish its
+	// address as the Fleet Controller does in the Inventory (FL-110) or the
+	// Pod Provider on the Virtual Node (KF-017).
+	HostServices bool
+	// HelperBinary, when set, is the Profile's gitlab-runner-helper path
+	// on the fake Hosts, which run a Job's commands on this machine; the
+	// artifact scenarios set it to the stand-in BuildHelper builds. The
+	// hardware tier ignores it: its guests have their own.
+	HelperBinary string
 }
 
 // OptionsFromEnv returns opts with the tier switches filled from the
@@ -168,12 +189,22 @@ type Stack struct {
 	pmDone     chan error
 	hostCancel context.CancelFunc
 	hostDone   []chan error
+	// kube is the cluster side of a Stack on BackendKubernetes.
+	kube *kubeStack
+	// serviceBackends are the stand-ins of the Host Services, by the name
+	// the Pod Provider publishes them under, each a port on loopback.
+	serviceBackends map[string]int
+	serviceClose    func()
 
 	mu        sync.Mutex
 	runner    *runnerProc
+	extra     []*runnerProc
 	nextJobID int64
 	down      bool
 }
+
+// Backend is the Pool backend the Stack runs the Runner over.
+func (s *Stack) Backend() Backend { return s.opts.Backend }
 
 // logf reports one harness step.
 func (s *Stack) logf(format string, args ...any) {
@@ -240,17 +271,28 @@ func Start(ctx context.Context, opts Options) (s *Stack, err error) {
 	}
 	s.logf("fake GitLab listening on %s", s.GitLab.URL())
 
-	if opts.Hardware() {
+	if opts.HostServices {
+		if err := s.startServiceBackends(); err != nil {
+			return s, err
+		}
+	}
+
+	switch {
+	case opts.Backend == BackendKubernetes:
+		err = s.startKube(ctx)
+	case opts.Hardware():
 		err = s.useHardwareHosts()
-	} else {
+	default:
 		err = s.startFakeHosts(ctx)
 	}
 	if err != nil {
 		return s, err
 	}
 
-	if err := s.startPoolManager(ctx); err != nil {
-		return s, err
+	if opts.Backend != BackendKubernetes {
+		if err := s.startPoolManager(ctx); err != nil {
+			return s, err
+		}
 	}
 
 	if err := s.writeConfig(); err != nil {
@@ -344,6 +386,7 @@ func (s *Stack) startFakeHosts(ctx context.Context) error {
 			MemoryMB: fakeHostMemoryMB,
 			Token:    HostToken,
 			TLS:      config.ClientTLS{Insecure: true},
+			Services: s.inventoryServices(),
 		})
 		s.logf("fake Host %s listening on %s (sandboxes under %s)", name, h.Addr(), h.SandboxRoot())
 	}

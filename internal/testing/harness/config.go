@@ -8,6 +8,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"time"
 
@@ -62,6 +63,15 @@ func (s *Stack) buildConfig() (*config.Config, error) {
 		return nil, err
 	}
 	disabled := false
+	services := &disabled
+	if s.opts.HostServices {
+		enabled := true
+		services = &enabled
+	}
+	arch := config.Architecture(runtime.GOARCH)
+	if len(s.Inventory) > 0 {
+		arch = s.Inventory[0].Arch
+	}
 	cfg := &config.Config{
 		GitLab: config.GitLab{
 			URL:             s.GitLab.URL(),
@@ -74,7 +84,7 @@ func (s *Stack) buildConfig() (*config.Config, error) {
 		},
 		Profiles: []config.Profile{{
 			Name:         ProfileName,
-			Arch:         s.Inventory[0].Arch,
+			Arch:         arch,
 			VCPU:         1,
 			MemoryMB:     512,
 			Kernel:       config.Kernel{Image: kernel},
@@ -113,8 +123,8 @@ func (s *Stack) buildConfig() (*config.Config, error) {
 			TransportDeadline:   10 * time.Second,
 		},
 		HostServices: config.HostServices{
-			Buildkit:       config.Buildkit{Service: config.Service{Enabled: &disabled}},
-			GoProxy:        config.GoProxy{Service: config.Service{Enabled: &disabled}},
+			Buildkit:       config.Buildkit{Service: config.Service{Enabled: services}},
+			GoProxy:        config.GoProxy{Service: config.Service{Enabled: services}},
 			RegistryMirror: config.RegistryMirror{Service: config.Service{Enabled: &disabled}},
 			HTTPCache:      config.HTTPCache{Service: config.Service{Enabled: &disabled}},
 			CacheVolume:    config.CacheVolume{Directory: filepath.Join(s.Root, "host-services")},
@@ -125,6 +135,25 @@ func (s *Stack) buildConfig() (*config.Config, error) {
 			ListenAddress: metrics,
 		},
 		StateDir: s.stateDir(),
+	}
+	if s.opts.HelperBinary != "" && !s.opts.Hardware() {
+		cfg.Profiles[0].HelperPath = s.opts.HelperBinary
+	}
+	if s.kube != nil {
+		// A cluster fleet's Runner reaches the API server and nothing else:
+		// no Inventory, no Pool Manager endpoint, and kube-exec for every
+		// Profile (KF-063, KF-128). Its Pools live in the Stack's namespace
+		// under the Runner's own identity (KF-110).
+		cfg.Inventory = config.Inventory{}
+		cfg.PoolManager.Backend = config.PoolBackendKubernetes
+		cfg.PoolManager.Endpoint = ""
+		cfg.PoolManager.TLS = config.ClientTLS{}
+		cfg.PoolManager.Kubernetes = &config.KubernetesPools{
+			Kubeconfig:      s.kube.kubeconfig,
+			Namespace:       s.kube.namespace,
+			RolloutInterval: time.Second,
+		}
+		cfg.Profiles[0].Transport = config.Transport{Kind: config.TransportKubeExec}
 	}
 	if s.opts.Configure != nil {
 		s.opts.Configure(cfg)
@@ -142,6 +171,21 @@ func (s *Stack) writeConfig() error {
 	if err != nil {
 		return err
 	}
+	if err := writeConfigFile(s.ConfigPath, cfg); err != nil {
+		return err
+	}
+	loaded, err := config.Load(s.ConfigPath,
+		config.WithEnv(func(string) (string, bool) { return "", false }),
+		config.WithLogger(slog.New(slog.NewTextHandler(io.Discard, nil))))
+	if err != nil {
+		return fmt.Errorf("harness: the generated configuration does not load: %w", err)
+	}
+	s.Config = loaded
+	return nil
+}
+
+// writeConfigFile writes cfg owner-only to path, under the header.
+func writeConfigFile(path string, cfg *config.Config) error {
 	var buf bytes.Buffer
 	buf.WriteString(configHeader)
 	enc := yaml.NewEncoder(&buf)
@@ -152,16 +196,9 @@ func (s *Stack) writeConfig() error {
 	if err := enc.Close(); err != nil {
 		return fmt.Errorf("harness: encoding runner configuration: %w", err)
 	}
-	if err := os.WriteFile(s.ConfigPath, buf.Bytes(), 0o600); err != nil {
+	if err := os.WriteFile(path, buf.Bytes(), 0o600); err != nil {
 		return fmt.Errorf("harness: writing runner configuration: %w", err)
 	}
-	loaded, err := config.Load(s.ConfigPath,
-		config.WithEnv(func(string) (string, bool) { return "", false }),
-		config.WithLogger(slog.New(slog.NewTextHandler(io.Discard, nil))))
-	if err != nil {
-		return fmt.Errorf("harness: the generated configuration does not load: %w", err)
-	}
-	s.Config = loaded
 	return nil
 }
 

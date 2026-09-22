@@ -57,8 +57,10 @@ jobs:
 
   # The end-to-end harness (TD-050): the real flr binary against
   # the fake GitLab, the fake Pool Manager and fake Hosts, on a runner with no
-  # KVM. The hardware tier (TD-052) is skipped here because no hardware
-  # Inventory is named.
+  # KVM, and the same scenarios on the cluster stack (KF-122): a real
+  # kube-apiserver and etcd with the Pod Provider in front of each fake Host.
+  # The hardware tier (TD-052) is skipped here because no hardware Inventory
+  # is named.
   e2e:
     name: end-to-end harness
     runs-on: ubuntu-latest
@@ -68,7 +70,16 @@ jobs:
         with:
           go-version-file: go.mod
           cache: true
+      # KF-122: the cluster stack's scenarios need kube-apiserver and etcd;
+      # here they are downloaded and required, so they never skip.
+      - name: envtest binaries
+        run: |
+          assets=$(make -s envtest)
+          test -x "$assets/kube-apiserver"
+          echo "KUBEBUILDER_ASSETS=$assets" >> "$GITHUB_ENV"
       - name: make e2e
+        env:
+          FLINTLOCK_RUNNER_REQUIRE_ENVTEST: "1"
         run: make e2e E2E_FLAGS=-v
 
   requirements:
