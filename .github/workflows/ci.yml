@@ -27,7 +27,17 @@ jobs:
         run: go build ./...
       - name: go vet
         run: go vet ./...
+      # KF-121: the Kubernetes pool backend is tested against a real
+      # kube-apiserver and etcd. The tests skip without them on a developer's
+      # machine; here they are downloaded and required, so CI never skips.
+      - name: envtest binaries
+        run: |
+          assets=$(make -s envtest)
+          test -x "$assets/kube-apiserver"
+          echo "KUBEBUILDER_ASSETS=$assets" >> "$GITHUB_ENV"
       - name: go test
+        env:
+          FLINTLOCK_RUNNER_REQUIRE_ENVTEST: "1"
         run: go test -race ./...
       # TD-043: every rendered provisioning script passes bash -n and
       # shellcheck; the test fails rather than skips when shellcheck is absent.
