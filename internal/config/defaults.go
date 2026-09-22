@@ -38,6 +38,8 @@ const (
 	DefaultPoolManagerEventsPoll               = 5 * time.Second
 	DefaultPoolManagerDeclareRetry             = 30 * time.Second
 	DefaultPoolManagerReleaseRetry             = 5
+	DefaultKubernetesJobTimeout                = 2 * time.Hour
+	DefaultKubernetesRolloutInterval           = 10 * time.Second
 	DefaultAllocationTimeout                   = 5 * time.Minute
 	DefaultHostHealthInterval                  = 10 * time.Second
 	DefaultHostUnhealthyThreshold              = 3
@@ -273,6 +275,20 @@ func applyPoolManagerDefaults(pm *PoolManager) {
 	}
 	if pm.ReleaseRetryLimit == 0 {
 		pm.ReleaseRetryLimit = DefaultPoolManagerReleaseRetry
+	}
+	// The Kubernetes section is defaulted only where that backend is
+	// selected, so a battery configuration shows no trace of it.
+	if !pm.IsKubernetes() {
+		return
+	}
+	if pm.Kubernetes == nil {
+		pm.Kubernetes = &KubernetesPools{}
+	}
+	if pm.Kubernetes.JobTimeout == 0 {
+		pm.Kubernetes.JobTimeout = DefaultKubernetesJobTimeout
+	}
+	if pm.Kubernetes.RolloutInterval == 0 {
+		pm.Kubernetes.RolloutInterval = DefaultKubernetesRolloutInterval
 	}
 }
 

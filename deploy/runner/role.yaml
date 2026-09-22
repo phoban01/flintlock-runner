@@ -1,0 +1,54 @@
+# The permissions of the Runner in a cluster fleet
+# (docs/requirements/12-cluster-fleet.md#cluster-least-privilege).
+#
+# The Role is namespaced and carries no namespace of its own: it is applied
+# to the namespace the Runner runs in, which is where its Pools live (KF-040).
+# Nodes are cluster-scoped, so reading them takes the ClusterRole below. The
+# bindings to the Runner's ServiceAccount belong with the Runner's Deployment.
+#
+# internal/poolmgr/kube is tested with exactly these rules: its tests bind
+# this file to the user the backend runs as, so a call the backend makes
+# outside them fails the test suite rather than a deployment.
+
+#= docs/requirements/12-cluster-fleet.md#cluster-least-privilege
+#/ The Runner SHALL operate with a Role in its own namespace
+#/ limited to managing ReplicaSets, reading, updating and deleting pods and
+#/ creating pod exec sessions, and with read access to Nodes.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: flintlock-runner
+  labels:
+    app.kubernetes.io/name: flintlock-runner
+rules:
+  # A Pool is a ReplicaSet (KF-040): declared, resized, given a new template
+  # and, at teardown only, deleted.
+  - apiGroups: ["apps"]
+    resources: ["replicasets"]
+    verbs: ["get", "list", "watch", "create", "update", "delete"]
+  # A claim is an update of a pod (KF-044), a heartbeat a patch of its lease
+  # annotation (KF-047) and a release its deletion (KF-048); the available
+  # count comes from a watch (KF-049). The Runner never creates a pod: the
+  # ReplicaSet controller does.
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["get", "list", "watch", "update", "patch", "delete"]
+  # The kube-exec Guest Transport runs each Stage through the exec
+  # subresource of the claimed pod (KF-060). Both verbs are needed: the API
+  # server authorises a WebSocket exec as a get and an SPDY one as a create.
+  - apiGroups: [""]
+    resources: ["pods/exec"]
+    verbs: ["create", "get"]
+---
+# The Host Service addresses of a Job are annotations of the Virtual Node it
+# was placed on (KF-062).
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: flintlock-runner-nodes
+  labels:
+    app.kubernetes.io/name: flintlock-runner
+rules:
+  - apiGroups: [""]
+    resources: ["nodes"]
+    verbs: ["get", "list", "watch"]

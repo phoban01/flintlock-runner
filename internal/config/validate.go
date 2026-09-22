@@ -7,6 +7,7 @@ import (
 	"net/url"
 	"path"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -188,7 +189,7 @@ func Validate(c *Config) error {
 	v.gitlab(&c.GitLab)
 	v.profiles(c)
 	v.inventory(c)
-	v.poolManager(&c.PoolManager)
+	v.poolManager(c)
 	v.scheduler(&c.Scheduler)
 	v.executor(&c.Executor)
 	v.fleet(c.Fleet)
@@ -425,6 +426,11 @@ func (v *validator) poolSettings(f string, ps *PoolSettings) {
 func (v *validator) inventory(c *Config) {
 	hosts := c.Inventory.Hosts
 	if len(hosts) == 0 {
+		// The Kubernetes pool backend reaches no Host (KF-063): its Hosts
+		// are the cluster's Virtual Nodes, so there is nothing to list.
+		if c.PoolManager.IsKubernetes() {
+			return
+		}
 		v.errorf("inventory", "at least one Host is required, inline under inventory.hosts or in the file named by inventory.file")
 		return
 	}
@@ -486,11 +492,30 @@ func (v *validator) inventory(c *Config) {
 //# interval, an events poll interval, a pool declaration retry interval and a
 //# release retry limit.
 
-func (v *validator) poolManager(pm *PoolManager) {
+func (v *validator) poolManager(c *Config) {
+	pm := &c.PoolManager
+	switch pm.Backend {
+	case "", PoolBackendBattery:
+		if pm.Kubernetes != nil {
+			v.errorf("pool_manager.kubernetes", "is only read with pool_manager.backend %q", PoolBackendKubernetes)
+		}
+	case PoolBackendKubernetes:
+		v.kubernetesPools(c)
+	default:
+		v.errorf("pool_manager.backend", "must be %q or %q, got %q", PoolBackendBattery, PoolBackendKubernetes, pm.Backend)
+	}
 	//= docs/requirements/07-configuration.md#pool-manager-section
 	//# If the Pool Manager section is absent or has no endpoint, then the
 	//# Runner SHALL reject the configuration.
-	if strings.TrimSpace(pm.Endpoint) == "" {
+	//
+	// The Kubernetes pool backend has no battery endpoint to name; one that
+	// is given anyway is still checked, so that a typo does not pass
+	// silently.
+	if pm.IsKubernetes() {
+		if strings.TrimSpace(pm.Endpoint) != "" {
+			v.hostPort("pool_manager.endpoint", pm.Endpoint)
+		}
+	} else if strings.TrimSpace(pm.Endpoint) == "" {
 		v.errorf("pool_manager.endpoint", "is required; the pool_manager section has to name the battery endpoint")
 	} else {
 		v.hostPort("pool_manager.endpoint", pm.Endpoint)
@@ -503,6 +528,57 @@ func (v *validator) poolManager(pm *PoolManager) {
 	v.positive("pool_manager.events_poll_interval", pm.EventsPollInterval)
 	v.positive("pool_manager.declare_retry_interval", pm.DeclareRetryInterval)
 	v.nonNegativeInt("pool_manager.release_retry_limit", pm.ReleaseRetryLimit)
+}
+
+// dnsLabel is an RFC 1123 label, which is what a Kubernetes namespace is, and
+// dnsSubdomain a dot-separated series of them, which is what a ConfigMap
+// name is.
+var (
+	dnsLabel     = regexp.MustCompile(`^[a-z0-9]([-a-z0-9]{0,61}[a-z0-9])?$`)
+	dnsSubdomain = regexp.MustCompile(`^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$`)
+)
+
+// kubernetesPools checks the settings of the Kubernetes pool backend. The
+// section itself may be absent: every setting has a default, and an empty
+// kubeconfig path means the Runner's own pod (KF-080).
+func (v *validator) kubernetesPools(c *Config) {
+	k := c.PoolManager.Kubernetes
+	if k == nil {
+		return
+	}
+	const f = "pool_manager.kubernetes"
+	if k.Kubeconfig != "" {
+		v.absPath(f+".kubeconfig", k.Kubeconfig)
+	} else if k.Context != "" {
+		v.errorf(f+".context", "needs %s.kubeconfig; the in-cluster configuration has no contexts", f)
+	}
+	if k.Namespace != "" && !dnsLabel.MatchString(k.Namespace) {
+		v.errorf(f+".namespace", "must be a Kubernetes namespace name (an RFC 1123 label), got %q", k.Namespace)
+	}
+	v.positive(f+".job_timeout", k.JobTimeout)
+	// The active deadline of a pod is in whole seconds (KF-044).
+	if k.JobTimeout > 0 && k.JobTimeout < time.Second {
+		v.errorf(f+".job_timeout", "must be at least one second, got %s", k.JobTimeout)
+	}
+	v.positive(f+".rollout_interval", k.RolloutInterval)
+	profiles := map[string]bool{}
+	for _, p := range c.Profiles {
+		profiles[p.Name] = true
+	}
+	names := make([]string, 0, len(k.CloudInitConfigMaps))
+	for name := range k.CloudInitConfigMaps {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	for _, name := range names {
+		field := fmt.Sprintf("%s.cloud_init_config_maps[%s]", f, name)
+		if !profiles[name] {
+			v.errorf(field, "names no profile")
+		}
+		if cm := k.CloudInitConfigMaps[name]; len(cm) > 253 || !dnsSubdomain.MatchString(cm) {
+			v.errorf(field, "must be a ConfigMap name (an RFC 1123 subdomain), got %q", cm)
+		}
+	}
 }
 
 //= docs/requirements/07-configuration.md#scheduler-section
