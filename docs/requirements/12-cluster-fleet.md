@@ -349,9 +349,12 @@ would need credentials for it.
 - **KF-135** The Fleet Manifests SHALL run the Pod Provider's container as
   the user id that HI-063 admits to the local `flintlockd` endpoint, and
   SHALL run no other container of the Host Agent as that user id.
-- **KF-138** The Fleet Manifests SHALL extend the policy of KF-133 to the
-  node Leases in `kube-node-lease`, so that a Pod Provider can create, update
-  or delete only the Lease of its own Virtual Node.
+- **KF-138** (withdrawn) Node Leases belong to the Virtual Nodes, which the
+  cluster fleet no longer uses after the change to battery's claim resources
+  of 2026-09-22; it was never implemented.
+- **KF-139** The Fleet Manifests SHALL run the `buildkitd` container of the
+  Host Agent in the `container_engine_t` SELinux domain, and SHALL NOT name a
+  domain for any other container.
 
 KF-031 checks who a client is; KF-130 checks what that client may do, as a
 real kubelet does. Without it any certificate from the kubelet client
@@ -366,10 +369,18 @@ bound ServiceAccount token, whose user information carries the name of the
 node the Host Agent pod runs on
 (`authentication.kubernetes.io/node-name`), compared in the policy with the
 object's node; the Virtual Node's name is that node's name with the
-`-microvms` suffix of KF-010. KF-138 closes the same door on the node Leases
-the Pod Providers renew: a Host that could delete or stop renewing another
-Host's Lease would make that Virtual Node unready, and the cluster would
-then evict the Jobs running on it.
+`-microvms` suffix of KF-010.
+
+KF-139 is the one exception to the container domain HI-066 assigns.
+Rootless `buildkitd` runs every `RUN` step of a Job's image build as a
+container of its own, and each step mounts a fresh `devpts`, which the
+ordinary container domain may not do, so under enforcing SELinux every build
+step would be refused. `container_engine_t` is the domain the base policy
+provides for exactly this, a container engine inside a container: it may
+create user namespaces and mount what a nested container needs, and it is
+still confined, with no access to the Host's files beyond those labelled for
+containers. Naming it for `buildkitd` alone keeps every other Host Service
+in the ordinary domain.
 
 KF-135 and HI-063 close the last way round KF-031: `flintlockd` has no
 authentication of its own, and a loopback listener is reachable by every
