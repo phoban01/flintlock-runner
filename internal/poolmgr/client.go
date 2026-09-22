@@ -35,6 +35,13 @@ const (
 	defaultReconnectBase    = time.Second
 	defaultReconnectMax     = 30 * time.Second
 	defaultCallDeadline     = 10 * time.Second
+	// minConnectTimeout is the least time one connection attempt gets to
+	// finish its TCP, TLS and HTTP/2 handshake: grpc-go's own default. With
+	// WithConnectParams the attempt deadline is MinConnectTimeout or the
+	// current backoff, whichever is longer, so a small ReconnectMax would
+	// otherwise cut a handshake short on a busy machine and leave the client
+	// retrying a connection it had nearly made.
+	minConnectTimeout = 20 * time.Second
 )
 
 // ClientConfig is what NewClient needs to reach one Pool Manager. It is
@@ -134,7 +141,7 @@ func NewClient(cfg ClientConfig) (Client, error) {
 				Jitter:     backoff.DefaultConfig.Jitter,
 				MaxDelay:   cfg.ReconnectMax,
 			},
-			MinConnectTimeout: cfg.ReconnectMax,
+			MinConnectTimeout: max(cfg.ReconnectMax, minConnectTimeout),
 		}),
 		grpc.WithChainUnaryInterceptor(deadlineInterceptor(cfg.Deadline)),
 	}
