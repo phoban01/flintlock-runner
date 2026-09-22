@@ -8,8 +8,15 @@
 // flintlock reports no address the Runner could connect to (EX-048), so
 // both reach the guest through the Host that runs it.
 //
+// A cluster fleet has a third, kube-exec
+// (docs/requirements/12-cluster-fleet.md#kube-exec-transport), which reaches
+// no Host at all: it opens the exec subresource of the claimed pod through
+// the Kubernetes API, and the Pod Provider on the pod's Virtual Node relays
+// the session to MicroVMExec on its local flintlockd (KF-060, KF-063).
+//
 // The Executor depends only on Transport and Factory, so its unit tests use a
 // recording fake and never open a stream. The exec implementation depends
 // only on flintlock.ExecStream, so its framing tests use a scripted stream
-// and never open a connection.
+// and never open a connection. The kube-exec tests run against a real API
+// server and the real Pod Provider, which kubeexectest starts.
 package transport
