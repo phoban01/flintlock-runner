@@ -28,8 +28,11 @@ const (
 	// DefaultNotReadyDir is the directory of the not-ready-reason contract
 	// (KF-016); see ReadNotReadyReasons.
 	DefaultNotReadyDir = "/run/flr/not-ready.d"
-	// DefaultListen is the kubelet API port.
-	DefaultListen = ":10250"
+	// DefaultListen is the address of the Pod Provider's kubelet API. The
+	// Pod Provider runs in the Host's network namespace, where the Host's own
+	// kubelet already holds 10250, so it takes 10260, the Pod Provider port
+	// of the Host Image's control ports.
+	DefaultListen = ":10260"
 	// DefaultLeaseDuration is how old a claimed pod's lease may grow before
 	// the pod is deleted (KF-032).
 	DefaultLeaseDuration = 2 * time.Minute
@@ -77,7 +80,8 @@ type Config struct {
 	// NotReadyDir is the directory the Host Image's units write not ready
 	// reasons to (KF-016).
 	NotReadyDir string `yaml:"not_ready_dir"`
-	// Listen is the address of the kubelet API (KF-030).
+	// Listen is the address of the kubelet API (KF-030), DefaultListen
+	// when empty.
 	Listen string `yaml:"listen"`
 	// TLS is the kubelet API's serving material (KF-031). All three files
 	// are required: there is no mode that serves without client

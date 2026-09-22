@@ -179,6 +179,11 @@ func TestConfigValidation(t *testing.T) {
 			cfg.Flintlockd != DefaultFlintlockd || cfg.DrainTimeout != DefaultDrainTimeout {
 			t.Errorf("unexpected configuration: %+v", cfg)
 		}
+		// The Host's own kubelet holds 10250 in the network namespace the
+		// Pod Provider shares with it.
+		if cfg.Listen != ":10260" {
+			t.Errorf("listen defaults to %q, want :10260", cfg.Listen)
+		}
 		if err := os.WriteFile(path, []byte(body+"surprise: true\n"), 0o600); err != nil {
 			t.Fatal(err)
 		}

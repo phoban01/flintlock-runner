@@ -27,7 +27,9 @@ not_ready_dir: /run/flr/not-ready.d
 
 # The kubelet API (KF-030, KF-031). 10250 is the Host's own kubelet; 10260 is
 # the Pod Provider's port in the Host Image's HOST_CONTROL_PORTS, which the
-# guest firewall closes to guests (HI-034).
+# guest firewall closes to guests (HI-034). It is also the Pod Provider's
+# default; it is set here so that the port and the Host Image stay visibly
+# in step.
 listen: :10260
 tls:
   # The serving certificate: the Secret flintlock-pod-provider-serving,
