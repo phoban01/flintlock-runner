@@ -56,7 +56,7 @@ func runKubelet(c *cli.Context) error {
 		return cli.NewExitError(err.Error(), exitInvalidConfig)
 	}
 
-	restConfig, err := kubeRESTConfig(cfg.Kubeconfig)
+	restConfig, err := providerRESTConfig(cfg.Kubeconfig)
 	if err != nil {
 		return cli.NewExitError(fmt.Sprintf("kubelet: %v", err), 1)
 	}
@@ -80,8 +80,9 @@ func runKubelet(c *cli.Context) error {
 	return nil
 }
 
-// kubeRESTConfig is the in-cluster configuration, or a kubeconfig's.
-func kubeRESTConfig(kubeconfig string) (*rest.Config, error) {
+// providerRESTConfig is the Pod Provider's client configuration: the in-cluster
+// one, or a kubeconfig's.
+func providerRESTConfig(kubeconfig string) (*rest.Config, error) {
 	if kubeconfig == "" {
 		return rest.InClusterConfig()
 	}
