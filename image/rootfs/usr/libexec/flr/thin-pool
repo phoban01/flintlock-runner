@@ -1,0 +1,189 @@
+#!/usr/bin/bash
+# flr-thin-pool.service: the containerd devicemapper thin pool, created once
+# and then left alone. Ported from thin_pool.sh.tmpl and
+# resolve_thin_pool_device in internal/fleet/scripts/templates.
+FLR_UNIT=flr-thin-pool
+# shellcheck source=image/rootfs/usr/libexec/flr/lib.sh
+. "${FLR_LIB:-/usr/libexec/flr/lib.sh}"
+load_host_env
+
+vg=$FLR_VG
+INSTANCE_STORE_MODEL='Instance Storage'
+
+#= docs/requirements/11-host-image.md#image-storage
+#/ If the thin pool already exists at boot, then the Host Image
+#/ SHALL NOT recreate it or wipe its device.
+# lv_attr starting with "t" is a thin pool. Nothing below this block runs on
+# a Host that has one, so a reboot or a `bootc upgrade` keeps the pool, the
+# pulled images in it and the device under it.
+if lvs --noheadings -o lv_attr "$vg/thinpool" 2>/dev/null | grep -q '^ *t'; then
+  lvchange -ay "$vg/thinpool" >/dev/null 2>&1 || true
+  ready
+  log "thin pool $vg/thinpool exists; leaving it and its device untouched"
+  exit 0
+fi
+
+# backs_pool DEV: DEV is already a physical volume of the thin pool's group.
+backs_pool() {
+  [ "$(pvs --noheadings -o vg_name "$1" 2>/dev/null | tr -d ' ')" = "$vg" ]
+}
+
+# root_disks prints the whole disks under the operating system's own
+# filesystems. On a bootc host / is a composefs overlay with no block device
+# behind its SOURCE, so the physical root is looked up at /sysroot as well.
+root_disks() {
+  local m src pk
+  for m in / /sysroot /boot /boot/efi /var /etc /usr; do
+    src=$(findmnt -no SOURCE "$m" 2>/dev/null | head -n1 || true)
+    src=${src%%\[*}
+    is_block "$src" || continue
+    # Walk up through partitions, LVM and dm-crypt to the disk itself.
+    lsblk -nrso NAME,TYPE "$src" 2>/dev/null | awk -v dev="$FLR_DEV" '$2 == "disk" { print dev "/" $1 }'
+    pk=$(lsblk -no PKNAME "$src" 2>/dev/null | head -n1 || true)
+    if [ -n "$pk" ]; then echo "$FLR_DEV/$pk"; fi
+  done | sort -u
+}
+
+#= docs/requirements/11-host-image.md#image-storage
+#/ The Host Image SHALL NOT select a device that holds a mounted
+#/ filesystem or the root volume, and SHALL treat a device that already backs
+#/ the thin pool as the thin pool device rather than as in use.
+# in_use DEV prints why DEV cannot become the thin pool device, or nothing.
+# The order matters, and is the lesson of pull request #43: a disk that
+# carries the pool's own LVM structures has holders and, once the cache
+# volume is mounted, a mounted filesystem too, so membership of the pool's
+# volume group is decided first and ends the question.
+in_use() {
+  local dev=$1 r
+  backs_pool "$dev" && return 0
+  for r in $(root_disks); do
+    [ "$(readlink -f "$dev")" = "$(readlink -f "$r")" ] && {
+      echo "it holds the root volume"
+      return 0
+    }
+  done
+  # No -d here: the mount points of every partition and holder count.
+  if lsblk -nro MOUNTPOINTS "$dev" 2>/dev/null | grep -q .; then
+    echo "it holds a mounted filesystem or swap"
+    return 0
+  fi
+  if findmnt -rn -S "$dev" >/dev/null 2>&1; then
+    echo "it is mounted"
+    return 0
+  fi
+}
+
+# blank DEV: no filesystem, partition table or other signature. Only a blank
+# device becomes a physical volume; anything else is refused, never wiped.
+blank() {
+  [ -z "$(blkid -p -o value -s TYPE "$1" 2>/dev/null || true)" ] &&
+    [ -z "$(blkid -p -o value -s PTTYPE "$1" 2>/dev/null || true)" ]
+}
+
+# whole_disks prints every whole disk. -d/--nodeps: without it lsblk walks
+# the dependency tree and a disk already carrying LVM structures prints one
+# line per holder instead of just "disk".
+whole_disks() {
+  local d
+  for d in "$FLR_DEV"/nvme*n1 "$FLR_DEV"/sd? "$FLR_DEV"/vd? "$FLR_DEV"/xvd?; do
+    is_block "$d" || continue
+    [ "$(lsblk -dno TYPE "$d" 2>/dev/null)" = disk ] || continue
+    echo "$d"
+  done
+}
+
+# detect prints the device to use when the Host configuration names none: a
+# disk that already backs the pool's volume group, or else the first
+# instance-store disk that is unused and blank. EBS volumes are never
+# detected, only named.
+detect() {
+  local d
+  for d in $(whole_disks); do
+    backs_pool "$d" && {
+      echo "$d"
+      return 0
+    }
+  done
+  for d in $(whole_disks); do
+    case "$(lsblk -dno MODEL "$d" 2>/dev/null)" in
+    *"$INSTANCE_STORE_MODEL"*) ;;
+    *) continue ;;
+    esac
+    [ -z "$(in_use "$d")" ] || continue
+    blank "$d" || continue
+    echo "$d"
+    return 0
+  done
+}
+
+# resolve_named DEV prints the device to use for a named device. AWS does
+# not guarantee that NVMe device naming matches attachment order on Nitro
+# instances, so a name fixed in the configuration can land on the root disk.
+# Exactly that case is detected, and the one other unused whole NVMe disk
+# substituted when there is exactly one; anything less clear-cut is refused
+# rather than guessed.
+resolve_named() {
+  local dev=$1 why d candidates="" n=0
+  why=$(in_use "$dev")
+  if [ -z "$why" ]; then
+    echo "$dev"
+    return 0
+  fi
+  if [ "$why" != "it holds the root volume" ]; then
+    refuse "no thin pool device is available: $dev cannot be used because $why"
+  fi
+  for d in "$FLR_DEV"/nvme*n1; do
+    is_block "$d" || continue
+    [ "$(lsblk -dno TYPE "$d" 2>/dev/null)" = disk ] || continue
+    [ -z "$(in_use "$d")" ] || continue
+    candidates="$candidates $d"
+    n=$((n + 1))
+  done
+  if [ "$n" -ne 1 ]; then
+    refuse "no thin pool device is available: $dev is the root disk and $n other unused NVMe disks exist; refusing to guess"
+  fi
+  log "$dev is this instance's root disk; using${candidates} instead"
+  echo "${candidates# }"
+}
+
+#= docs/requirements/11-host-image.md#image-storage
+#/ The Host Image SHALL create the containerd devicemapper thin
+#/ pool at boot on the block device named in the Host configuration file, or,
+#/ when none is named, on the unused instance-store device it detects.
+dev=$FLR_THIN_POOL_DEVICE
+if [ -n "$dev" ]; then
+  # A named EBS volume can attach a moment after boot.
+  for _ in $(seq 1 "${FLR_DEVICE_WAIT:-30}"); do
+    is_block "$dev" && break
+    sleep 1
+  done
+  is_block "$dev" || refuse "no thin pool device is available: $dev, named in the Host configuration, is not a block device"
+  dev=$(resolve_named "$dev")
+else
+  dev=$(detect)
+  #= docs/requirements/11-host-image.md#image-storage
+  #/ If no device is named and none is detected, then the Host Image
+  #/ SHALL NOT start `flintlockd` and SHALL report the Host as not ready with
+  #/ the reason that no thin pool device is available.
+  [ -n "$dev" ] || refuse "no thin pool device is available: none is named in the Host configuration and no unused instance-store device was detected"
+fi
+
+if ! backs_pool "$dev"; then
+  if ! pvs "$dev" >/dev/null 2>&1; then
+    blank "$dev" || refuse "no thin pool device is available: $dev is not blank; refusing to create a thin pool on it"
+    pvcreate -q "$dev"
+  fi
+  vgs "$vg" >/dev/null 2>&1 || vgcreate -q "$vg" "$dev"
+  backs_pool "$dev" || refuse "no thin pool device is available: volume group $vg exists on another device than $dev"
+fi
+
+# 1% metadata, the cache volume's share and 4% headroom for autoextension
+# stay out of the pool.
+pool_percent=$((95 - FLR_CACHE_VOLUME_PERCENT))
+lvs "$vg/thinpool" >/dev/null 2>&1 || lvcreate -q -y -n thinpool "$vg" -l "${pool_percent}%VG"
+lvs "$vg/thinpoolmeta" >/dev/null 2>&1 || lvcreate -q -y -n thinpoolmeta "$vg" -l 1%VG
+lvconvert -q -y --zero n -c 512K --thinpool "$vg/thinpool" --poolmetadata "$vg/thinpoolmeta"
+# /etc/lvm/profile/flintlock-thinpool.profile ships in the image.
+lvchange -q --metadataprofile "$vg-thinpool" "$vg/thinpool" || log "could not attach the autoextend profile"
+ready
+log "created thin pool $vg/thinpool on $dev"

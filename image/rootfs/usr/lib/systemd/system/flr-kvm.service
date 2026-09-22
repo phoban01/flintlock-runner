@@ -1,0 +1,18 @@
+#= docs/requirements/11-host-image.md#kernel-and-kvm
+#/ If `/dev/kvm` is absent or unusable at boot, then the Host Image
+#/ SHALL NOT start `flintlockd` and SHALL report the Host as not ready with
+#/ the reason that KVM is unavailable.
+# flintlockd.service Requires= this unit, so its failure is what keeps
+# flintlockd down; the reason is in /run/flr/not-ready.d/flr-kvm.
+[Unit]
+Description=flintlock-runner KVM gate
+Documentation=https://github.com/phoban01/flintlock-runner/blob/main/image/README.md
+After=systemd-modules-load.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/libexec/flr/kvm-gate
+
+[Install]
+WantedBy=multi-user.target

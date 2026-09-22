@@ -1,0 +1,21 @@
+#= docs/requirements/11-host-image.md#host-configuration
+#/ The Host Image SHALL read per-Host settings from one Host
+#/ configuration file that cloud-init writes at first boot, containing the
+#/ guest subnet, the thin pool device, the protected CIDRs and the Host
+#/ reserve.
+# cloud-init's write_files module runs in its network stage, which is
+# cloud-init.service before cloud-init 25 and cloud-init-network.service
+# from then on. Ordering after a unit that does not exist is harmless.
+[Unit]
+Description=flintlock-runner Host configuration
+Documentation=https://github.com/phoban01/flintlock-runner/blob/main/image/README.md
+After=cloud-init-local.service cloud-init.service cloud-init-network.service
+ConditionPathExists=/usr/share/flr/host.conf.defaults
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/libexec/flr/host-config
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,26 @@
+policy_module(flr, 1.0.0)
+
+# The Host Image's SELinux policy module. See "SELinux" in image/README.md.
+#
+#= docs/requirements/11-host-image.md#kernel-and-kvm
+#/ Where a component cannot run under the base image's SELinux
+#/ policy, the Host Image SHALL ship a policy module that relaxes confinement
+#/ for that component's domain only.
+#
+# The one component the base policy stops is dnsmasq. It runs confined as
+# dnsmasq_t, and the base policy lets that domain read its configuration
+# from /etc/dnsmasq.conf and /etc/dnsmasq.d only. The Host Image generates
+# the configuration at every boot from the Host configuration file and keeps
+# it in /run/flr with the rest of its runtime state, which dnsmasq_t may not
+# read. This module gives /run/flr a type of its own and lets dnsmasq_t read
+# it, and changes nothing for any other domain.
+
+gen_require(`
+	type dnsmasq_t;
+')
+
+type flr_run_t;
+files_pid_file(flr_run_t)
+
+allow dnsmasq_t flr_run_t:dir { getattr search open read };
+allow dnsmasq_t flr_run_t:file { getattr open read ioctl lock };

@@ -1,0 +1,19 @@
+#= docs/requirements/11-host-image.md#image-storage
+#/ The Host Image SHALL create the Host Service cache directory on
+#/ instance-store storage and SHALL keep all `flintlockd` and containerd
+#/ state under `/var`.
+# Before=kubelet.service because the Host Agent mounts the directory.
+[Unit]
+Description=flintlock-runner Host Service cache volume
+Documentation=https://github.com/phoban01/flintlock-runner/blob/main/image/README.md
+Requires=flr-thin-pool.service
+After=flr-thin-pool.service
+Before=kubelet.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/libexec/flr/cache-volume
+
+[Install]
+WantedBy=multi-user.target

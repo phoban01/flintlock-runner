@@ -1,0 +1,69 @@
+#!/usr/bin/bash
+# flr-kubelet-config.service: the kubelet arguments that are facts about this
+# image and this instance, written to /run/flr/kubelet.env before the
+# kubelet starts. kubelet.service.d/20-flr.conf appends them after kubeadm's
+# own arguments, so they win over a duplicate flag.
+FLR_UNIT=flr-kubelet-config
+# shellcheck source=image/rootfs/usr/libexec/flr/lib.sh
+. "${FLR_LIB:-/usr/libexec/flr/lib.sh}"
+load_host_env
+
+FLR_VERSIONS=${FLR_VERSIONS:-/usr/share/flr/versions.env}
+# shellcheck disable=SC1090
+. "$FLR_VERSIONS"
+
+# image_id prints a label-safe value derived from the digest of the booted
+# container image: the first 32 hexadecimal digits of its sha256. A label
+# value holds at most 63 characters and no colon, so the digest itself
+# cannot be one.
+image_id() {
+  local digest=${FLR_IMAGE_DIGEST:-}
+  if [ -z "$digest" ]; then
+    digest=$(bootc status --format=json 2>/dev/null |
+      jq -r '.status.booted.image.imageDigest // empty' 2>/dev/null || true)
+  fi
+  digest=${digest#sha256:}
+  if [[ $digest =~ ^[0-9a-f]{64}$ ]]; then
+    echo "${digest:0:32}"
+  else
+    echo unknown
+  fi
+}
+
+#= docs/requirements/11-host-image.md#kubernetes-node
+#/ The Host Image SHALL register its kubelet with the labels
+#/ `gitlab-runner.flintlock.dev/host` set to `true`,
+#/ `gitlab-runner.flintlock.dev/image` set to a value derived from the image
+#/ digest and one label per hypervisor carrying its pinned version.
+prefix=gitlab-runner.flintlock.dev
+labels="$prefix/host=true"
+labels="$labels,$prefix/image=$(image_id)"
+labels="$labels,$prefix/firecracker=$FIRECRACKER_VERSION"
+labels="$labels,$prefix/cloud-hypervisor=$CLOUD_HYPERVISOR_VERSION"
+
+#= docs/requirements/11-host-image.md#kubernetes-node
+#/ The Host Image SHALL configure the kubelet to reserve all CPU
+#/ and memory beyond the configured Host reserve, so that the Host's Node
+#/ offers only the Host reserve to pods and the Virtual Node of KF-012 offers
+#/ the rest to MicroVMs.
+# Allocatable is capacity minus the reservations, so reserving capacity
+# minus the Host reserve leaves the Host reserve. The reservation is
+# accounting only: nothing enforces it on a cgroup, which is right, because
+# the MicroVMs it stands for run outside the kubelet's cgroups.
+cpus=${FLR_CPUS:-$(nproc --all)}
+mem_kib=${FLR_MEM_KIB:-$(awk '$1 == "MemTotal:" { print $2 }' /proc/meminfo)}
+reserve_cpu_m=$(((cpus - FLR_HOST_RESERVE_VCPU) * 1000))
+reserve_mem_kib=$((mem_kib - FLR_HOST_RESERVE_MEMORY_MB * 1024))
+# A machine smaller than the Host reserve offers all of itself to pods.
+[ "$reserve_cpu_m" -gt 0 ] || reserve_cpu_m=0
+[ "$reserve_mem_kib" -gt 0 ] || reserve_mem_kib=0
+
+mkdir -p "$FLR_RUN"
+tmp=$(mktemp "$FLR_RUN/.kubelet.env.XXXXXX")
+cat >"$tmp" <<EOF
+# Written by flr-kubelet-config.service at every boot. Do not edit.
+FLR_KUBELET_ARGS=--node-labels=$labels --system-reserved=cpu=${reserve_cpu_m}m,memory=${reserve_mem_kib}Ki
+EOF
+chmod 0644 "$tmp"
+mv -f "$tmp" "$FLR_RUN/kubelet.env"
+log "labels $labels; reserving ${reserve_cpu_m}m CPU and ${reserve_mem_kib}Ki memory of $cpus CPUs and ${mem_kib}Ki"
