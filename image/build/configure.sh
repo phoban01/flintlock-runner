@@ -45,3 +45,6 @@ rm -rf /var/lib/cloud /var/lib/kubelet /etc/kubernetes/pki /root/.ssh
 rm -f /etc/kubernetes/*.conf
 : >/etc/machine-id
 rm -rf /var/cache/* /var/log/* /var/lib/dnf /tmp/*
+# Runtime-only directories stay empty in an image, and /var holds only what
+# tmpfiles.d recreates; systemctl above leaves a migration marker there.
+rm -rf /run/dnf /run/cloud-init /var/lib/systemd/migrated

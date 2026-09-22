@@ -64,8 +64,9 @@ COPY --from=selinux /src/flr.pp /usr/share/selinux/packages/flr.pp
 COPY build/configure.sh /tmp/flr-build/configure.sh
 RUN bash /tmp/flr-build/configure.sh && rm -rf /tmp/flr-build
 
-COPY build/bootc-lint.sh /tmp/flr-build/bootc-lint.sh
-RUN bash /tmp/flr-build/bootc-lint.sh && rm -rf /tmp/flr-build
+# Bind-mounted rather than copied: the linter itself flags anything left in
+# /tmp or /run.
+RUN --mount=type=bind,source=build/bootc-lint.sh,target=/flr-lint/bootc-lint.sh bash /flr-lint/bootc-lint.sh
 
 # ---------------------------------------------------------------------------
 # check: run the checks inside the built image.
