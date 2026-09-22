@@ -115,6 +115,21 @@ func TestFlintlockdEndpointHasToBeLocal(t *testing.T) {
 	})
 }
 
+// TestConfigAcceptsTheRunnersHostServiceNames checks that every Host
+// Service name the Runner reads (kubelabels) is one the provider accepts.
+func TestConfigAcceptsTheRunnersHostServiceNames(t *testing.T) {
+	t.Parallel()
+	cfg := validConfig()
+	cfg.BridgeGateway = "10.200.0.1"
+	cfg.HostServices = map[string]HostService{}
+	for i, name := range kubelabels.HostServiceNames() {
+		cfg.HostServices[name] = HostService{Enabled: true, Port: 3000 + i}
+	}
+	if err := cfg.Validate(); err != nil {
+		t.Errorf("Validate with every Host Service = %v", err)
+	}
+}
+
 func TestConfigValidation(t *testing.T) {
 	t.Parallel()
 	cases := map[string]func(*Config){
@@ -124,10 +139,21 @@ func TestConfigValidation(t *testing.T) {
 		"tls.client_ca_file": func(c *Config) { c.TLS.ClientCAFile = "" },
 		"tls.cert_file":      func(c *Config) { c.TLS.CertFile = "" },
 		"guard.namespace":    func(c *Config) { c.Guard.Namespace = "" },
-		"bridge_gateway":     func(c *Config) { c.HostServices = map[string]HostService{"goproxy": {Enabled: true, Port: 3000}} },
-		"host_services.goproxy.port": func(c *Config) {
+		"bridge_gateway": func(c *Config) {
+			c.HostServices = map[string]HostService{kubelabels.HostServiceGoProxy: {Enabled: true, Port: 3000}}
+		},
+		"host_services.go_proxy.port": func(c *Config) {
 			c.BridgeGateway = "10.200.0.1"
-			c.HostServices = map[string]HostService{"goproxy": {Enabled: true}}
+			c.HostServices = map[string]HostService{kubelabels.HostServiceGoProxy: {Enabled: true}}
+		},
+		// A name the Runner does not read, enabled or not, is a typo that
+		// would publish a service nobody uses.
+		"host_services.goproxy": func(c *Config) {
+			c.BridgeGateway = "10.200.0.1"
+			c.HostServices = map[string]HostService{"goproxy": {Enabled: true, Port: 3000}}
+		},
+		"host_services.registry": func(c *Config) {
+			c.HostServices = map[string]HostService{"registry": {Enabled: false, Port: 5000}}
 		},
 	}
 	for field, breakIt := range cases {
@@ -384,8 +410,8 @@ func TestReadinessChecks(t *testing.T) {
 		cfg.NotReadyDir = filepath.Join(t.TempDir(), "none")
 		cfg.BridgeGateway = "127.0.0.1"
 		cfg.HostServices = map[string]HostService{
-			"goproxy":  {Enabled: true, Port: port},
-			"registry": {Enabled: false, Port: 1}, // disabled: never probed
+			kubelabels.HostServiceGoProxy:        {Enabled: true, Port: port},
+			kubelabels.HostServiceRegistryMirror: {Enabled: false, Port: 1}, // disabled: never probed
 		}
 		return cfg
 	}
@@ -415,7 +441,7 @@ func TestReadinessChecks(t *testing.T) {
 
 	_ = listener.Close()
 	got := checkReadiness(ctx, newCfg(), newHost(flintlock.FakeHostConfig{ExecEnabled: true}).Client())
-	if got.ready || got.reason != reasonHostServiceDown || !strings.Contains(got.message, "goproxy") {
+	if got.ready || got.reason != reasonHostServiceDown || !strings.Contains(got.message, kubelabels.HostServiceGoProxy) {
 		t.Errorf("host service down: %+v", got)
 	}
 }

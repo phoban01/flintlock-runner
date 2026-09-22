@@ -47,11 +47,17 @@ func NewFactory(opts ...FactoryOption) Factory {
 type factory struct {
 	clk clock.Clock
 	log *slog.Logger
+	// kube is set by WithKubeExec; without it kube-exec is refused.
+	kube *kubeExec
 }
 
 //= docs/requirements/02-executor.md#guest-transport
 //# The Guest Transport SHALL be selectable per Profile from the
 //# implementations `exec` and `ssh`, with `exec` as the default.
+
+//= docs/requirements/12-cluster-fleet.md#kube-exec-transport
+//# Where the `kube-exec` Guest Transport is configured, the Runner
+//# SHALL NOT open any connection to a Host.
 
 // New implements Factory. The Target's Kind picks the implementation and an
 // empty Kind is exec, which is what a Profile that says nothing about its
@@ -59,8 +65,13 @@ type factory struct {
 // silent fallback. Nothing in the guest is contacted here: New only checks
 // that the Host serves the guest-agent service the chosen transport needs
 // (HO-012), so that a Job placed on a Host without it fails with a reason
-// instead of a stream error.
+// instead of a stream error. kube-exec is the exception: it reaches the
+// guest through the API server alone, so its Target has no Host client and
+// no Host is asked anything (KF-063).
 func (f *factory) New(ctx context.Context, target Target) (Transport, error) {
+	if target.Kind == KindKubeExec {
+		return f.newKubeExecTransport(target)
+	}
 	if target.Host == nil {
 		return nil, errors.New("transport: target has no host client")
 	}
@@ -80,8 +91,8 @@ func (f *factory) New(ctx context.Context, target Target) (Transport, error) {
 		}
 		return newSSHTransport(target, f.clk, f.log)
 	default:
-		return nil, fmt.Errorf("transport: unknown guest transport %q, expected %q or %q",
-			target.Kind, KindExec, KindSSH)
+		return nil, fmt.Errorf("transport: unknown guest transport %q, expected %q, %q or %q",
+			target.Kind, KindExec, KindSSH, KindKubeExec)
 	}
 }
 

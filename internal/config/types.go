@@ -202,15 +202,18 @@ type Volume struct {
 // TransportKind names a Guest Transport implementation (EX-042).
 type TransportKind string
 
-// The Guest Transport implementations. Exec is the default.
+// The Guest Transport implementations. Exec is the default, and kube-exec
+// the default and only choice with the Kubernetes pool backend (KF-128).
 const (
-	TransportExec TransportKind = "exec"
-	TransportSSH  TransportKind = "ssh"
+	TransportExec     TransportKind = "exec"
+	TransportSSH      TransportKind = "ssh"
+	TransportKubeExec TransportKind = "kube-exec"
 )
 
 // Transport is a Profile's Guest Transport selection (EX-042).
 type Transport struct {
-	// Kind is exec or ssh; default exec.
+	// Kind is exec or ssh; default exec. With the Kubernetes pool backend
+	// it is kube-exec, which is also its default there (KF-128).
 	Kind TransportKind `yaml:"kind"`
 	// SSH is read only when Kind is ssh.
 	SSH SSHTransport `yaml:"ssh,omitempty"`

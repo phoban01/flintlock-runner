@@ -6,12 +6,15 @@ import (
 	"fmt"
 	"net"
 	"os"
+	"slices"
 	"sort"
 	"strings"
 	"time"
 
 	"gopkg.in/yaml.v3"
 	"k8s.io/apimachinery/pkg/api/resource"
+
+	"github.com/phoban01/flintlock-runner/internal/kubelabels"
 )
 
 // Defaults of the Pod Provider's configuration.
@@ -205,6 +208,21 @@ func (c *Config) Validate() error {
 	}
 	if c.MaxMicroVMs <= 0 {
 		fail("max_microvms", "has to be positive")
+	}
+	// A Host Service is published under its name and the Runner reads it by
+	// the same name (KF-017, KF-062), so a name the Runner does not know
+	// would be published and never read; refusing it makes a typo fail at
+	// start.
+	known := kubelabels.HostServiceNames()
+	names := make([]string, 0, len(c.HostServices))
+	for name := range c.HostServices {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	for _, name := range names {
+		if !slices.Contains(known, name) {
+			fail("host_services."+name, "is not a Host Service; the names are %s", strings.Join(known, ", "))
+		}
 	}
 	enabled := c.EnabledHostServices()
 	if len(enabled) > 0 && net.ParseIP(c.BridgeGateway) == nil {
