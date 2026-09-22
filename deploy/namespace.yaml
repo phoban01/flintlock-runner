@@ -1,0 +1,10 @@
+# The namespace of the Runner, its Pools and the Host Agent. The name is
+# repeated in every namespaced object rather than set by a kustomize
+# `namespace:` transformer, because the Pod Provider's lease Role has to stay
+# in kube-node-lease (deploy/host-agent/rbac.yaml).
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: flintlock-system
+  labels:
+    app.kubernetes.io/part-of: flintlock-runner

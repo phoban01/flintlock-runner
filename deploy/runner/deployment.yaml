@@ -1,0 +1,135 @@
+# The Runner of a cluster fleet (docs/requirements/12-cluster-fleet.md,
+# section "Runner").
+#
+#= docs/requirements/12-cluster-fleet.md#cluster-runner
+#/ The Fleet Manifests SHALL run the Runner as a Deployment that
+#/ reads the Profiles from a ConfigMap and the GitLab runner token from a
+#/ Secret.
+#
+# The configuration, Profiles included, is the ConfigMap generated from
+# deploy/runner/config.yaml; the token is the key `token` of the Secret
+# flintlock-runner-gitlab-token, which the operator creates:
+#
+#   kubectl -n flintlock-system create secret generic \
+#     flintlock-runner-gitlab-token --from-literal=token=glrt-...
+#
+# The pod does not start without it.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: flintlock-runner
+  namespace: flintlock-system
+  labels:
+    app.kubernetes.io/name: flintlock-runner
+    app.kubernetes.io/component: runner
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: flintlock-runner
+      app.kubernetes.io/component: runner
+  # A rollout starts the new Runner before the old one is told to stop, and
+  # the old one keeps its running Jobs for the whole grace period below.
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: flintlock-runner
+        app.kubernetes.io/component: runner
+    spec:
+      serviceAccountName: flintlock-runner
+      # The Runner talks to the API server (KF-040 to KF-049, KF-060).
+      automountServiceAccountToken: true
+      #= docs/requirements/12-cluster-fleet.md#cluster-runner
+      #/ The Fleet Manifests SHALL give the Runner's pod a termination
+      #/ grace period no shorter than the configured job timeout, so that a rollout
+      #/ does not cut running Jobs short.
+      # Written by kustomize from deploy/runner/job-timeout.yaml, the same
+      # value as pool_manager.kubernetes.job_timeout and
+      # gitlab.shutdown_timeout. The number here is only what an unrendered
+      # read of this file shows.
+      terminationGracePeriodSeconds: 10800
+      #= docs/requirements/12-cluster-fleet.md#cluster-runner
+      #/ The Fleet Manifests SHALL NOT schedule the Runner onto Hosts.
+      # Hosts carry the label of HI-060, and their Virtual Nodes the label of
+      # KF-013; the Runner requires a node with neither. There is also no
+      # toleration below for the Host taint of KF-002 or the MicroVM taint of
+      # KF-014, so both taints keep it off as well.
+      affinity:
+        nodeAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+              - matchExpressions:
+                  - key: gitlab-runner.flintlock.dev/host
+                    operator: DoesNotExist
+                  - key: gitlab-runner.flintlock.dev/virtual-node
+                    operator: DoesNotExist
+                  - key: kubernetes.io/os
+                    operator: In
+                    values: [linux]
+      # 65532 is the flr image's own user, set numerically there.
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        runAsGroup: 65532
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: runner
+          image: ghcr.io/phoban01/flintlock-runner/flr:dev
+          args: [--config, /etc/flintlock-runner/config.yaml, run]
+          env:
+            - name: FLINTLOCK_RUNNER_GITLAB_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: flintlock-runner-gitlab-token
+                  key: token
+          ports:
+            - name: metrics
+              containerPort: 9252
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: metrics
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: metrics
+            periodSeconds: 20
+            failureThreshold: 6
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              memory: 512Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: [ALL]
+          volumeMounts:
+            - name: config
+              mountPath: /etc/flintlock-runner
+              readOnly: true
+            # state_dir of config.yaml: the persistent system identifier
+            # (GL-012) lives for the pod.
+            - name: state
+              mountPath: /var/lib/flintlock-runner
+            # The flr image is scratch and has no /tmp, and gitlab-runner
+            # buffers every job's trace in a temporary file.
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: config
+          configMap:
+            name: flintlock-runner-config
+        - name: state
+          emptyDir: {}
+        - name: tmp
+          emptyDir: {}

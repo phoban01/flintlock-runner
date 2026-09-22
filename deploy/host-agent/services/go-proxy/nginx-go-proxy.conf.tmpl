@@ -1,0 +1,33 @@
+# The Go module proxy's front, rendered on each Host by render.sh; ported
+# from internal/fleet/scripts/templates/host_services.sh.tmpl.
+worker_processes 2;
+pid /tmp/nginx.pid;
+error_log /dev/stderr warn;
+
+events {
+    worker_connections 1024;
+}
+
+http {
+    access_log /dev/stdout;
+    client_body_temp_path /tmp/client_temp;
+    proxy_temp_path /tmp/proxy_temp;
+    fastcgi_temp_path /tmp/fastcgi_temp;
+    uwsgi_temp_path /tmp/uwsgi_temp;
+    scgi_temp_path /tmp/scgi_temp;
+@BLOCK:goproxy-private-cache-path@
+
+    server {
+        # KF-071: the guest bridge gateway only.
+        listen @BRIDGE_GATEWAY@:3000;
+        # SE-057: whatever credential a Job sends is dropped here; the proxy
+        # fetches with the fleet's credential only.
+        proxy_set_header Authorization "";
+        proxy_set_header Cookie "";
+@BLOCK:goproxy-private-location@
+
+        location / {
+            proxy_pass http://127.0.0.1:3999;
+        }
+    }
+}

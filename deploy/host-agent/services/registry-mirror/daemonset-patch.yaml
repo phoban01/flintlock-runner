@@ -1,0 +1,91 @@
+# The registry mirror's containers in the Host Agent.
+#
+#= docs/requirements/12-cluster-fleet.md#cluster-host-agent
+#/ The Host Agent SHALL configure each Host Service as FL-102 to
+#/ FL-107, FL-114 and FL-115 require.
+# zot.json.tmpl is data.go's zotConfig: a pull-through cache with on-demand
+# sync from every upstream of registry-mirror.upstreams (FL-104), storage
+# under the cache directory (FL-107).
+#
+#= docs/requirements/12-cluster-fleet.md#cluster-host-agent
+#/ The Fleet Manifests SHALL supply the registry mirror's upstream
+#/ credentials and the Go module proxy's private module credential from
+#/ Kubernetes Secrets mounted only into the Host Agent.
+# The Secret flintlock-registry-mirror-credentials is mounted into the zot
+# container and no other.
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: flintlock-host-agent
+  namespace: flintlock-system
+spec:
+  template:
+    spec:
+      containers:
+        - name: registry-mirror
+          image: ghcr.io/project-zot/zot:v2.1.5@sha256:3497efd2ffb428d0463bae3d99f003097d7c4854c2d63506e9149ad73c80ce85
+          args: [serve, /etc/flr/rendered/zot.json]
+          # Unprivileged; the port is above 1024.
+          securityContext:
+            runAsUser: 10002
+            runAsGroup: 10002
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: [ALL]
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              memory: 1Gi
+          volumeMounts:
+            - name: rendered
+              mountPath: /etc/flr/rendered
+              readOnly: true
+            # KF-072: its own directory of the cache.
+            - name: cache
+              mountPath: /var/lib/flintlock-runner/cache/registry
+              subPath: registry
+            - name: registry-mirror-credentials
+              mountPath: /etc/flr/secrets/registry-mirror
+              readOnly: true
+            - name: registry-mirror-tmp
+              mountPath: /tmp
+        #= docs/requirements/12-cluster-fleet.md#cluster-host-agent
+        #/ The Host Agent SHALL pre-warm the Go module proxy and the
+        #/ registry mirror with the modules and images listed in the
+        #/ configuration.
+        # prewarm.sh asks the mirror on the bridge gateway for every image of
+        # prewarm.registry-mirror.images, which it syncs from upstream, then
+        # sleeps.
+        - name: prewarm-registry-mirror
+          image: busybox:1.37.0@sha256:9db7b59979c38555a39def84a31fb98b5296952f9e3afd4f6f11f05b07adfab0
+          command: [/bin/sh, /etc/flr/templates/prewarm.sh, registry-mirror]
+          securityContext:
+            runAsUser: 65534
+            runAsGroup: 65534
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: [ALL]
+          resources:
+            requests:
+              cpu: 10m
+              memory: 16Mi
+            limits:
+              memory: 64Mi
+          volumeMounts:
+            - name: templates
+              mountPath: /etc/flr/templates
+              readOnly: true
+            - name: rendered
+              mountPath: /etc/flr/rendered
+              readOnly: true
+      volumes:
+        - name: registry-mirror-credentials
+          secret:
+            secretName: flintlock-registry-mirror-credentials
+            defaultMode: 0444
+        - name: registry-mirror-tmp
+          emptyDir: {}

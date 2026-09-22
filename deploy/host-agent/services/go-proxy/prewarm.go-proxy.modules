@@ -1,0 +1,3 @@
+# KF-076: modules the Go module proxy fetches when the Host Agent starts,
+# one module@version per line.
+golang.org/x/mod@v0.17.0

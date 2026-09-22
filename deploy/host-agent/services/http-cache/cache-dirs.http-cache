@@ -1,0 +1,3 @@
+# path under the cache directory, and the user id that owns it: the
+# http-cache container's runAsUser in daemonset-patch.yaml.
+http 101

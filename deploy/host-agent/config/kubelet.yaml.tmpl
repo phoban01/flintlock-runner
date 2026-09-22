@@ -1,0 +1,51 @@
+# The Pod Provider's configuration (internal/kubelet/config.go), rendered on
+# each Host by render.sh into /etc/flr/rendered/kubelet.yaml. host_node is
+# not here: it is the Host's Node name, given by the downward API through
+# FLINTLOCK_RUNNER_HOST_NODE.
+
+# HI-042: flintlockd v0.15.1 listens on TCP only, so its local endpoint is a
+# loopback port, reached because the Host Agent runs in the Host's network
+# namespace (KF-018, KF-071).
+flintlockd: 127.0.0.1:9090
+microvm_namespace: flintlock-runner
+
+# KF-012 and HI-061: the same Host reserve the kubelet of the Host's Node
+# keeps, from the Host configuration file.
+host_reserve:
+  cpu: "@HOST_RESERVE_CPU@"
+  memory: "@HOST_RESERVE_MEMORY@"
+# The Virtual Node's pod limit. One value for every Host pool; size it for
+# the smallest instance type in the fleet.
+max_microvms: 16
+
+# Where every Host Service listens (KF-015, KF-017).
+bridge_gateway: "@BRIDGE_GATEWAY@"
+@BLOCK:kubelet-host-services@
+
+# KF-016: the Host Image's not-ready reasons, mounted read-only from the Host.
+not_ready_dir: /run/flr/not-ready.d
+
+# The kubelet API (KF-030, KF-031). 10250 is the Host's own kubelet; 10260 is
+# the Pod Provider's port in the Host Image's HOST_CONTROL_PORTS, which the
+# guest firewall closes to guests (HI-034).
+listen: :10260
+tls:
+  # The serving certificate: the Secret flintlock-pod-provider-serving,
+  # which the operator provides (deploy/host-agent/daemonset.yaml).
+  cert_file: /etc/flr/serving/tls.crt
+  key_file: /etc/flr/serving/tls.key
+  # The cluster's kubelet client certificate authority: by default the
+  # cluster CA of the kube-root-ca.crt ConfigMap, which is the one kubeadm
+  # signs the API server's kubelet client certificate with.
+  client_ca_file: /etc/flr/kubelet-client-ca/ca.crt
+
+lease_duration: 2m
+# KF-093. deploy/capi keeps the Machines' node drain timeout at least this
+# long (KF-004); `make manifests-check` compares the two.
+drain_timeout: 1h
+sync_interval: 2s
+
+guard:
+  namespace: flintlock-system
+  # KF-144: the drain guard pod's image, pinned by digest.
+  image: registry.k8s.io/pause:3.10@sha256:ee6521f290b2168b6e0935a181d4cff9be1ac3f505666ef0e3c98fae8199917a

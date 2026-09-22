@@ -1,0 +1,3 @@
+  registry_mirror:
+    enabled: true
+    port: 5000
