@@ -195,9 +195,9 @@ same failure.
   SHALL record the claimed pod's Virtual Node as the Placement without
   looking it up in the Inventory, and SC-034 SHALL NOT apply.
 - **KF-127** When claiming for a Job, the Scheduler SHALL pass the Job's own
-  timeout to the Kubernetes pool backend as the Job timeout of KF-044, and
-  the backend SHALL use its configured default only for a Job that has
-  none.
+  timeout to the Kubernetes pool backend, and the backend SHALL set the
+  active deadline of KF-044 to that timeout plus the configured cleanup
+  margin, using its configured default only for a Job that has none.
 - **KF-128** Where the Kubernetes pool backend is configured, the Executor
   SHALL use the `kube-exec` Guest Transport for every Profile, and the
   Runner SHALL reject a configuration that names any other Guest Transport.
@@ -208,7 +208,10 @@ place. The Virtual Node is enough to run the Job, because `kube-exec` reaches
 the guest through the pod and KF-062 finds the Host Services on the Virtual
 Node. KF-127 matters because the active deadline ends the pod: a Job that is
 allowed three hours must not have its MicroVM deleted at the two-hour
-default.
+default. The margin is there because the deadline must outlast the Job, not
+equal it: the claim is made before the Job's own clock starts, and a Job
+that times out still runs its `after_script` and uploads its failure
+artifacts in the same MicroVM.
 
 ## Guest Transport {#kube-exec-transport}
 
