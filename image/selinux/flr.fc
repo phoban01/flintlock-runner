@@ -1,1 +1,5 @@
 /run/flr(/.*)?		gen_context(system_u:object_r:flr_run_t,s0)
+/run/flr/host\.env	--	gen_context(system_u:object_r:container_ro_file_t,s0)
+/run/flr/\.host\.env\.[^/]+	--	gen_context(system_u:object_r:container_ro_file_t,s0)
+/run/flr/not-ready\.d(/.*)?		gen_context(system_u:object_r:container_ro_file_t,s0)
+/var/lib/flintlock-runner/cache(/.*)?		gen_context(system_u:object_r:container_file_t,s0)

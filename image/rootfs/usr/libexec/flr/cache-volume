@@ -19,9 +19,23 @@ dir=$FLR_CACHE_DIR
 # The state half is configuration rather than code: flintlockd.service
 # passes --state-dir /var/lib/flintlock and /etc/containerd/config.toml sets
 # root = /var/lib/containerd.
+#= docs/requirements/11-host-image.md#kernel-and-kvm
+#/ The Host Image SHALL label the Host environment file and the
+#/ not ready reason directory it writes under `/run/flr` so that the Host
+#/ Agent's containers can read them, and the Host Service cache directory so
+#/ that they can write it
+# What the Host Agent mounts is the root of the cache volume's filesystem,
+# whose label is on the volume, not the mount point's. A new filesystem's
+# root has none the Host Agent may use, so it is given the cache
+# directory's label (selinux/flr.fc) after every mount; what the Host
+# Services create inside it inherits the type. The root alone is relabelled:
+# a recursive restorecon of a full cache would take minutes.
+label_cache() { relabel "$dir" || die "cannot label $dir for the Host Agent"; }
+
 mkdir -p "$dir"
 if mountpoint -q "$dir"; then
   log "$dir is mounted"
+  label_cache
   exit 0
 fi
 if ! lvs "$vg/$lv" >/dev/null 2>&1; then
@@ -38,4 +52,5 @@ if [ -z "$(blkid -p -o value -s TYPE "/dev/$vg/$lv" 2>/dev/null || true)" ]; the
   mkfs.ext4 -q -L flr-cache "/dev/$vg/$lv"
 fi
 mount -o defaults "/dev/$vg/$lv" "$dir"
+label_cache
 log "mounted /dev/$vg/$lv at $dir"

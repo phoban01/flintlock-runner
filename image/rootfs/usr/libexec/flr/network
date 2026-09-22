@@ -34,6 +34,20 @@ fi
 # flr-host-config read into FLR_POD_PROVIDER_UID. It lives in this table
 # because it is loaded with it, but it concerns the Host's own processes,
 # not guests.
+#
+#= docs/requirements/11-host-image.md#image-networking
+#/ The Host Image SHALL drop traffic from the user ids that run the
+#/ Host Services, which it reads from the Host configuration file with
+#/ defaults when none are set, to the instance metadata service address and
+#/ to the Host's own kubelet, Pod Provider, `flintlockd` and metrics ports.
+# The last three rules of the output chain, with the ids flr-host-config
+# read into FLR_HOST_SERVICE_UIDS. The ports are the control ports of
+# HI-034 and flintlockd's own, once each.
+service_blocked_ports=$FLR_HOST_CONTROL_PORTS
+case ",$service_blocked_ports," in
+*",$FLR_FLINTLOCKD_PORT,"*) ;;
+*) service_blocked_ports=$service_blocked_ports,$FLR_FLINTLOCKD_PORT ;;
+esac
 render_firewall() {
   cat <<EOF
 table inet flr
@@ -97,6 +111,16 @@ $(if [ -n "$FLR_HOST_SERVICE_PORTS" ]; then
 		# so a client fails at once rather than timing out. flintlockd's own
 		# replies go from that port, not to it, and pass.
 		oifname "lo" tcp dport $FLR_FLINTLOCKD_PORT meta skuid != $FLR_POD_PROVIDER_UID counter reject with tcp reset
+		# HI-064. The Host Services run in the Host's network namespace,
+		# where the forward chain never sees them, and buildkitd runs every
+		# build step as one of these ids. Every address of the Host, the
+		# bridge gateway included, is reached over loopback, so "lo" is the
+		# Host itself. Anything else, the internet, the gateway's Host
+		# Service ports and the Go module proxy's loopback backend among it,
+		# is untouched.
+		meta skuid { ${FLR_HOST_SERVICE_UIDS//,/, } } ip daddr $FLR_METADATA_V4 counter drop
+		meta skuid { ${FLR_HOST_SERVICE_UIDS//,/, } } ip6 daddr $FLR_METADATA_V6 counter drop
+		meta skuid { ${FLR_HOST_SERVICE_UIDS//,/, } } oifname "lo" tcp dport { ${service_blocked_ports//,/, } } counter drop
 	}
 }
 

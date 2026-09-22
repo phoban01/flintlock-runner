@@ -15,7 +15,7 @@ guest firewall at boot. Nothing is pushed to a Host after it boots.
 | `build/` | The build steps the Containerfile runs |
 | `rootfs/` | Copied to `/`: units, `/usr/libexec/flr` scripts, configuration |
 | `selinux/` | The policy module |
-| `check.sh`, `check-thin-pool.sh`, `check-flintlockd-access.sh` | The check stage, run inside the built image; the last two run in `make image-lint` too |
+| `check.sh`, `check-thin-pool.sh`, `check-flintlockd-access.sh`, `check-host-service-egress.sh`, `check-selinux-contexts.sh` | The check stage, run inside the built image; all but `check.sh` run in `make image-lint` too |
 | `check-labels.sh`, `lint.sh` | Checks that run outside the image |
 | `publish-ami.sh` | AMI publishing, on request only |
 
@@ -24,7 +24,7 @@ guest firewall at boot. Nothing is pushed to a Host after it boots.
 ```sh
 make image          # build for x86_64; the check stage is part of the build
 make image-check    # run the checks again in the built image, compare its labels
-make image-lint     # bash -n, shellcheck, digest pin, thin-pool and flintlockd access cases; no build
+make image-lint     # bash -n, shellcheck, digest pin, thin-pool, flintlockd access, Host Service egress and SELinux context cases; no build
 ```
 
 `make image` uses podman when it is installed and docker otherwise
@@ -68,11 +68,11 @@ has it.
 | Unit | Does | Requirement |
 |------|------|-------------|
 | `systemd-modules-load` (`modules-load.d/flr.conf`) | loads `kvm`, `vhost_vsock`, `dm_thin_pool`, `tun`, `bridge` | HI-010 |
-| `flr-host-config` | validates the Host configuration file, writes `/run/flr/host.env` | HI-050 to HI-052 |
+| `flr-host-config` | validates the Host configuration file, writes `/run/flr/host.env`, labelled for the Host Agent | HI-050 to HI-052, HI-065 |
 | `flr-kvm` | refuses unless `/dev/kvm` opens for reading and writing | HI-011 |
 | `flr-thin-pool` | creates the thin pool once; leaves an existing one alone | HI-020 to HI-023 |
-| `flr-cache` | mounts the Host Service cache volume | HI-024 |
-| `flr-network` | bridge `flbr0`, forwarding, NAT, guest firewall, `flintlockd` for the Pod Provider's user id only | HI-030, HI-032 to HI-037, HI-063 |
+| `flr-cache` | mounts the Host Service cache volume and labels it for the Host Agent | HI-024, HI-065 |
+| `flr-network` | bridge `flbr0`, forwarding, NAT, guest firewall, `flintlockd` for the Pod Provider's user id only, the Host Services' egress | HI-030, HI-032 to HI-037, HI-063, HI-064 |
 | `flr-dnsmasq` | DHCP and DNS on the bridge | HI-031 |
 | `containerd` | one containerd for the kubelet and for `flintlockd` | HI-040 |
 | `flintlockd` | `Requires=` the KVM gate, the thin pool, the bridge and containerd | HI-040 to HI-044 |
@@ -110,6 +110,9 @@ reads a credential from it or from user-data.
 | `HOST_CONTROL_PORTS` | `9090,8090,10248,10250,10255,10256,10260,9252,1338` | The Host's own ports, dropped for guests by name as well as by the final drop |
 | `CACHE_VOLUME_PERCENT` | `15` | Share of the volume group for the cache volume, when first created |
 | `POD_PROVIDER_UID` | `10250` | The one user id that may connect to `flintlockd`; 1 to 4294967294, never 0. See below |
+| `HOST_SERVICE_UIDS` | `101,1000,10001,10002,100000-165535` | The user ids of the Host Services, ids and ranges `LOW-HIGH`, which may reach neither the metadata service nor the control ports; never 0 or the Pod Provider's, no overlaps. See below |
+
+No port may be both a Host Service port and a control port.
 
 ```yaml
 # in the KubeadmConfigTemplate
@@ -194,6 +197,48 @@ through and one from root or any other id refused. On a booted Host,
 A unix socket with file permissions would be the better boundary, and is the
 one to move to when `flintlockd` can listen on one.
 
+### The Host Services' user ids
+
+The Host Services run in the Host's network namespace, so the guest
+firewall's forward chain never sees their traffic, and `buildkitd` runs the
+`RUN` steps of every Job's image build. HI-064 gives them what SE-030 and
+SE-031 gave the push-provisioned `buildkit` user: the output chain of
+`inet flr` drops, for the socket owners in `HOST_SERVICE_UIDS`,
+
+```
+meta skuid { <ids> } ip daddr 169.254.169.254 counter drop
+meta skuid { <ids> } ip6 daddr fd00:ec2::254 counter drop
+meta skuid { <ids> } oifname "lo" tcp dport { <HOST_CONTROL_PORTS>, 9090 } counter drop
+```
+
+Every address of the Host, the bridge gateway and the primary address
+included, is reached over `lo`, so the last rule closes the kubelet, the Pod
+Provider, `flintlockd` and the metrics ports on all of them. Nothing else is
+taken from the Host Services: they still reach the internet, each other on
+the gateway's Host Service ports, and nginx still reaches Athens on
+`127.0.0.1:3999`. `flintlockd`'s port is added even when
+`HOST_CONTROL_PORTS` leaves it out, and the HI-063 rule refuses it to them
+anyway.
+
+The default ids are the ones the Fleet Manifests run the Host Services as:
+nginx 101 (the Go module proxy's front and the HTTP cache), `buildkitd`
+1000, Athens 10001 and zot 10002; `make manifests-check` compares them.
+`100000-165535` is the subordinate id range of the rootless buildkit image's
+user (`/etc/subuid` in `moby/buildkit:v0.23.2-rootless`): a build step that
+runs as root in the build is 1000 on the Host, and one that runs as any other
+user is an id in that range. No account of the Host Image has any of these
+ids, which the check stage verifies. A hostNetwork pod of another workload
+that happens to run as one of them is held to the same rules.
+
+`image/check-host-service-egress.sh` renders the rules for the defaults, a
+configured list and invalid values, and where it can make an unprivileged
+user and network namespace with nftables (a developer machine, not the image
+build), loads them and makes connections as the Host Services' ids: to the
+metadata service, v4 and v6, and the kubelet, Pod Provider and metrics
+ports, dropped; to `127.0.0.1:3999`, the gateway's registry mirror port and
+an internet address, let through. On a booted Host,
+`nft list chain inet flr output` shows the counters.
+
 ### The kubelet
 
 `flr-kubelet-config` writes `/run/flr/kubelet.env`, and
@@ -261,11 +306,128 @@ argument, never calls `setenforce` and makes no domain permissive.
   in `/run/flr`. The module `selinux/flr.te` gives `/run/flr` its own type,
   `flr_run_t`, and allows `dnsmasq_t` to search the directory and read the
   files in it. Nothing else changes for any domain.
+- **The Host Agent's host paths** (HI-065). The Host Agent's containers
+  run as `container_t`, which may use only files labelled for containers.
+  The module's file contexts (`selinux/flr.fc`) label the three paths it
+  mounts with types the base image's `container-selinux` already grants
+  `container_t`, and no rule in the module names a container domain:
 
-The module is compiled in the build against the base image's policy and
-installed with `semodule -n`. It has not been exercised on a booted Host:
-the first boot on real hardware should be followed by
+  | Path | Label | `container_t` may |
+  |------|-------|-------------------|
+  | `/run/flr/host.env` | `container_ro_file_t:s0` | read |
+  | `/run/flr/not-ready.d` and the reasons in it | `container_ro_file_t:s0` | read |
+  | `/var/lib/flintlock-runner/cache` and below | `container_file_t:s0` | read and write |
+
+  Everything else under `/run/flr` stays `flr_run_t`, and nothing else is
+  relabelled.
+
+### Why these labels
+
+The read-only paths are `container_ro_file_t` rather than
+`container_file_t`: the policy lets containers read that type and write
+none of it, so a compromised Host Agent container still cannot forge the
+bridge gateway address or clear a not ready reason even if its mount were
+writable. The cache has to be written, so it is `container_file_t`.
+
+The level is `s0`, with no categories, on all three. Every container runs at
+`s0` plus two categories of its own, and the MCS constraint lets a process
+use a file only when its level dominates the file's; `s0` is dominated by
+every level, so each container of the Host Agent can use the paths whatever
+categories it gets. The tradeoff is that `s0` is not private to the Host
+Agent: any other container given these paths by a hostPath mount could read
+them, and write the cache. Only the Host Agent mounts them, hostPath mounts
+are for privileged workloads in a cluster that enforces Pod Security, and
+the files hold nothing secret; per-pod categories would instead be lost on
+every restart of the pod. Running the Host Agent as `spc_t` would work too,
+and would remove SELinux from between the Host Services and the Host.
+
+What the Host Services create in the cache carries the creating process's
+level, not the directory's. So that a replaced Host Agent pod can read and
+hand over what its predecessor wrote, the DaemonSet fixes its pod's level
+to one pair of categories (`seLinuxOptions.level: s0:c311,c827` in
+`deploy/host-agent/daemonset.yaml`) instead of taking random ones; the
+domain is still `container_t`. A pod with random categories cannot read
+what the Host Agent writes there.
+
+### Keeping the labels
+
+`/run` is a tmpfs, rebuilt at every boot, and a rename keeps the label of
+the file renamed. So the labels come from the module's file contexts and
+are applied where each path is made:
+
+- systemd-tmpfiles labels `/run/flr/not-ready.d` when it creates it, and
+  `z` lines in `tmpfiles.d/flr.conf` restore the three labels, without
+  recursing, whenever tmpfiles runs and the paths exist.
+- `flr-host-config` writes `host.env` to a temporary file in `/run/flr`,
+  which would be `flr_run_t`, and runs `restorecon -F` on it before the
+  rename; the file contexts give the temporary names `.host.env.*` the same
+  label. A not ready reason is labelled the same way before it takes its
+  name, and the directory when a unit has to make it.
+- The cache directory is the root of the cache volume's ext4 filesystem,
+  whose label lives on the volume. `flr-cache` runs `restorecon -F` on it
+  after every mount, and when it finds it mounted. Below the root, files
+  inherit the type from their directory.
+
+`restorecon` runs only where SELinux is enabled, so the check stage and
+`make image-lint` run the same scripts. `check-selinux-contexts.sh` checks
+the ordering with a stand-in for `restorecon`, and in the check stage looks
+every path up with `matchpathcon` in the policy the module was installed
+into.
+
+### What has been verified
+
+The module compiles against the base image's policy and installs with
+`semodule -n`, and `matchpathcon` in that policy gives each path above its
+label and leaves the rest of `/run/flr` `flr_run_t`. `sesearch` on that
+policy shows `container_t` (a `svirt_sandbox_domain` and an
+`mcs_constrained_type`) may read `container_ro_file_t` and not write it, and
+may read and write `container_file_t`. None of it has been enforced on a
+booted Host: the first boot on real hardware should be followed by
 `ausearch -m avc -ts boot`, and anything it shows is a bug in this section.
+
+### Pods run confined (HI-066)
+
+containerd labels a pod only when its CRI plugin is told to; without it
+every container the kubelet starts is unlabelled and runs unconfined, and an
+enforcing Host enforces nothing between its pods and itself.
+`/etc/containerd/config.toml` sets `enable_selinux = true` in
+`[plugins."io.containerd.grpc.v1.cri"]`, the `PluginConfig.EnableSelinux`
+of containerd v1.7.22's CRI plugin (`pkg/cri/config/config.go`; false by
+default, when the plugin calls `selinux.SetDisabled()`). With it, every
+container of every pod the kubelet starts on a Host runs in the domain the
+base policy's `lxc_contexts` names, `container_t`, at a level with
+categories of its own, unless the pod's `seLinuxOptions` ask for another
+level or type. That covers the Host Agent (at its fixed level), the CNI
+and kube-proxy DaemonSets, and anything else scheduled onto a Host. The
+one exception is containerd's own: a container with `privileged: true`
+gets no label (`pkg/cri/sbserver/container_create.go`) and runs unconfined,
+as a privileged container is meant to. kube-proxy and most CNI agents are
+privileged; the Host Agent is not.
+
+The MicroVMs are not affected. `flintlockd` v0.15.1 talks to containerd's
+own API for its content store, images, snapshots and leases only; it never
+creates a containerd container or task (`NewContainer` appears only in its
+client interface and mock), and it starts Firecracker and Cloud Hypervisor
+itself as child processes (`process.DetachedStart` in
+`infrastructure/microvm/firecracker/create.go`, `exec.Command` in
+`infrastructure/microvm/cloudhypervisor/create.go`). `enable_selinux` is
+read by the CRI plugin alone, so the hypervisor processes keep the
+`unconfined_service_t` of `flintlockd.service` described above.
+
+The check stage runs `containerd config dump` in the image, which merges the
+file over containerd's defaults without starting it, and requires the CRI
+plugin's `enable_selinux` to be `true`; it also checks that the base
+policy's container process context is `container_t`.
+
+Not verified until a Host boots: that containerd starts with the setting on
+an enforcing kernel, that the Host Agent's containers show
+`system_u:system_r:container_t:s0:c311,c827` (`ps -eZ`), that other pods get
+categories of their own, and that no AVC denials follow
+(`ausearch -m avc -ts boot`). An unprivileged CNI or storage DaemonSet that
+touches host paths is the most likely thing to need its own
+`seLinuxOptions`. The Host Agent's `buildkitd` names `container_engine_t`
+(KF-139), the base policy's domain for a container engine in a container;
+see "Known gaps" in `deploy/README.md`.
 
 ## Networking notes
 
