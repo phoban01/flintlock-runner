@@ -9,7 +9,7 @@
 #= docs/requirements/11-host-image.md#image-build
 #/ The Host Image SHALL be defined by one Containerfile whose base
 #/ is a bootc base image pinned by digest.
-# quay.io/fedora/fedora-bootc:44 as of 2026-09-21. The digest is that of the
+# quay.io/fedora/fedora-bootc:44 as of 2026-09-22. The digest is that of the
 # multi-architecture index; --platform selects x86_64 from it.
 #
 #= docs/requirements/11-host-image.md#image-build
