@@ -1,0 +1,3 @@
+# KF-076: images the registry mirror fetches from upstream when the Host
+# Agent starts, one reference per line.
+alpine:3.22

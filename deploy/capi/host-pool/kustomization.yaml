@@ -1,0 +1,12 @@
+# The objects of one Host pool, with placeholders: POOL, CLUSTER, HOST_CONF
+# and the values a pool sets. Do not build this directory on its own; build
+# a pool under deploy/capi/pools/, which writes the placeholders from its
+# host-pool.yaml through the host-pool-params Component.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+resources:
+  - machinedeployment.yaml
+  - kubeadmconfigtemplate.yaml
+  - awsmachinetemplate.yaml
+  - machinehealthcheck.yaml

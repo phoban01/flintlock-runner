@@ -1,0 +1,23 @@
+# THE POD PROVIDER'S USER ID, the one place it is set.
+#
+# The Host Image admits exactly one user id to flintlockd's loopback endpoint
+# (HI-063): POD_PROVIDER_UID of the Host configuration file, 10250 unless
+# the file sets another. The Pod Provider's container has to run as that id
+# (KF-135), so if a Host pool's host.conf (deploy/capi/pools/*/host-pool.yaml)
+# sets POD_PROVIDER_UID, change `uid` here to the same value: nothing else
+# makes the two agree, and a Pod Provider with the wrong id finds flintlockd
+# refusing it and keeps its Virtual Node not ready. `make manifests-check`
+# compares this value with the Host Image's default and with every pool's
+# host.conf.
+#
+# This object is never applied (local-config); deploy/host-agent/kustomization.yaml
+# copies `uid` into the Pod Provider container's runAsUser and runAsGroup.
+# No other container of the Host Agent may run as it.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: flintlock-pod-provider-uid
+  annotations:
+    config.kubernetes.io/local-config: "true"
+data:
+  uid: "10250"

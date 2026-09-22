@@ -1,0 +1,22 @@
+# THE ONE PLACE TO SET THE RUNNER'S JOB TIMEOUT.
+#
+# This object is never applied (local-config). deploy/runner/kustomization.yaml
+# copies `jobTimeout` into three places:
+#
+#   - pool_manager.kubernetes.job_timeout in the Runner's configuration, the
+#     active deadline of a claimed pod whose Job carries no timeout (KF-044);
+#   - gitlab.shutdown_timeout in the same file, how long a stopping Runner
+#     lets running Jobs finish (GL shutdown);
+#   - terminationGracePeriodSeconds of the Runner's pod, the digits only.
+#
+# Keep it in whole seconds with the `s` suffix: the configuration wants a Go
+# duration and the pod spec wants the number. `make manifests-check` fails when
+# the rendered grace period is shorter than the rendered job timeout (KF-081).
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: flintlock-runner-job-timeout
+  annotations:
+    config.kubernetes.io/local-config: "true"
+data:
+  jobTimeout: 10800s

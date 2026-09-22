@@ -1,0 +1,91 @@
+# The buildkitd container of the Host Agent.
+#
+#= docs/requirements/12-cluster-fleet.md#cluster-host-agent
+#/ The Host Agent SHALL configure each Host Service as FL-102 to
+#/ FL-107, FL-114 and FL-115 require.
+# buildkitd.toml.tmpl carries the configuration of
+# internal/fleet/scripts/templates/host_services.sh.tmpl: rootless, the
+# overlayfs snapshotter and a garbage collection limit (FL-102), the
+# registry mirror first (FL-103), storage under the cache directory
+# (FL-107). The push-provisioned firewall for the buildkit user (SE-030,
+# SE-031) has no counterpart here; see deploy/README.md.
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: flintlock-host-agent
+  namespace: flintlock-system
+spec:
+  template:
+    spec:
+      containers:
+        - name: buildkitd
+          image: moby/buildkit:v0.23.2-rootless@sha256:cab936745de5d673465948f1e93ff4d6e372bbe33f218afd3314eba45a6f85a9
+          # rootlesskit with the Host's network namespace, as push
+          # provisioning runs it, so that buildkitd can bind the bridge
+          # gateway. The address is in the rendered configuration (KF-071).
+          command: [rootlesskit, --net=host, --copy-up=/etc, buildkitd]
+          args:
+            - --config=/etc/flr/rendered/buildkitd.toml
+            # The pod's /proc is masked, so builds cannot get a PID
+            # namespace of their own; this is buildkit's documented mode for
+            # rootless in an unprivileged pod.
+            - --oci-worker-no-process-sandbox
+          #= docs/requirements/12-cluster-fleet.md#cluster-least-privilege
+          #/ The Host Agent SHALL hold only the privileges it needs to bind
+          #/ to the bridge gateway, to write the cache directory and to reach the
+          #/ local `flintlockd` endpoint.
+          # Rootless buildkitd (FL-102, SE-050) as the image's unprivileged
+          # user, 1000. Making the user namespace takes three things and no
+          # more: newuidmap and newgidmap, whose file capabilities need
+          # CAP_SETUID and CAP_SETGID in the bounding set and privilege
+          # escalation allowed; and a seccomp profile that lets an
+          # unprivileged process create namespaces, which RuntimeDefault
+          # refuses. rootlesskit copies /etc up inside its own mount
+          # namespace and keeps its state in /tmp, so the root filesystem
+          # stays read-only.
+          securityContext:
+            runAsUser: 1000
+            runAsGroup: 1000
+            allowPrivilegeEscalation: true
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: [ALL]
+              add: [SETUID, SETGID]
+            seccompProfile:
+              type: Unconfined
+            appArmorProfile:
+              type: Unconfined
+          env:
+            - name: XDG_RUNTIME_DIR
+              value: /run/user/1000
+            # The emptyDir below; the image's own TMPDIR is under it and
+            # would not exist.
+            - name: TMPDIR
+              value: /home/user/.local
+          resources:
+            requests:
+              cpu: 250m
+              memory: 512Mi
+            limits:
+              memory: 3Gi
+          volumeMounts:
+            - name: rendered
+              mountPath: /etc/flr/rendered
+              readOnly: true
+            # KF-072: its own directory of the cache, nothing else of it.
+            - name: cache
+              mountPath: /var/lib/flintlock-runner/cache/buildkit
+              subPath: buildkit
+            - name: buildkit-run
+              mountPath: /run/user/1000
+            - name: buildkit-home
+              mountPath: /home/user/.local
+            - name: buildkit-tmp
+              mountPath: /tmp
+      volumes:
+        - name: buildkit-run
+          emptyDir: {}
+        - name: buildkit-home
+          emptyDir: {}
+        - name: buildkit-tmp
+          emptyDir: {}

@@ -1,0 +1,34 @@
+#= docs/requirements/12-cluster-fleet.md#host-pool
+#/ The Fleet Manifests SHALL define a MachineHealthCheck for each
+#/ Host pool that replaces a Machine whose Node stays not ready beyond the
+#/ configured interval.
+# The configured interval is unhealthyNodeConditions' timeoutSeconds, from
+# host-pool.yaml. It watches the Host's own Node; a Host whose flintlockd
+# cannot run (HI-011, HI-022) keeps a ready Node and reports the reason on
+# its Virtual Node instead (KF-016), which this cannot see.
+apiVersion: cluster.x-k8s.io/v1beta2
+kind: MachineHealthCheck
+metadata:
+  name: POOL
+spec:
+  clusterName: CLUSTER
+  selector:
+    matchLabels:
+      cluster.x-k8s.io/cluster-name: CLUSTER
+      gitlab-runner.flintlock.dev/host-pool: POOL
+  checks:
+    # A bootc Host's first boot creates its thin pool and pulls images;
+    # give it time before calling it failed.
+    nodeStartupTimeoutSeconds: 1200
+    unhealthyNodeConditions:
+      - type: Ready
+        status: "False"
+        timeoutSeconds: 300
+      - type: Ready
+        status: Unknown
+        timeoutSeconds: 300
+  remediation:
+    # Stop replacing Machines when many fail at once, which is more likely a
+    # broken AMI or a network problem than a set of broken Hosts.
+    triggerIf:
+      unhealthyLessThanOrEqualTo: 40%
