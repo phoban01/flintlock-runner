@@ -56,9 +56,10 @@ func TestSubcommandsAreRegistered(t *testing.T) {
 	t.Parallel()
 	app := newApp()
 	want := map[string][]string{
-		"run":    nil,
-		"config": {"show"},
-		"fleet":  {"provision", "verify", "up", "drain", "teardown", "emit-userdata"},
+		"run":     nil,
+		"config":  {"show"},
+		"fleet":   {"provision", "verify", "up", "drain", "teardown", "emit-userdata"},
+		"kubelet": nil,
 	}
 	for _, c := range app.Commands {
 		subs, ok := want[c.Name]

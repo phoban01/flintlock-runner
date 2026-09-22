@@ -1,0 +1,122 @@
+# RBAC of the Pod Provider (`flr kubelet`), which runs in the Host Agent.
+#
+# The Host Agent's DaemonSet, ServiceAccount and namespace belong to the Fleet
+# Manifests; this file is only what the provider is allowed to do, and the
+# provider's test suite runs the provider as this ServiceAccount with exactly
+# these rules, so a call the code makes and this file lacks fails a test.
+#
+# Kubernetes RBAC cannot say "the pods bound to this node" or "this provider's
+# own Virtual Node": one DaemonSet shares one ServiceAccount, and a rule names
+# resources, not field selectors. The rules below are therefore the narrowest
+# RBAC can express for every Host at once, and the narrowing to one Host's
+# objects is in the code: the provider lists and watches pods with the field
+# selector of its own Virtual Node, watches the one Node it is named after,
+# gets ConfigMaps only by the name a bound pod gives, and creates, reads and
+# deletes only the guard pod and budget named after its Host. There is no rule
+# for Secrets, Services, or for listing or watching ConfigMaps.
+
+#= docs/requirements/12-cluster-fleet.md#cluster-least-privilege
+#/ The Pod Provider SHALL operate with permissions limited to its
+#/ own Virtual Node and node lease, the pods bound to that Virtual Node, the
+#/ ConfigMaps those pods name, reading its Host's Node and managing its guard
+#/ pod.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: flintlock-pod-provider
+rules:
+  # The Host's Node is read and watched; the Virtual Node is created, its
+  # status, labels and annotations are patched, and it is cordoned and
+  # uncordoned with the Host's Node. Nodes are never deleted: the Virtual
+  # Node goes with its owner.
+  - apiGroups: [""]
+    resources: ["nodes"]
+    verbs: ["get", "list", "watch", "create", "update", "patch"]
+  - apiGroups: [""]
+    resources: ["nodes/status"]
+    verbs: ["update", "patch"]
+  # The pods bound to the Virtual Node, in whatever namespace a Runner keeps
+  # its Pools: their status is written, and idle pods of a draining Host and
+  # claimed pods whose lease expired are deleted. Pods are never created or
+  # edited here.
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["get", "list", "watch", "delete"]
+  - apiGroups: [""]
+    resources: ["pods/status"]
+    verbs: ["update", "patch"]
+  # The cloud-init ConfigMap a pod names, by name only.
+  - apiGroups: [""]
+    resources: ["configmaps"]
+    verbs: ["get"]
+  # Pod events, so that `kubectl describe pod` says what happened.
+  - apiGroups: [""]
+    resources: ["events"]
+    verbs: ["create", "patch"]
+---
+# The Virtual Node's lease.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: flintlock-pod-provider
+  namespace: kube-node-lease
+rules:
+  - apiGroups: ["coordination.k8s.io"]
+    resources: ["leases"]
+    verbs: ["get", "create", "update"]
+---
+# The drain guard pod and its PodDisruptionBudget, in the Host Agent's own
+# namespace (`guard.namespace` in the provider's configuration).
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: flintlock-pod-provider-guard
+  namespace: flintlock-system
+rules:
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["get", "create", "delete"]
+  - apiGroups: ["policy"]
+    resources: ["poddisruptionbudgets"]
+    verbs: ["create", "delete"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: flintlock-pod-provider
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: flintlock-pod-provider
+subjects:
+  - kind: ServiceAccount
+    name: flintlock-host-agent
+    namespace: flintlock-system
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: flintlock-pod-provider
+  namespace: kube-node-lease
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: flintlock-pod-provider
+subjects:
+  - kind: ServiceAccount
+    name: flintlock-host-agent
+    namespace: flintlock-system
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: flintlock-pod-provider-guard
+  namespace: flintlock-system
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: flintlock-pod-provider-guard
+subjects:
+  - kind: ServiceAccount
+    name: flintlock-host-agent
+    namespace: flintlock-system
