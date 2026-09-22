@@ -33,8 +33,10 @@ expect_fail() { # expect_fail <name> <pattern the output must contain> <command.
 
 #= docs/requirements/12-cluster-fleet.md#cluster-release
 #= type=test
-#/ The Release SHALL publish the Fleet Manifests as one release
-#/ asset in which every container image of this project is referenced by
+#/ The Release SHALL publish the Fleet Manifests as two release
+#/ assets, one for the workload cluster and one for the Cluster API objects
+#/ of the management cluster, in which every container image of this project
+#/ is referenced by
 #/ digest.
 
 # The fleet renders into one file in which every flr reference, the image

@@ -77,8 +77,10 @@ work=$(mktemp -d)
 trap 'rm -rf "$work"' EXIT
 
 #= docs/requirements/12-cluster-fleet.md#cluster-release
-#/ The Release SHALL publish the Fleet Manifests as one release
-#/ asset in which every container image of this project is referenced by
+#/ The Release SHALL publish the Fleet Manifests as two release
+#/ assets, one for the workload cluster and one for the Cluster API objects
+#/ of the management cluster, in which every container image of this project
+#/ is referenced by
 #/ digest.
 render() { # render <kustomization root> <asset name> [check-manifests options]
 	local root=$1 asset=$2 overlay

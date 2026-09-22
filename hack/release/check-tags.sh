@@ -110,8 +110,8 @@ published)
 	#= docs/requirements/12-cluster-fleet.md#cluster-release
 	#= type=test
 	#/ The Release SHALL publish the Host Image to the project's
-	#/ container registry, tagged with the release version and with the
-	#/ Kubernetes version it carries.
+	#/ container registry, tagged with the release version and with the release
+	#/ version joined to the Kubernetes version it carries.
 	wants=()
 	[ -z "$flr" ] || wants+=("${flr%@*}:$version|${flr#*@}")
 	[ -z "$host" ] || wants+=("${host%@*}:$version|${host#*@}" "${host%@*}:$version-k8s-$k8s|${host#*@}")
