@@ -1,0 +1,55 @@
+# One Host pool. Every name, label and value that differs between pools is
+# written by the kustomization that includes this directory, from its
+# host-pool.yaml (deploy/capi/kustomization.yaml); what is written here is
+# only a placeholder for it.
+#
+#= docs/requirements/12-cluster-fleet.md#host-pool
+#/ The Fleet Manifests SHALL define each Host pool as one Cluster
+#/ API MachineDeployment with a single instance type and an AMI given by
+#/ explicit id.
+# One MachineDeployment, one AWSMachineTemplate (awsmachinetemplate.yaml)
+# with one instance type and an AMI id, one KubeadmConfigTemplate and one
+# MachineHealthCheck per pool. The number of Hosts is the replica count. The
+# Kubernetes version has to be the one the AMI's Host Image carries, which
+# publish-ami.sh tags it with (HI-009).
+apiVersion: cluster.x-k8s.io/v1beta2
+kind: MachineDeployment
+metadata:
+  name: POOL
+  labels:
+    cluster.x-k8s.io/cluster-name: CLUSTER
+    gitlab-runner.flintlock.dev/host-pool: POOL
+spec:
+  clusterName: CLUSTER
+  replicas: 1
+  selector:
+    matchLabels:
+      cluster.x-k8s.io/cluster-name: CLUSTER
+      gitlab-runner.flintlock.dev/host-pool: POOL
+  template:
+    metadata:
+      labels:
+        cluster.x-k8s.io/cluster-name: CLUSTER
+        gitlab-runner.flintlock.dev/host-pool: POOL
+    spec:
+      clusterName: CLUSTER
+      version: v1.35.8
+      bootstrap:
+        configRef:
+          apiGroup: bootstrap.cluster.x-k8s.io
+          kind: KubeadmConfigTemplate
+          name: POOL
+      infrastructureRef:
+        apiGroup: infrastructure.cluster.x-k8s.io
+        kind: AWSMachineTemplate
+        name: POOL
+      deletion:
+        #= docs/requirements/12-cluster-fleet.md#host-pool
+        #/ The Fleet Manifests SHALL set no node drain timeout shorter than
+        #/ the configured drain timeout on a Host pool's Machines.
+        # The configured drain timeout is the Pod Provider's drain_timeout
+        # (KF-093, deploy/host-agent/config/kubelet.yaml.tmpl), for which a
+        # claimed MicroVM holds a drain open; this has to be at least that,
+        # or Cluster API gives up on the drain and deletes the Machine under
+        # running Jobs. `make manifests-check` compares the two.
+        nodeDrainTimeoutSeconds: 4500

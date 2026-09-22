@@ -1,0 +1,18 @@
+# The buildkitd Host Service (FL-102, FL-103), as a Component of the Host
+# Agent. Leaving this Component out of deploy/kustomization.yaml removes the
+# container, its configuration and its entry in the Pod Provider's
+# configuration together (KF-075).
+apiVersion: kustomize.config.k8s.io/v1alpha1
+kind: Component
+
+patches:
+  - path: daemonset-patch.yaml
+
+configMapGenerator:
+  - name: flintlock-host-agent-config
+    namespace: flintlock-system
+    behavior: merge
+    files:
+      - buildkitd.toml.tmpl
+      - kubelet.host-service.buildkit.yaml
+      - cache-dirs.buildkit

@@ -1,0 +1,113 @@
+# Writes a pool's host-pool.yaml into the objects of deploy/capi/host-pool.
+# Each pool under deploy/capi/pools/ includes this Component next to its own
+# host-pool.yaml. The source is the pool's only ConfigMap, selected by kind
+# alone, so that every pool's settings object can have a name of its own and
+# the pools can be built together.
+apiVersion: kustomize.config.k8s.io/v1alpha1
+kind: Component
+
+replacements:
+  # The pool's name: every object's name, the references between them and
+  # the label that ties Machines to their MachineDeployment and health check.
+  - source:
+      kind: ConfigMap
+      fieldPath: data.name
+    targets:
+      - select:
+          group: cluster.x-k8s.io
+        fieldPaths:
+          - metadata.name
+      - select:
+          group: bootstrap.cluster.x-k8s.io
+        fieldPaths:
+          - metadata.name
+      - select:
+          group: infrastructure.cluster.x-k8s.io
+        fieldPaths:
+          - metadata.name
+      - select:
+          kind: MachineDeployment
+        fieldPaths:
+          - metadata.labels.[gitlab-runner.flintlock.dev/host-pool]
+          - spec.selector.matchLabels.[gitlab-runner.flintlock.dev/host-pool]
+          - spec.template.metadata.labels.[gitlab-runner.flintlock.dev/host-pool]
+          - spec.template.spec.bootstrap.configRef.name
+          - spec.template.spec.infrastructureRef.name
+      - select:
+          kind: MachineHealthCheck
+        fieldPaths:
+          - spec.selector.matchLabels.[gitlab-runner.flintlock.dev/host-pool]
+  # The workload cluster the Hosts join.
+  - source:
+      kind: ConfigMap
+      fieldPath: data.clusterName
+    targets:
+      - select:
+          kind: MachineDeployment
+        fieldPaths:
+          - metadata.labels.[cluster.x-k8s.io/cluster-name]
+          - spec.clusterName
+          - spec.selector.matchLabels.[cluster.x-k8s.io/cluster-name]
+          - spec.template.metadata.labels.[cluster.x-k8s.io/cluster-name]
+          - spec.template.spec.clusterName
+      - select:
+          kind: MachineHealthCheck
+        fieldPaths:
+          - spec.clusterName
+          - spec.selector.matchLabels.[cluster.x-k8s.io/cluster-name]
+  - source:
+      kind: ConfigMap
+      fieldPath: data.replicas
+    targets:
+      - select:
+          kind: MachineDeployment
+        fieldPaths:
+          - spec.replicas
+  - source:
+      kind: ConfigMap
+      fieldPath: data.kubernetesVersion
+    targets:
+      - select:
+          kind: MachineDeployment
+        fieldPaths:
+          - spec.template.spec.version
+  - source:
+      kind: ConfigMap
+      fieldPath: data.nodeDrainTimeoutSeconds
+    targets:
+      - select:
+          kind: MachineDeployment
+        fieldPaths:
+          - spec.template.spec.deletion.nodeDrainTimeoutSeconds
+  - source:
+      kind: ConfigMap
+      fieldPath: data.instanceType
+    targets:
+      - select:
+          kind: AWSMachineTemplate
+        fieldPaths:
+          - spec.template.spec.instanceType
+  - source:
+      kind: ConfigMap
+      fieldPath: data.amiID
+    targets:
+      - select:
+          kind: AWSMachineTemplate
+        fieldPaths:
+          - spec.template.spec.ami.id
+  - source:
+      kind: ConfigMap
+      fieldPath: data.unhealthySeconds
+    targets:
+      - select:
+          kind: MachineHealthCheck
+        fieldPaths:
+          - spec.checks.unhealthyNodeConditions.*.timeoutSeconds
+  - source:
+      kind: ConfigMap
+      fieldPath: data.[host.conf]
+    targets:
+      - select:
+          kind: KubeadmConfigTemplate
+        fieldPaths:
+          - spec.template.spec.files.[path=/etc/flintlock-runner/host.conf].content

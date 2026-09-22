@@ -176,3 +176,26 @@ jobs:
       - name: run the checks again and compare the labels
         if: steps.changed.outputs.build == 'true'
         run: make image-check CONTAINER_ENGINE=podman
+
+  # The Fleet Manifests (docs/requirements/12-cluster-fleet.md): render
+  # deploy/ and deploy/capi with the pinned kustomize, validate every object
+  # with kubeconform against the Kubernetes 1.35 schemas and the Cluster API
+  # and CAPA CRD schemas, and run the targeted checks of
+  # deploy/tests/checks.yaml, which load the rendered configurations with
+  # the flr binary and run the Host Agent's scripts against a sample Host.
+  manifests:
+    name: fleet manifests render and schema check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6.5.0
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: make manifests-check
+        env:
+          MANIFESTS_REQUIRE_SHELLCHECK: "1"
+        run: |
+          command -v shellcheck >/dev/null || { sudo apt-get update -qq && sudo apt-get install -y -qq shellcheck; }
+          shellcheck --version
+          make manifests-check

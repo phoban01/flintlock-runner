@@ -1,0 +1,30 @@
+# Athens, the Go module proxy, rendered on each Host by render.sh; ported
+# from internal/fleet/scripts/templates/host_services.sh.tmpl. It listens on
+# loopback only; the nginx front of nginx-go-proxy.conf is what guests reach
+# on the bridge gateway.
+GoBinary = "/usr/local/go/bin/go"
+GoEnv = "production"
+GoGetWorkers = 10
+Port = "127.0.0.1:3999"
+# FL-105: modules are stored under the cache directory.
+StorageType = "disk"
+NetworkMode = "strict"
+# FL-114: every module outside the private patterns is verified against the
+# public checksum database.
+SumDBs = ["https://sum.golang.org"]
+Timeout = 300
+ProtocolWorkers = 30
+LogLevel = "info"
+CloudRuntime = "none"
+DownloadMode = "sync"
+# FL-105: the public proxy for public paths; the private patterns from the
+# version control host with the fleet's read-only credential (FL-113), and
+# without the checksum database (FL-114).
+GoBinaryEnvVars = [
+@BLOCK:athens-go-env@
+]
+@BLOCK:athens-no-sum-patterns@
+
+[Storage]
+  [Storage.Disk]
+    RootPath = "/var/lib/flintlock-runner/cache/goproxy"

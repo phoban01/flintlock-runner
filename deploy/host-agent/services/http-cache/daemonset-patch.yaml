@@ -1,0 +1,47 @@
+# The HTTP cache's container in the Host Agent.
+#
+#= docs/requirements/12-cluster-fleet.md#cluster-host-agent
+#/ The Host Agent SHALL configure each Host Service as FL-102 to
+#/ FL-107, FL-114 and FL-115 require.
+# nginx-http-cache.conf.tmpl is push provisioning's HTTP cache: one cache
+# path per upstream of http-cache.upstreams, each with its own size limit
+# and time-to-live (FL-106), under the cache directory (FL-107).
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: flintlock-host-agent
+  namespace: flintlock-system
+spec:
+  template:
+    spec:
+      containers:
+        - name: http-cache
+          image: nginxinc/nginx-unprivileged:1.28.0-alpine@sha256:c97ff0bf7cbae369953c6da1232ec14ad9f971d66360c5698db0856a4cd657a0
+          command: [nginx, -c, /etc/flr/rendered/nginx-http-cache.conf, -g, daemon off;]
+          # Unprivileged nginx, the image's own user; the port is above 1024.
+          securityContext:
+            runAsUser: 101
+            runAsGroup: 101
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: [ALL]
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              memory: 256Mi
+          volumeMounts:
+            - name: rendered
+              mountPath: /etc/flr/rendered
+              readOnly: true
+            # KF-072: its own directory of the cache.
+            - name: cache
+              mountPath: /var/lib/flintlock-runner/cache/http
+              subPath: http
+            - name: http-cache-tmp
+              mountPath: /tmp
+      volumes:
+        - name: http-cache-tmp
+          emptyDir: {}

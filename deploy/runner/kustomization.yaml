@@ -1,0 +1,69 @@
+# The Runner: its Deployment, configuration, identity and permissions.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+resources:
+  - role.yaml
+  - serviceaccount.yaml
+  - deployment.yaml
+  - job-timeout.yaml
+
+# role.yaml carries no namespace of its own: it is applied to the Runner's.
+# Only the Role takes it; the ClusterRole is cluster-scoped.
+patches:
+  - target:
+      kind: Role
+      name: flintlock-runner
+    patch: |-
+      - op: add
+        path: /metadata/namespace
+        value: flintlock-system
+
+configMapGenerator:
+  - name: flintlock-runner-config
+    namespace: flintlock-system
+    files:
+      - config.yaml
+    options:
+      labels:
+        app.kubernetes.io/name: flintlock-runner
+
+# deploy/runner/job-timeout.yaml is the one place the job timeout is set.
+# The configuration takes it whole, a Go duration, into the two double-quoted
+# values of config.yaml (the first and third fields when the file is split on
+# double quotes); the pod spec takes the digits before the `s`.
+replacements:
+  - source:
+      kind: ConfigMap
+      name: flintlock-runner-job-timeout
+      fieldPath: data.jobTimeout
+    targets:
+      - select:
+          kind: ConfigMap
+          name: flintlock-runner-config
+        fieldPaths:
+          - data.config\.yaml
+        options:
+          delimiter: '"'
+          index: 1
+      - select:
+          kind: ConfigMap
+          name: flintlock-runner-config
+        fieldPaths:
+          - data.config\.yaml
+        options:
+          delimiter: '"'
+          index: 3
+  - source:
+      kind: ConfigMap
+      name: flintlock-runner-job-timeout
+      fieldPath: data.jobTimeout
+      options:
+        delimiter: s
+        index: 0
+    targets:
+      - select:
+          kind: Deployment
+          name: flintlock-runner
+        fieldPaths:
+          - spec.template.spec.terminationGracePeriodSeconds

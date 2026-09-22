@@ -1,0 +1,46 @@
+# THE SETTINGS OF ONE HOST POOL. Never applied (local-config); the
+# host-pool-params Component writes them into the pool's MachineDeployment,
+# KubeadmConfigTemplate, AWSMachineTemplate and MachineHealthCheck. To add a
+# pool, copy this directory to deploy/capi/pools/<name>, change `name`, the
+# ConfigMap's own name (every pool's has to differ) and whatever else
+# differs, and list it in deploy/capi/kustomization.yaml.
+#
+# Replace everything that says REPLACE. There is no account behind these
+# values: this pool cannot be applied as it stands.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: host-pool-default
+  annotations:
+    config.kubernetes.io/local-config: "true"
+data:
+  # The pool's name, and the name of each of its objects.
+  name: flintlock-hosts-default
+  # The Cluster API Cluster of the workload cluster the Hosts join.
+  clusterName: REPLACE-workload-cluster
+  # The number of Hosts.
+  replicas: "2"
+  # KF-001: exactly one instance type, and the AMI that `make image-ami`
+  # published from the Host Image, by id.
+  instanceType: m6id.metal
+  amiID: ami-REPLACE
+  # The Kubernetes version of that Host Image (its AMI's
+  # gitlab-runner.flintlock.dev/kubernetes-version tag, image/versions.env).
+  kubernetesVersion: v1.35.8
+  # KF-004: at least the Pod Provider's drain_timeout (1h in
+  # deploy/host-agent/config/kubelet.yaml.tmpl), with room for the idle pods
+  # to leave and the drain guard to go.
+  nodeDrainTimeoutSeconds: "4500"
+  # KF-005: how long a Host's Node may stay not ready before its Machine is
+  # replaced.
+  unhealthySeconds: "300"
+  # KF-003: the Host configuration file of HI-050, written by cloud-init at
+  # first boot. Keys and defaults: image/README.md, "Host configuration
+  # file". PROTECTED_CIDRS has to name the cluster's node and pod ranges;
+  # GUEST_SUBNET has to stay clear of them and of the service range.
+  host.conf: |
+    GUEST_SUBNET=10.200.0.0/16
+    THIN_POOL_DEVICE=
+    PROTECTED_CIDRS=REPLACE-node-cidr,REPLACE-pod-cidr
+    HOST_RESERVE_VCPU=2
+    HOST_RESERVE_MEMORY_MB=4096

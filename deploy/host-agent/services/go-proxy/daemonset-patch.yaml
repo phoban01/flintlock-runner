@@ -1,0 +1,126 @@
+# The Go module proxy's containers in the Host Agent.
+#
+#= docs/requirements/12-cluster-fleet.md#cluster-host-agent
+#/ The Host Agent SHALL configure each Host Service as FL-102 to
+#/ FL-107, FL-114 and FL-115 require.
+# athens.toml.tmpl and nginx-go-proxy.conf.tmpl carry the configuration of
+# internal/fleet/scripts/templates/host_services.sh.tmpl: modules on the
+# cache directory, the public proxy for public paths and the version control
+# host for the private patterns (FL-105), the checksum database for all but
+# the private patterns (FL-114), and private listings served from cache
+# until the revalidation interval elapses (FL-115). render.sh expands the
+# private parts from go-proxy.env exactly as data.go does.
+#
+#= docs/requirements/12-cluster-fleet.md#cluster-host-agent
+#/ The Fleet Manifests SHALL supply the registry mirror's upstream
+#/ credentials and the Go module proxy's private module credential from
+#/ Kubernetes Secrets mounted only into the Host Agent.
+# The Secret flintlock-go-proxy-credential is mounted into the athens
+# container and no other, of this pod or any other workload.
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: flintlock-host-agent
+  namespace: flintlock-system
+spec:
+  template:
+    spec:
+      containers:
+        - name: athens
+          image: gomods/athens:v0.15.4@sha256:a9db7973877d633e557a2f00d93f40ed7d2c2238fa5d47eb9d013c92dbc5f875
+          args: [athens-proxy, -config_file=/etc/flr/rendered/athens.toml]
+          env:
+            - name: HOME
+              value: /tmp
+          # Unprivileged; it listens on loopback, above 1024.
+          securityContext:
+            runAsUser: 10001
+            runAsGroup: 10001
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: [ALL]
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              memory: 1Gi
+          volumeMounts:
+            - name: rendered
+              mountPath: /etc/flr/rendered
+              readOnly: true
+            # KF-072: its own directory of the cache.
+            - name: cache
+              mountPath: /var/lib/flintlock-runner/cache/goproxy
+              subPath: goproxy
+            - name: go-proxy-credential
+              mountPath: /etc/flr/secrets/go-proxy
+              readOnly: true
+            - name: athens-tmp
+              mountPath: /tmp
+        # The front guests reach on the bridge gateway (KF-071).
+        - name: go-proxy-front
+          image: nginxinc/nginx-unprivileged:1.28.0-alpine@sha256:c97ff0bf7cbae369953c6da1232ec14ad9f971d66360c5698db0856a4cd657a0
+          command: [nginx, -c, /etc/flr/rendered/nginx-go-proxy.conf, -g, daemon off;]
+          # Unprivileged nginx, the image's own user; the port is above 1024.
+          securityContext:
+            runAsUser: 101
+            runAsGroup: 101
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: [ALL]
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              memory: 256Mi
+          volumeMounts:
+            - name: rendered
+              mountPath: /etc/flr/rendered
+              readOnly: true
+            - name: cache
+              mountPath: /var/lib/flintlock-runner/cache/goproxy-lists
+              subPath: goproxy-lists
+            - name: go-proxy-front-tmp
+              mountPath: /tmp
+        #= docs/requirements/12-cluster-fleet.md#cluster-host-agent
+        #/ The Host Agent SHALL pre-warm the Go module proxy and the
+        #/ registry mirror with the modules and images listed in the
+        #/ configuration.
+        # prewarm.sh fetches every module of prewarm.go-proxy.modules
+        # through the proxy on the bridge gateway, then sleeps.
+        - name: prewarm-go-proxy
+          image: busybox:1.37.0@sha256:9db7b59979c38555a39def84a31fb98b5296952f9e3afd4f6f11f05b07adfab0
+          command: [/bin/sh, /etc/flr/templates/prewarm.sh, go-proxy]
+          securityContext:
+            runAsUser: 65534
+            runAsGroup: 65534
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: [ALL]
+          resources:
+            requests:
+              cpu: 10m
+              memory: 16Mi
+            limits:
+              memory: 64Mi
+          volumeMounts:
+            - name: templates
+              mountPath: /etc/flr/templates
+              readOnly: true
+            - name: rendered
+              mountPath: /etc/flr/rendered
+              readOnly: true
+      volumes:
+        - name: go-proxy-credential
+          secret:
+            secretName: flintlock-go-proxy-credential
+            defaultMode: 0444
+        - name: athens-tmp
+          emptyDir: {}
+        - name: go-proxy-front-tmp
+          emptyDir: {}

@@ -1,0 +1,4 @@
+# path under the cache directory, and the user id that owns it: the
+# containers' runAsUser in daemonset-patch.yaml.
+goproxy 10001
+goproxy-lists 101
