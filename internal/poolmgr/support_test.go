@@ -256,7 +256,16 @@ func awaitEvent(t *testing.T, ctx context.Context, stream poolmgr.EventStream, t
 // available, so a following claim finds warm capacity.
 func (p *poolManager) fillPool(c poolmgr.Client, spec poolmgr.PoolSpec) {
 	p.t.Helper()
-	stream := p.events(c)
+	// The stream is filtered to this Pool: a new subscriber is replayed the
+	// recent events of every Pool it can see, so an unfiltered stream hands
+	// back an earlier Pool's VM_AVAILABLE at once and fillPool would return
+	// before this Pool had any warm capacity.
+	ref := spec.Ref
+	stream, err := c.Subscribe(p.ctx, poolmgr.EventFilter{Pool: &ref})
+	if err != nil {
+		p.t.Fatalf("Subscribe(%s): %v", spec.Ref, err)
+	}
+	p.t.Cleanup(func() { _ = stream.Close() })
 	if _, err := c.CreatePool(p.ctx, spec); err != nil {
 		p.t.Fatalf("CreatePool(%s): %v", spec.Ref, err)
 	}
