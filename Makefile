@@ -134,3 +134,52 @@ image-lint:
 ## image-ami: publish HOST_IMAGE as an AMI with bootc-image-builder; needs AWS and IMAGE_AMI_ARGS, see image/README.md
 image-ami:
 	CONTAINER_ENGINE=$(CONTAINER_ENGINE) image/publish-ami.sh $(HOST_IMAGE) $(IMAGE_AMI_ARGS)
+
+# ---------------------------------------------------------------------------
+# The Fleet Manifests (deploy/, docs/requirements/12-cluster-fleet.md), in a
+# block of its own.
+#
+# The tools are installed with `go install` at the pinned versions below into
+# MANIFESTS_TOOLS, one directory per version. kubeconform validates against
+# the Kubernetes schemas of K8S_SCHEMA_VERSION, the Kubernetes version of the
+# Host Image (image/versions.env), and the Cluster API and CAPA CRD schemas
+# of the datreeio CRDs-catalog, both read from pinned commits.
+KUSTOMIZE_VERSION    ?= v5.8.1
+KUBECONFORM_VERSION  ?= v0.8.0
+YQ_VERSION           ?= v4.53.6
+MANIFESTS_TOOLS      ?= $(abspath $(BIN))/manifests-tools
+K8S_SCHEMA_VERSION   ?= 1.35.8
+K8S_SCHEMA_COMMIT    ?= 491f6d0bac338516572de67fbd5ec4c510f7e657
+CRDS_CATALOG_COMMIT  ?= ad3b08c5045129d7bb1eeffd8e61719b2c8dd1e2
+KUSTOMIZE_BIN         = $(MANIFESTS_TOOLS)/kustomize-$(KUSTOMIZE_VERSION)/kustomize
+KUBECONFORM_BIN       = $(MANIFESTS_TOOLS)/kubeconform-$(KUBECONFORM_VERSION)/kubeconform
+YQ_BIN                = $(MANIFESTS_TOOLS)/yq-$(YQ_VERSION)/yq
+
+.PHONY: manifests manifests-check manifests-tools
+
+$(KUSTOMIZE_BIN):
+	GOBIN=$(dir $@) $(GO) install sigs.k8s.io/kustomize/kustomize/v5@$(KUSTOMIZE_VERSION)
+
+$(KUBECONFORM_BIN):
+	GOBIN=$(dir $@) $(GO) install github.com/yannh/kubeconform/cmd/kubeconform@$(KUBECONFORM_VERSION)
+
+$(YQ_BIN):
+	GOBIN=$(dir $@) $(GO) install github.com/mikefarah/yq/v4@$(YQ_VERSION)
+
+## manifests-tools: install the pinned kustomize, kubeconform and yq into MANIFESTS_TOOLS
+manifests-tools: $(KUSTOMIZE_BIN) $(KUBECONFORM_BIN) $(YQ_BIN)
+
+## manifests: render the Fleet Manifests (deploy/) and the Cluster API objects (deploy/capi) to stdout
+manifests: $(KUSTOMIZE_BIN)
+	@$(KUSTOMIZE_BIN) build deploy
+	@echo ---
+	@$(KUSTOMIZE_BIN) build deploy/capi
+
+## manifests-check: render deploy/ and deploy/capi, validate them with kubeconform and run deploy/tests/checks.yaml
+manifests-check: manifests-tools
+	$(GO) build -o $(BIN)/flr ./cmd/flr
+	KUSTOMIZE=$(KUSTOMIZE_BIN) KUBECONFORM=$(KUBECONFORM_BIN) YQ=$(YQ_BIN) FLR=$(abspath $(BIN))/flr \
+		K8S_SCHEMA_VERSION=$(K8S_SCHEMA_VERSION) \
+		K8S_SCHEMA_LOCATION='https://raw.githubusercontent.com/yannh/kubernetes-json-schema/$(K8S_SCHEMA_COMMIT)/{{.NormalizedKubernetesVersion}}-standalone{{.StrictSuffix}}/{{.ResourceKind}}{{.KindSuffix}}.json' \
+		CRD_SCHEMA_LOCATION='https://raw.githubusercontent.com/datreeio/CRDs-catalog/$(CRDS_CATALOG_COMMIT)/{{.Group}}/{{.ResourceKind}}_{{.ResourceAPIVersion}}.json' \
+		deploy/check.sh

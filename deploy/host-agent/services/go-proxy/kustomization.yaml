@@ -1,0 +1,32 @@
+# The Go module proxy Host Service (FL-105, FL-113 to FL-115), as a
+# Component of the Host Agent: Athens behind an nginx front, as push
+# provisioning runs it. Leaving this Component out of
+# deploy/kustomization.yaml removes the containers, their configuration and
+# the Exec Agent's entry together (KF-075).
+apiVersion: kustomize.config.k8s.io/v1alpha1
+kind: Component
+
+patches:
+  - path: daemonset-patch.yaml
+
+configMapGenerator:
+  - name: flintlock-host-agent-config
+    namespace: flintlock-system
+    behavior: merge
+    files:
+      - athens.toml.tmpl
+      - nginx-go-proxy.conf.tmpl
+      - go-proxy.env
+      - prewarm.go-proxy.modules
+      - agent.host-service.go_proxy.yaml
+      - cache-dirs.go-proxy
+
+# The private module credential (FL-113): a .netrc line for the version
+# control host of PRIVATE_VCS_HOST, `machine HOST login oauth2 password
+# TOKEN`, with a read-only token scoped to the private patterns (SE-055).
+# Empty here; an overlay replaces it (deploy/README.md).
+secretGenerator:
+  - name: flintlock-go-proxy-credential
+    namespace: flintlock-system
+    files:
+      - netrc

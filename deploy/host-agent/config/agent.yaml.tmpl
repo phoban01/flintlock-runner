@@ -1,0 +1,62 @@
+# The Exec Agent's configuration (internal/agent/config.go), rendered on each
+# Host by render.sh into /etc/flr/rendered/agent.yaml, which the exec-agent
+# container of deploy/agent/host-agent-patch.yaml reads. host_node is not
+# here: it is the Host's Node name, given by the downward API through
+# FLINTLOCK_RUNNER_HOST_NODE. `flr agent` refuses unknown keys, and
+# `make manifests-check` loads the rendered file with it.
+
+# KF-171 and HI-042: flintlockd v0.15.1 listens on TCP only, so its local
+# endpoint is a loopback port, reached because the Host Agent runs in the
+# Host's network namespace (KF-071).
+flintlockd: 127.0.0.1:9090
+# HI-063: the one user id the Host Image admits to that endpoint,
+# POD_PROVIDER_UID of this Host's configuration file, from host.env. `flr
+# agent` refuses to start as any other, so a pool whose host.conf moves the
+# id and a container still running as 10250 fail at start, saying why,
+# rather than with every call to flintlockd reset.
+flintlockd_user_id: @FLINTLOCKD_USER_ID@
+
+# KF-172: the exec API. No address: the agent serves on the Host's internal
+# address, read from its Node. 10270 is in the Host Image's
+# HOST_CONTROL_PORTS, so neither guests (HI-034) nor the Host Services
+# (HI-064) can reach it.
+port: 10270
+tls:
+  # Issued per pod by cert-manager's csi-driver for the pod's IP, the
+  # Host's internal address (deploy/agent/host-agent-patch.yaml). Unverified
+  # on a cluster; see deploy/README.md.
+  cert_file: /etc/flr/agent-tls/tls.crt
+  key_file: /etc/flr/agent-tls/tls.key
+exec_open_timeout: 10s
+call_timeout: 10s
+
+# KF-178 and KF-179: where every enabled Host Service listens, probed for
+# readiness and published on the Host's Node under these names. Each Host
+# Service Component adds its own entry; one left out is neither probed nor
+# published.
+bridge_gateway: "@BRIDGE_GATEWAY@"
+@BLOCK:agent-host-services@
+
+# KF-178: the Host Image's not ready reasons, mounted read-only from the Host.
+not_ready_dir: /run/flr/not-ready.d
+
+# KF-181. deploy/capi keeps the Machines' node drain timeout at least this
+# long (KF-004); `make manifests-check` compares the two.
+drain_timeout: 1h
+sync_interval: 2s
+
+guard:
+  namespace: flintlock-system
+  # KF-144: the drain guard pod's image, pinned by digest.
+  image: registry.k8s.io/pause:3.10@sha256:ee6521f290b2168b6e0935a181d4cff9be1ac3f505666ef0e3c98fae8199917a
+
+# PROVISIONAL CLAIM RESOURCE. claims.test.flintlock-runner.dev is this
+# project's test definition of battery's MicroVMClaim
+# (internal/agent/testdata/crds/microvmclaims.yaml), not battery's API. No
+# cluster serves it, so until battery publishes its group and resource and
+# they replace these three lines, and deploy/agent/rbac.yaml's rule, the agent
+# cannot look a claim up and refuses every exec request (KF-175).
+claims:
+  group: claims.test.flintlock-runner.dev
+  version: v1alpha1
+  resource: microvmclaims

@@ -1,0 +1,72 @@
+# The Runner's configuration file (docs/requirements/07-configuration.md),
+# mounted from the ConfigMap flintlock-runner-config at
+# /etc/flintlock-runner/config.yaml. It holds no secret: the GitLab runner
+# token comes from the Secret flintlock-runner-gitlab-token through
+# FLINTLOCK_RUNNER_GITLAB_TOKEN (deploy/runner/deployment.yaml).
+#
+# NOT YET DEPLOYABLE. On a cluster fleet the Runner claims MicroVMs from
+# battery with MicroVMClaims (12-cluster-fleet.md#battery-claims) and runs
+# each Stage through the Exec Agent of the claim's Host over the agent-exec
+# Guest Transport. Neither is in this file, because the Runner's
+# configuration cannot express them yet: the claim backend is not built
+# (work package claim-backend, waiting on battery's resource shapes), and
+# agent-exec is not a transport kind a Profile can name. Until they are,
+# this file has no pool_manager section, and `flr config show` refuses it
+# for want of one: with no backend named it falls back to the push fleet's
+# battery backend, and asks for battery's endpoint and a Host inventory. It
+# refuses it for nothing else, which `make manifests-check` asserts, and
+# deploy/kustomization.yaml leaves the Runner out; see The Runner in
+# deploy/README.md.
+#
+# Replace what says REPLACE. The one value in double quotes is written by
+# kustomize from deploy/runner/job-timeout.yaml; do not add other double
+# quotes to this file, because the replacement counts them.
+gitlab:
+  url: https://gitlab.example.com # REPLACE with your GitLab instance
+  name: flintlock-runner
+  concurrent: 8
+  shutdown_timeout: "10800s"
+
+# PENDING claim-backend: the pool backend. What goes here, a backend that
+# creates MicroVMClaims in this namespace with the Runner's own in-cluster
+# identity, and its settings, is defined by that work package, not here; no
+# value written now would load. Nothing in this comment is read.
+#
+# pool_manager:
+#   backend: <the claim backend, once it exists>
+
+# The Profiles (KF-080). Each names what battery's Pool of that Profile boots;
+# pin the images by digest (CF-027). The Guest Transport is left to its
+# default until agent-exec can be named here (KF-185).
+profiles:
+  - name: default
+    arch: amd64
+    vcpu: 2
+    memory_mb: 4096
+    kernel:
+      image: registry.example.com/REPLACE/kernel:REPLACE
+    rootfs: registry.example.com/REPLACE/ubuntu-ci:REPLACE
+    pool:
+      size: 2
+
+# What Jobs are told about the Host Services. The addresses come from the
+# annotations the Exec Agent keeps on the Host's Node (KF-179, KF-189);
+# these sections say which services the Executor points Jobs at, and have to
+# agree with the Host Service Components enabled in deploy/kustomization.yaml
+# and with the HTTP cache upstreams in
+# deploy/host-agent/services/http-cache/http-cache.upstreams.
+host_services:
+  buildkit:
+    port: 1234
+  go_proxy:
+    port: 3000
+  registry_mirror:
+    port: 5000
+  http_cache:
+    port: 3128
+
+observability:
+  # /metrics, /healthz and /readyz, probed by the Deployment.
+  listen_address: :9252
+
+state_dir: /var/lib/flintlock-runner

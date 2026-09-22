@@ -107,7 +107,7 @@ reads a credential from it or from user-data.
 | `HOST_RESERVE_VCPU` | `2` | CPUs the Host's own Node offers to pods |
 | `HOST_RESERVE_MEMORY_MB` | `4096` | Memory the Host's own Node offers to pods |
 | `HOST_SERVICE_PORTS` | `1234,3000,5000,3128` | TCP ports guests may reach on the gateway |
-| `HOST_CONTROL_PORTS` | `9090,8090,10248,10250,10255,10256,10260,9252,1338` | The Host's own ports, dropped for guests by name as well as by the final drop |
+| `HOST_CONTROL_PORTS` | `9090,8090,10248,10250,10255,10256,10260,10270,9252,1338` | The Host's own ports, dropped for guests by name as well as by the final drop |
 | `CACHE_VOLUME_PERCENT` | `15` | Share of the volume group for the cache volume, when first created |
 | `POD_PROVIDER_UID` | `10250` | The one user id that may connect to `flintlockd`; 1 to 4294967294, never 0. See below |
 | `HOST_SERVICE_UIDS` | `101,1000,10001,10002,100000-165535` | The user ids of the Host Services, ids and ranges `LOW-HIGH`, which may reach neither the metadata service nor the control ports; never 0 or the Pod Provider's, no overlaps. See below |
@@ -164,7 +164,12 @@ Service's, a DaemonSet's. `flintlockd`'s replies come from port 9090 and
 pass. The rule is loaded with the rest of the firewall before `flintlockd`
 starts (HI-063).
 
-This is the contract the Fleet Manifests follow (KF-135):
+This is the contract the Fleet Manifests follow (KF-135). On the design of
+battery's claim resources the process admitted is the Exec Agent, not the
+Pod Provider (KF-171): `deploy/` runs it as this user id, and the key keeps
+its name. The Exec Agent listens on port 10270, which is in
+`HOST_CONTROL_PORTS`, so guests and the Host Services cannot reach it
+either.
 
 - The Pod Provider's container runs with `runAsUser` equal to
   `POD_PROVIDER_UID`, `10250` unless the Host configuration file says

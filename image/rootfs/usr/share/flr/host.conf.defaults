@@ -34,8 +34,9 @@ HOST_SERVICE_PORTS=1234,3000,5000,3128
 
 # The Host's own ports guests may never reach: flintlockd's gRPC and HTTP
 # endpoints, the kubelet (10250 and its health, read-only and proxy ports),
-# the Pod Provider's kubelet endpoint and the metrics listeners.
-HOST_CONTROL_PORTS=9090,8090,10248,10250,10255,10256,10260,9252,1338
+# the Pod Provider's kubelet endpoint (10260), the Exec Agent's exec API
+# (10270) and the metrics listeners.
+HOST_CONTROL_PORTS=9090,8090,10248,10250,10255,10256,10260,10270,9252,1338
 
 # The share of the thin pool volume group given to the Host Service cache
 # volume when the group is first created, 0 to 50.

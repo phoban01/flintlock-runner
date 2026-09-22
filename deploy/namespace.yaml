@@ -1,0 +1,10 @@
+# The namespace of the Host Agent, the Exec Agent's drain guards and the
+# Runner. The name is repeated in every namespaced object rather than set by
+# a kustomize `namespace:` transformer, because deploy/agent's files, which
+# internal/agent's tests load unchanged, name it themselves.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: flintlock-system
+  labels:
+    app.kubernetes.io/part-of: flintlock-runner

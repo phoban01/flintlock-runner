@@ -1,0 +1,32 @@
+# The pull-through registry mirror Host Service (FL-104), as a Component of
+# the Host Agent: zot, which is what push provisioning runs, because one zot
+# is a pull-through cache of every configured upstream where one
+# distribution registry proxies exactly one. Leaving this Component out of
+# deploy/kustomization.yaml removes the containers, their configuration, the
+# Exec Agent's entry and buildkitd's mirror entries together (KF-075).
+apiVersion: kustomize.config.k8s.io/v1alpha1
+kind: Component
+
+patches:
+  - path: daemonset-patch.yaml
+
+configMapGenerator:
+  - name: flintlock-host-agent-config
+    namespace: flintlock-system
+    behavior: merge
+    files:
+      - zot.json.tmpl
+      - registry-mirror.upstreams
+      - prewarm.registry-mirror.images
+      - agent.host-service.registry_mirror.yaml
+      - cache-dirs.registry-mirror
+
+# The upstream credentials (FL-104): zot's credentials file, keyed by
+# upstream host, for example
+#   {"registry-1.docker.io": {"username": "u", "password": "p"}}
+# Empty here; an overlay replaces it (deploy/README.md).
+secretGenerator:
+  - name: flintlock-registry-mirror-credentials
+    namespace: flintlock-system
+    files:
+      - credentials.json

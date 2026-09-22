@@ -1,0 +1,33 @@
+# The HTTP cache, rendered on each Host by render.sh; ported from
+# internal/fleet/scripts/templates/host_services.sh.tmpl.
+worker_processes 2;
+pid /tmp/nginx.pid;
+error_log /dev/stderr warn;
+
+events {
+    worker_connections 1024;
+}
+
+http {
+    access_log /dev/stdout;
+    client_body_temp_path /tmp/client_temp;
+    proxy_temp_path /tmp/proxy_temp;
+    fastcgi_temp_path /tmp/fastcgi_temp;
+    uwsgi_temp_path /tmp/uwsgi_temp;
+    scgi_temp_path /tmp/scgi_temp;
+
+    # FL-106: one cache path per upstream, each with its own size limit and
+    # time-to-live.
+@BLOCK:http-cache-paths@
+
+    server {
+        # KF-071: the guest bridge gateway only.
+        listen @BRIDGE_GATEWAY@:3128;
+        proxy_set_header Authorization "";
+@BLOCK:http-cache-locations@
+
+        location / {
+            return 404;
+        }
+    }
+}

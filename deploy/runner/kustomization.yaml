@@ -1,0 +1,63 @@
+# The Runner: its Deployment, configuration and identity.
+#
+# NOT IN deploy/kustomization.yaml until the claim backend exists: the
+# Runner's configuration names no pool backend yet (config.yaml), and a
+# Runner started from it exits. It renders on its own,
+#
+#   kustomize build deploy/runner
+#
+# which is how `make manifests-check` checks it. The work package that adds
+# the claim backend adds the backend to config.yaml, the Runner's RBAC for
+# the claim resource here, and `- runner` back to deploy/kustomization.yaml.
+#
+# role.yaml in this directory is the Virtual Node design's Role for the
+# Kubernetes pool backend, still on main for internal/poolmgr/kube's tests
+# until that design is withdrawn; it is deliberately not listed here.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+resources:
+  - serviceaccount.yaml
+  - deployment.yaml
+  - job-timeout.yaml
+
+configMapGenerator:
+  - name: flintlock-runner-config
+    namespace: flintlock-system
+    files:
+      - config.yaml
+    options:
+      labels:
+        app.kubernetes.io/name: flintlock-runner
+
+# deploy/runner/job-timeout.yaml is the one place the job timeout is set.
+# The configuration takes it whole, a Go duration, into the one double-quoted
+# value of config.yaml (the second field when the file is split on double
+# quotes); the pod spec takes the digits before the `s`.
+replacements:
+  - source:
+      kind: ConfigMap
+      name: flintlock-runner-job-timeout
+      fieldPath: data.jobTimeout
+    targets:
+      - select:
+          kind: ConfigMap
+          name: flintlock-runner-config
+        fieldPaths:
+          - data.config\.yaml
+        options:
+          delimiter: '"'
+          index: 1
+  - source:
+      kind: ConfigMap
+      name: flintlock-runner-job-timeout
+      fieldPath: data.jobTimeout
+      options:
+        delimiter: s
+        index: 0
+    targets:
+      - select:
+          kind: Deployment
+          name: flintlock-runner
+        fieldPaths:
+          - spec.template.spec.terminationGracePeriodSeconds

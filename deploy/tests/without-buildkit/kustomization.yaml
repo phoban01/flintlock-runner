@@ -1,0 +1,17 @@
+# Test overlay for `make manifests-check`: the fleet with the buildkitd Host
+# Service left out, as an operator disables one.
+#
+#= docs/requirements/12-cluster-fleet.md#cluster-host-agent
+#= type=test
+#/ Where a Host Service is disabled in the configuration, the Host
+#/ Agent SHALL NOT run it.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+resources:
+  - ../../host-agent
+
+components:
+  - ../../host-agent/services/go-proxy
+  - ../../host-agent/services/registry-mirror
+  - ../../host-agent/services/http-cache

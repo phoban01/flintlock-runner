@@ -54,7 +54,7 @@ expected_rules() {
   printf 'meta skuid { %s } ip6 daddr fd00:ec2::254 counter drop\n' "$1"
   printf 'meta skuid { %s } oifname "lo" tcp dport { %s } counter drop\n' "$1" "$2"
 }
-control='9090, 8090, 10248, 10250, 10255, 10256, 10260, 9252, 1338'
+control='9090, 8090, 10248, 10250, 10255, 10256, 10260, 10270, 9252, 1338'
 
 # The defaults, with no Host configuration file at all: the ids the Fleet
 # Manifests run the Host Services as, and buildkit's subordinate ids.
@@ -75,7 +75,7 @@ if render "$C.absent.conf"; then
   else
     fail "host.env lacks the default FLR_HOST_SERVICE_UIDS"
   fi
-  for p in 10250:kubelet 10260:"Pod Provider" 9090:flintlockd 9252:"Runner metrics" 1338:"containerd metrics"; do
+  for p in 10250:kubelet 10260:"Pod Provider" 10270:"Exec Agent" 9090:flintlockd 9252:"Runner metrics" 1338:"containerd metrics"; do
     if service_rules | grep -Eq "tcp dport \{.* ${p%%:*}[ ,}]"; then ok "the ${p#*:} port ${p%%:*} is closed to them"; else fail "the ${p#*:} port ${p%%:*} is open to them"; fi
   done
   # Nothing else is taken from them: no rule of theirs names the Host
@@ -172,6 +172,7 @@ else
   dropped 100500 169.254.169.254 80 "a build step as a user other than root (100500) to the metadata service"
   dropped 10002 127.0.0.1 10250 "zot (10002) to the kubelet on loopback"
   dropped 10001 192.0.2.2 10260 "Athens (10001) to the Pod Provider on the Host's primary address"
+  dropped 10001 192.0.2.2 10270 "Athens (10001) to the Exec Agent on the Host's primary address"
   dropped 101 10.200.4.1 9252 "nginx (101) to the metrics port on the bridge gateway"
   passed 101 127.0.0.1 3999 "nginx (101) to Athens on 127.0.0.1:3999"
   passed 1000 10.200.4.1 5000 "buildkitd (1000) to the registry mirror on the bridge gateway"

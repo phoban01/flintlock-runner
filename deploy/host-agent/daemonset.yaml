@@ -1,0 +1,205 @@
+# The Host Agent (docs/requirements/12-cluster-fleet.md, section "Host
+# Agent"): one pod per Host with the Exec Agent and the Host Services.
+#
+#= docs/requirements/12-cluster-fleet.md#cluster-host-agent
+#/ The Fleet Manifests SHALL run the Host Agent as a DaemonSet that
+#/ tolerates the Host taint, selects the Host label and contains the Pod
+#/ Provider and the Host Services of FL-100.
+# The Pod Provider part of KF-070 is superseded by the move to battery's
+# claim resources: the Exec Agent takes the Pod Provider's place in the Host
+# Agent (KF-170), and no Pod Provider runs here.
+#
+# This file is the plumbing every container of the Host Agent shares. The
+# Exec Agent's container comes from deploy/agent (host-agent-patch.yaml),
+# included by kustomization.yaml. Each Host Service is a kustomize Component
+# under services/, which adds its containers, its configuration templates
+# and its entry in the Exec Agent's configuration; deploy/kustomization.yaml
+# includes all four.
+#
+# Least privilege (KF-113). Nothing here is privileged, and no container
+# adds a capability except the two noted where they are added: CAP_CHOWN
+# for the cache preparation and CAP_SETUID/CAP_SETGID for rootless
+# buildkitd. The host mounts are, each justified where it is declared:
+#
+#   /run/flr/host.env                    read-only, render only
+#   /run/flr/not-ready.d                 read-only, Exec Agent only
+#   /var/lib/flintlock-runner/cache      read-write, cache preparation and
+#                                        the Host Services, each its own
+#                                        subdirectory
+#
+# The Host Image labels all three for the container domain (HI-065): the
+# first two container_ro_file_t, the cache container_file_t, at s0.
+#
+# flintlockd is reached on its loopback endpoint through the Host's network
+# namespace, which takes no mount and no capability.
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: flintlock-host-agent
+  namespace: flintlock-system
+  labels:
+    app.kubernetes.io/name: flintlock-host-agent
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: flintlock-host-agent
+  updateStrategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 1
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: flintlock-host-agent
+    spec:
+      # deploy/agent's rbac.yaml and admission-policy.yaml name this account
+      # in this namespace; keep both.
+      serviceAccountName: flintlock-host-agent
+      # The token goes to the Exec Agent only, through its projected volume
+      # exec-agent-token (deploy/agent/host-agent-patch.yaml).
+      automountServiceAccountToken: false
+      nodeSelector:
+        gitlab-runner.flintlock.dev/host: "true"
+      tolerations:
+        - key: gitlab-runner.flintlock.dev/host
+          operator: Equal
+          value: "true"
+          effect: NoSchedule
+      #= docs/requirements/12-cluster-fleet.md#cluster-host-agent
+      #/ The Host Agent SHALL run in the Host's network namespace and
+      #/ SHALL bind every Host Service only to the guest bridge gateway address.
+      # The Host's network namespace is where the guest bridge and its
+      # gateway address are, and where flintlockd's loopback endpoint is
+      # (HI-042). Each service's configuration names the gateway address,
+      # which render.sh reads from the Host Image's /run/flr/host.env.
+      hostNetwork: true
+      dnsPolicy: ClusterFirstWithHostNet
+      hostPID: false
+      hostIPC: false
+      # Stopping the Exec Agent leaves every MicroVM alone (its Stages end
+      # as stream failures, KF-176), so there is nothing to wait for beyond
+      # the services' own shutdown.
+      terminationGracePeriodSeconds: 30
+      securityContext:
+        runAsNonRoot: true
+        seccompProfile:
+          type: RuntimeDefault
+        # SELinux (HI-065). The containers keep the ordinary container
+        # domain, container_t, except buildkitd, which names
+        # container_engine_t and repeats this level (KF-139, in
+        # services/buildkit); only the MCS level is fixed here. A pod otherwise
+        # gets two random categories each time it starts, and what the Host
+        # Services write into the cache directory carries them, so the next
+        # Host Agent pod, with other categories, could neither read its
+        # predecessor's caches nor hand them over in prepare-cache. With a
+        # fixed pair every Host Agent pod reads what the last one wrote,
+        # and a pod with random categories still cannot. The Host Image
+        # labels the host paths below at s0, which every level dominates;
+        # see "SELinux" in image/README.md.
+        seLinuxOptions:
+          level: "s0:c311,c827"
+      initContainers:
+        # Renders the Exec Agent's and the Host Services' configuration for
+        # this Host, bridge gateway address included (render.sh).
+        - name: render
+          image: busybox:1.37.0@sha256:9db7b59979c38555a39def84a31fb98b5296952f9e3afd4f6f11f05b07adfab0
+          command: [/bin/sh, /etc/flr/templates/render.sh]
+          securityContext:
+            runAsUser: 65534
+            runAsGroup: 65534
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: [ALL]
+          resources:
+            requests:
+              cpu: 10m
+              memory: 16Mi
+            limits:
+              memory: 64Mi
+          volumeMounts:
+            - name: templates
+              mountPath: /etc/flr/templates
+              readOnly: true
+            - name: rendered
+              mountPath: /etc/flr/rendered
+            - name: host-env
+              mountPath: /run/flr/host.env
+              readOnly: true
+        #= docs/requirements/12-cluster-fleet.md#cluster-host-agent
+        #/ The Host Agent SHALL keep all Host Service storage in the Host
+        #/ Service cache directory of HI-024, so that it outlives the pod and a
+        #/ reboot of the Host.
+        # Creates each enabled Host Service's directory under the cache
+        # directory and hands it to that service's user id
+        # (prepare-cache.sh).
+        - name: prepare-cache
+          image: busybox:1.37.0@sha256:9db7b59979c38555a39def84a31fb98b5296952f9e3afd4f6f11f05b07adfab0
+          command: [/bin/sh, /etc/flr/templates/prepare-cache.sh]
+          #= docs/requirements/12-cluster-fleet.md#cluster-least-privilege
+          #/ The Host Agent SHALL hold only the privileges it needs to bind
+          #/ to the bridge gateway, to write the cache directory and to reach the
+          #/ local `flintlockd` endpoint.
+          # Root, because root owns the Host Image's cache directory, and
+          # CAP_CHOWN alone, to give each service its directory. A hostPath
+          # is never re-owned by the kubelet, and fsGroup does not apply to
+          # it, so nothing short of this lets the non-root services write
+          # there.
+          securityContext:
+            runAsNonRoot: false
+            runAsUser: 0
+            runAsGroup: 0
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: [ALL]
+              add: [CHOWN]
+          resources:
+            requests:
+              cpu: 10m
+              memory: 16Mi
+            limits:
+              memory: 64Mi
+          volumeMounts:
+            - name: templates
+              mountPath: /etc/flr/templates
+              readOnly: true
+            - name: cache
+              mountPath: /var/lib/flintlock-runner/cache
+      # The Exec Agent's container, `flr agent`, is deploy/agent's patch
+      # (host-agent-patch.yaml); the Host Service Components add theirs.
+      containers: []
+      volumes:
+        # The ConfigMap of templates and scripts; the Host Service components
+        # merge their own entries into it.
+        - name: templates
+          configMap:
+            name: flintlock-host-agent-config
+            defaultMode: 0444
+        # What render.sh makes of them for this Host. Nothing secret.
+        - name: rendered
+          emptyDir:
+            medium: Memory
+            sizeLimit: 1Mi
+        # Host mount: the Host Image's derived settings, written by
+        # flr-host-config at every boot. Read by render only, for the bridge
+        # gateway address and the user id flintlockd admits. A Host without
+        # it has not configured itself, and the pod does not start.
+        - name: host-env
+          hostPath:
+            path: /run/flr/host.env
+            type: File
+        # Host mount: the not ready reasons of the Host Image (KF-178),
+        # read-only, Exec Agent only.
+        - name: not-ready
+          hostPath:
+            path: /run/flr/not-ready.d
+            type: Directory
+        # Host mount: the Host Service cache directory of HI-024 on the
+        # Host's instance store, so the caches outlive the pod and a reboot
+        # (KF-072). type Directory: the Host Image makes it, and a Host where
+        # it is missing does not get a fresh directory on its root volume.
+        - name: cache
+          hostPath:
+            path: /var/lib/flintlock-runner/cache
+            type: Directory

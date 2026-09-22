@@ -1,0 +1,30 @@
+# The Host Agent without its Host Services: the DaemonSet with the Exec
+# Agent, its identity and permissions, and the shared configuration. The
+# Host Services are Components under services/, included by
+# deploy/kustomization.yaml.
+#
+# rbac.yaml and admission-policy.yaml in this directory are the Pod
+# Provider's, still on main for internal/kubelet's tests until the Virtual
+# Node design is withdrawn; they are deliberately not listed here. The Exec
+# Agent's own, from deploy/agent, take their place.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+resources:
+  - serviceaccount.yaml
+  - daemonset.yaml
+
+components:
+  - ../agent
+
+configMapGenerator:
+  - name: flintlock-host-agent-config
+    namespace: flintlock-system
+    files:
+      - config/render.sh
+      - config/prepare-cache.sh
+      - config/prewarm.sh
+      - config/agent.yaml.tmpl
+    options:
+      labels:
+        app.kubernetes.io/name: flintlock-host-agent

@@ -1,0 +1,17 @@
+# The Cluster API objects of a cluster fleet's Host pools, for the
+# management cluster, in the namespace of the workload cluster's Cluster
+# object:
+#
+#   kustomize build deploy/capi | kubectl --context MANAGEMENT apply -f -
+#
+# One directory under pools/ per Host pool (KF-001). Every value that needs
+# an account, a cluster or an AMI is a placeholder in the pool's
+# host-pool.yaml.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+# REPLACE with the namespace of the workload cluster's Cluster object.
+namespace: default
+
+resources:
+  - pools/default
