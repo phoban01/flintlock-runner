@@ -63,6 +63,7 @@ func newPoolClient(cfg *config.Config, log *slog.Logger) (*poolClient, error) {
 		Profiles:            cfg.Profiles,
 		CloudInitConfigMaps: k.CloudInitConfigMaps,
 		JobTimeout:          k.JobTimeout,
+		CleanupMargin:       k.CleanupMargin,
 		RolloutInterval:     k.RolloutInterval,
 		Deadline:            pm.Deadline,
 		Log:                 log,

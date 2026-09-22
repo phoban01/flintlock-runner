@@ -406,6 +406,9 @@ type KubernetesPools struct {
 	// JobTimeout is the active deadline set on a claimed pod when the claim
 	// does not carry the Job's own timeout (KF-044).
 	JobTimeout time.Duration `yaml:"job_timeout"`
+	// CleanupMargin is added to the Job's own timeout to make the claimed
+	// pod's active deadline, so that the MicroVM outlasts the Job (KF-127).
+	CleanupMargin time.Duration `yaml:"cleanup_margin"`
 	// RolloutInterval is the least time between two deletions of idle pods
 	// of a previous template, per Pool (KF-050).
 	RolloutInterval time.Duration `yaml:"rollout_interval"`

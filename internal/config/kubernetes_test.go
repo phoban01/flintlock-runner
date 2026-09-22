@@ -56,6 +56,9 @@ func TestKubernetesBackendDefaults(t *testing.T) {
 	if k.JobTimeout != DefaultKubernetesJobTimeout {
 		t.Errorf("job_timeout = %s, want %s", k.JobTimeout, DefaultKubernetesJobTimeout)
 	}
+	if k.CleanupMargin != DefaultKubernetesCleanupMargin {
+		t.Errorf("cleanup_margin = %s, want %s", k.CleanupMargin, DefaultKubernetesCleanupMargin)
+	}
 	if k.RolloutInterval != DefaultKubernetesRolloutInterval {
 		t.Errorf("rollout_interval = %s, want %s", k.RolloutInterval, DefaultKubernetesRolloutInterval)
 	}
@@ -73,6 +76,7 @@ func TestKubernetesBackendSettings(t *testing.T) {
     context: fleet
     namespace: ci-runners
     job_timeout: 90m
+    cleanup_margin: 20m
     rollout_interval: 3s
     cloud_init_config_maps:
       default: default-cloud-init
@@ -85,8 +89,8 @@ func TestKubernetesBackendSettings(t *testing.T) {
 	if k.Kubeconfig != "/etc/flintlock-runner/kubeconfig" || k.Context != "fleet" || k.Namespace != "ci-runners" {
 		t.Errorf("kubeconfig, context, namespace = %q, %q, %q", k.Kubeconfig, k.Context, k.Namespace)
 	}
-	if k.JobTimeout != 90*time.Minute || k.RolloutInterval != 3*time.Second {
-		t.Errorf("job_timeout, rollout_interval = %s, %s", k.JobTimeout, k.RolloutInterval)
+	if k.JobTimeout != 90*time.Minute || k.CleanupMargin != 20*time.Minute || k.RolloutInterval != 3*time.Second {
+		t.Errorf("job_timeout, cleanup_margin, rollout_interval = %s, %s, %s", k.JobTimeout, k.CleanupMargin, k.RolloutInterval)
 	}
 	if got := k.CloudInitConfigMaps["default"]; got != "default-cloud-init" {
 		t.Errorf("cloud_init_config_maps[default] = %q", got)
@@ -102,6 +106,7 @@ func TestKubernetesBackendRejected(t *testing.T) {
 			c.PoolManager.Backend = PoolBackendKubernetes
 			c.PoolManager.Kubernetes = &KubernetesPools{
 				JobTimeout:      time.Hour,
+				CleanupMargin:   time.Minute,
 				RolloutInterval: time.Second,
 			}
 			mutate(c.PoolManager.Kubernetes)
@@ -125,6 +130,7 @@ func TestKubernetesBackendRejected(t *testing.T) {
 		{"namespace that is no label", kube(func(k *KubernetesPools) { k.Namespace = "CI_Runners" }), f + ".namespace", "RFC 1123 label"},
 		{"job timeout of zero", kube(func(k *KubernetesPools) { k.JobTimeout = 0 }), f + ".job_timeout", "positive duration"},
 		{"job timeout under a second", kube(func(k *KubernetesPools) { k.JobTimeout = time.Millisecond }), f + ".job_timeout", "at least one second"},
+		{"negative cleanup margin", kube(func(k *KubernetesPools) { k.CleanupMargin = -time.Minute }), f + ".cleanup_margin", "positive duration"},
 		{"rollout interval of zero", kube(func(k *KubernetesPools) { k.RolloutInterval = 0 }), f + ".rollout_interval", "positive duration"},
 		{
 			"cloud-init ConfigMap for no profile",

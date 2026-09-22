@@ -200,9 +200,15 @@ func (e *executor) resolveProfile(sec *prepareSection) error {
 	return nil
 }
 
-// jobInfo is the Scheduler's view of the Job.
+// jobInfo is the Scheduler's view of the Job. The timeout is the one
+// gitlab-runner itself enforces on the Job, so the claimed pod's active
+// deadline is made from the same number (KF-127).
 func (e *executor) jobInfo() scheduler.JobInfo {
-	return scheduler.JobInfo{ID: e.Build.ID, Image: e.ExpandValue(e.Build.Image.Name)}
+	return scheduler.JobInfo{
+		ID:      e.Build.ID,
+		Image:   e.ExpandValue(e.Build.Image.Name),
+		Timeout: e.Build.GetBuildTimeout(),
+	}
 }
 
 //= docs/requirements/02-executor.md#prepare

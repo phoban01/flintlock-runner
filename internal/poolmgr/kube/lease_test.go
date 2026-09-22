@@ -43,7 +43,7 @@ func TestClaimUpdatesThePodOnce(t *testing.T) {
 		idle[pod.Name] = pod
 	}
 
-	claim, err := b.ClaimVM(kube.WithJobTimeout(f.ctx, 90*time.Second), ref)
+	claim, err := b.ClaimVM(poolmgr.WithJobTimeout(f.ctx, 90*time.Second), ref)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -59,8 +59,13 @@ func TestClaimUpdatesThePodOnce(t *testing.T) {
 	if !ok || !lease.Equal(f.clock.Now()) {
 		t.Errorf("lease annotation = %q, want the current time %s", pod.Annotations[kube.AnnotationLease], f.clock.Now())
 	}
-	if d := pod.Spec.ActiveDeadlineSeconds; d == nil || *d != 90 {
-		t.Errorf("active deadline = %v, want the job timeout of 90s", d)
+	//= docs/requirements/12-cluster-fleet.md#kube-allocation
+	//= type=test
+	//# the backend SHALL set the
+	//# active deadline of KF-044 to that timeout plus the configured cleanup
+	//# margin, using its configured default only for a Job that has none.
+	if d := pod.Spec.ActiveDeadlineSeconds; d == nil || *d != 90+5*60 {
+		t.Errorf("active deadline = %v, want the job timeout of 90s plus the 5m cleanup margin", d)
 	}
 	if n := puts.count(claim.LeaseID); n != 1 {
 		t.Errorf("%d updates of the claimed pod, want one", n)
