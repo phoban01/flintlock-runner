@@ -30,6 +30,11 @@ directory. It contains no requirements.
   which a Host of a cluster fleet boots. It carries `flintlockd`, containerd,
   the hypervisors, the kubelet and the systemd units that prepare the thin
   pool, the guest bridge and the firewall.
+- **Guest Image** — the kernel image and the root filesystem image, built
+  from `guest/`, that a Profile names and every MicroVM of its Pool boots
+  from. It carries flintlock's guest agent, bash, git, curl, the CA
+  certificates and `gitlab-runner-helper`, and configures the guest's
+  network by DHCP.
 - **Pod Provider** — the `flr kubelet` process on each Host of a cluster
   fleet, built on virtual kubelet. It registers the Host's Virtual Node,
   realises each pod bound to it as one MicroVM through the local

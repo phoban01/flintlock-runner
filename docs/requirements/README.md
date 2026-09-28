@@ -24,13 +24,14 @@ the coverage report.
 | `10-test-doubles.md` | `TD` | The fakes (Pool Manager, Host, GitLab, AWS) and the end-to-end harness that stand in for EC2, KVM and battery during development |
 | `11-host-image.md` | `HI` | The bootc Host Image a cluster fleet's Hosts boot from |
 | `12-cluster-fleet.md` | `KF` | Running the fleet from a Kubernetes cluster: Cluster API Host pools, MicroVMs as pods on per-Host Virtual Nodes, Pools as ReplicaSets, the `kube-exec` Guest Transport |
+| `13-guest-image.md` | `GI` | The Guest Image: the kernel and root filesystem images a Profile names, and what a Job finds in the guest |
 
 ## EARS patterns
 
 Use exactly one of these shapes per requirement. The subject is always one of
 the defined system names from the glossary (the Runner, the Executor, the
 Scheduler, the Guest Transport, the Fleet Controller, the Host Image, the
-Pod Provider, the Host Agent, the Fleet Manifests, the Release, the Exec Agent, the Inventory Controller).
+Pod Provider, the Host Agent, the Fleet Manifests, the Release, the Exec Agent, the Inventory Controller, the Guest Image).
 
 | Pattern | Shape |
 |---------|-------|

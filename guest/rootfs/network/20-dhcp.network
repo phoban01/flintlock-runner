@@ -1,0 +1,25 @@
+# From battery-operator's real hosts trial, hack/real-hosts/images/rootfs/network/
+# (phoban01/battery-operator#163).
+#
+# The Pool's interfaces, eth1 and after: an address, a default route and DNS
+# servers by DHCP. systemd-networkd reads the files in lexical order and
+# takes the first that matches, so eth0 matches 10-mmds.network and never
+# this one. IPv4 only: the Hosts' bridges serve no IPv6.
+#
+#= docs/requirements/13-guest-image.md#guest-network
+#/ The Guest Image SHALL configure every Ethernet interface
+#/ except `eth0` by DHCP for IPv4, with the default route and the DNS servers
+#/ of the lease.
+[Match]
+Type=ether
+Name=eth*
+
+[Network]
+DHCP=ipv4
+LinkLocalAddressing=no
+IPv6AcceptRA=no
+
+[DHCPv4]
+ClientIdentifier=mac
+UseDNS=yes
+UseRoutes=yes

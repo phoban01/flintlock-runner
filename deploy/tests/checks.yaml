@@ -934,6 +934,12 @@ checks:
       [ "$n" -ge 6 ] || fail "expected at least six third-party images, found $n"
       # This project's images appear in image fields only, where the
       # Release's `kustomize edit set image` rewrites them to digests
-      # (KF-143); anywhere else would fail the release render.
-      stray=$(grep -hn 'ghcr\.io/phoban01/flintlock-runner/' "$fleet" "$capi" "$runner" | grep -Ev '^[0-9]+: +(- )?image: ghcr\.io/phoban01/flintlock-runner/[a-z0-9._-]+(:[A-Za-z0-9._-]+|@sha256:[0-9a-f]{64})$' || true)
+      # (KF-143); anywhere else would fail the release render. The one
+      # exception is the Guest Image in the Runner's Profiles
+      # (deploy/runner/config.yaml), which kustomize does not rewrite and
+      # the operator pins by digest (CF-027). deploy/ leaves the Runner out,
+      # so no release renders it yet.
+      stray=$(grep -hn 'ghcr\.io/phoban01/flintlock-runner/' "$fleet" "$capi" "$runner" |
+        grep -Ev '^[0-9]+: +(- )?image: ghcr\.io/phoban01/flintlock-runner/[a-z0-9._-]+(:[A-Za-z0-9._-]+|@sha256:[0-9a-f]{64})$' |
+        grep -Ev '^[0-9]+: +rootfs: ghcr\.io/phoban01/flintlock-runner/guest-rootfs(:[A-Za-z0-9._-]+|@sha256:[0-9a-f]{64})$' || true)
       [ -z "$stray" ] || fail "project image references outside image fields: $stray"

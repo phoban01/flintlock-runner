@@ -20,13 +20,16 @@ For `linux/amd64`, `linux/arm64`, `darwin/amd64` and `darwin/arm64`:
 | `checksums.txt` | SHA-256 of every archive, both manifests assets and `images.txt` |
 | `requirements-report.html`, `requirements-report.json` | the duvet report for the tagged commit: every requirement in `docs/requirements/` and whether this build implements and tests it |
 
-And two container images, in the project's registry
-(`docs/requirements/12-cluster-fleet.md#cluster-release`):
+And four container images, in the project's registry
+(`docs/requirements/12-cluster-fleet.md#cluster-release` and
+`docs/requirements/13-guest-image.md#guest-release`):
 
 | Image | Tags | Contents |
 |---|---|---|
 | `ghcr.io/phoban01/flintlock-runner/flr` | `<version>` | one index for `linux/amd64` and `linux/arm64`: the same `flr` binaries as the archives, the CA certificates and the time zone database, on `scratch`, running as uid 65532. No shell, no package manager, no `/etc/passwd` (KF-140, KF-141) |
 | `ghcr.io/phoban01/flintlock-runner/host` | `<version>` and `<version>-k8s-<kubernetes version>` | the bootc Host Image of `image/`, `linux/amd64` only, the same manifest under both tags. The Kubernetes version is `KUBERNETES_VERSION` in `image/versions.env` (KF-142) |
+| `ghcr.io/phoban01/flintlock-runner/guest-kernel` | `<version>` | one index for `linux/amd64` and `linux/arm64`: the Guest Image's kernel, Firecracker's CI 6.1 kernel, at `boot/vmlinux` and nothing else (GI-010, GI-040) |
+| `ghcr.io/phoban01/flintlock-runner/guest-rootfs` | `<version>` | one index for `linux/amd64` and `linux/arm64`: the Guest Image's root filesystem of `guest/rootfs`, Ubuntu 24.04 with systemd, the guest agent, bash, git, curl, the CA certificates, `gitlab-runner-helper` and DHCP (GI-020 to GI-034, GI-040) |
 
 `<version>` is the tag without its `v`: `v1.2.0-rc.1` publishes
 `flr:1.2.0-rc.1`. No other tag is ever pushed: no `latest`, no `1` or `1.2`,
@@ -98,6 +101,12 @@ A release candidate is how a version gets tried before it is called done.
    - **the Host Image** (job `host image`): `make image` and
      `make image-check` with podman, exactly as CI's `image` job builds it,
      then `hack/release/push-host-image.sh` pushes it under both of its tags;
+   - **the Guest Image** (job `guest images`): `guest/build.sh` builds the
+     kernel and root filesystem images for both platforms, check stages
+     included, exactly as CI's `guest` job builds them, and pushes each as
+     one index tagged `<version>`; `hack/release/check-guest-images.sh`
+     checks both platforms and the tags. The Runner's Profiles name these
+     images by digest; `deploy/runner/config.yaml` says what to fill in;
    - **the flr image and the archives** (job `publish`): goreleaser builds
      the binaries once, archives them, builds the image for both platforms
      from them, pushes it, and creates the GitHub release as a *draft*;
@@ -166,20 +175,25 @@ need, and the workflow enforces both:
 | a module graph that `go mod tidy` would change | the build must be of exactly what the tag points at |
 | a version any of whose image tags already exists | a pushed tag never moves (KF-145) |
 | a Host Image that fails its check stage or its label check | the image that is pushed is the one that was checked |
+| a Guest Image that fails a check stage, or an index without both platforms | the images that are pushed are the ones that were checked (GI-003, GI-040) |
 | an flr image with anything but flr, certificates and time zone data in it, a root or non-numeric user, or a platform missing | KF-140, KF-141 |
 | a tag in either repository that is not a full release version, `latest` included | KF-145 |
 | a manifests asset with a reference to this project's images that is not by this release's digest, or a fleet asset without the flr image | KF-143 |
 
-Only the jobs that push, `host image` and `publish`, hold `packages: write`.
+Only the jobs that push, `host image`, `guest images` and `publish`, hold
+`packages: write`.
 
 ### The packaging dry run
 
 A pull request that changes `.goreleaser.yaml`, the release workflow,
-`hack/release/` or `deploy/` runs the whole of the above without publishing
-anything:
+`hack/release/`, `guest/build.sh` or `deploy/` runs the whole of the above
+without publishing anything:
 
 - the Host Image is built and checked as on a tag, and pushed to a registry
   that exists only inside the job, where its tags are checked;
+- the Guest Image is built for both platforms, checked, and pushed to a
+  registry that exists only inside its job, where its platforms and tags
+  are checked;
 - goreleaser builds every archive and the flr image for both platforms with
   `--snapshot`; each platform's image is checked, then pushed as one index
   to a registry inside the job and checked again the way a release checks

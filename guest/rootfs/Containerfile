@@ -1,0 +1,82 @@
+# The Guest Image's root filesystem (docs/requirements/13-guest-image.md):
+# Ubuntu 24.04 with systemd, flintlock's guest agent, bash, git, curl, the CA
+# certificates, gitlab-runner-helper, and DHCP on the Pool's interfaces.
+#
+# flintlockd unpacks this image onto containerd's devmapper snapshotter,
+# which gives the MicroVM an ext4 root block device, and the hypervisor
+# boots the kernel with root=/dev/vda. The Executor runs each Stage through
+# the guest agent over vsock, so the guest needs no network to run a Job;
+# only a Job that clones a repository or uses the Host Services does.
+#
+# Build it with guest/build.sh, which builds it for linux/amd64 and
+# linux/arm64 and passes GITLAB_RUNNER_VERSION from go.mod. The build context
+# is the repository root, for go.mod and go.sum; the build reads nothing
+# else outside guest/rootfs.
+#
+# The base images are pinned by the digests of their multi-platform
+# indexes; resolve a new one with `docker buildx imagetools inspect IMAGE`.
+
+# The guest agent's version, for the rootfs stage and for the published
+# image's labels.
+ARG GUEST_AGENT_VERSION=0.4.0
+
+# ---------------------------------------------------------------------------
+# helper: gitlab-runner-helper, cross-compiled on the build machine's own
+# architecture, from the module version go.mod pins.
+#
+#= docs/requirements/13-guest-image.md#guest-build
+#/ The Guest Image build SHALL complete on a machine that has
+#/ neither `/dev/kvm` nor a Host.
+FROM --platform=$BUILDPLATFORM docker.io/library/golang:1.26.5-bookworm@sha256:53eeac89074db483fdf0ab3be1df32bf6e47562263d2d0d6baa7f26acb4957dd AS helper
+ARG TARGETARCH
+ARG GITLAB_RUNNER_VERSION
+ENV GOTOOLCHAIN=auto
+COPY go.mod go.sum /src/
+COPY guest/rootfs/build-helper.sh /build-helper.sh
+RUN --mount=type=cache,target=/root/.cache/go-build \
+    --mount=type=cache,target=/go/pkg/mod \
+    bash /build-helper.sh /src /out
+
+# ---------------------------------------------------------------------------
+# rootfs: the root filesystem itself.
+#
+#= docs/requirements/13-guest-image.md#guest-rootfs
+#/ The Guest Image's root filesystem SHALL be Ubuntu 24.04, with
+#/ systemd as its init.
+FROM docker.io/library/ubuntu:24.04@sha256:008173c23f95b170204355c12626cb5a965d779a7e1283b09e9cffbb1bf33ca3 AS rootfs
+ARG TARGETARCH
+ARG GITLAB_RUNNER_VERSION
+ARG GUEST_AGENT_VERSION
+# From the release's checksums.txt.
+ARG GUEST_AGENT_SHA256_ARM64=c3c8bd3650d4725806f543fb8fe117ce75c42aa523441f426d71c42104e2f025
+ARG GUEST_AGENT_SHA256_AMD64=07bd0a393dc3416518154e8069705de247df642583f13a1f2983bf89b19ee933
+COPY guest/rootfs/network/ /etc/systemd/network/
+COPY --from=helper /out/ /
+RUN --mount=type=bind,source=guest/rootfs/configure.sh,target=/tmp/configure.sh \
+    bash /tmp/configure.sh
+
+# ---------------------------------------------------------------------------
+# check: run the checks inside the built root filesystem. On a platform
+# other than the build machine's they run under emulation.
+FROM rootfs AS check
+#= docs/requirements/13-guest-image.md#guest-build
+#/ The Guest Image build SHALL check the contents of each image it
+#/ builds in a check stage that fails unless the image carries everything
+#/ this document requires of it.
+RUN --mount=type=bind,source=guest/rootfs/check.sh,target=/tmp/check.sh \
+    bash /tmp/check.sh && mkdir -p /checked && \
+    sha256sum /usr/share/flr-guest/versions.env >/checked/checked
+
+# ---------------------------------------------------------------------------
+# The published image. It takes a file from the check stage so that no
+# builder can skip that stage as unused: an image that fails its checks is
+# never produced.
+FROM rootfs
+COPY --from=check /checked/checked /usr/share/flr-guest/checked
+ARG GITLAB_RUNNER_VERSION
+ARG GUEST_AGENT_VERSION
+LABEL org.opencontainers.image.title="flintlock-runner guest root filesystem" \
+      org.opencontainers.image.source="https://github.com/phoban01/flintlock-runner" \
+      dev.flintlock.gitlab-runner.version.ubuntu="24.04" \
+      dev.flintlock.gitlab-runner.version.guest-agent="${GUEST_AGENT_VERSION}" \
+      dev.flintlock.gitlab-runner.version.gitlab-runner-helper="${GITLAB_RUNNER_VERSION}"

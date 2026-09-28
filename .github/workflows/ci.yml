@@ -177,6 +177,53 @@ jobs:
         if: steps.changed.outputs.build == 'true'
         run: make image-check CONTAINER_ENGINE=podman
 
+  # The Guest Image (docs/requirements/13-guest-image.md): lint its scripts,
+  # then build the kernel and root filesystem images for linux/amd64 and
+  # linux/arm64, check stages included, and push nothing. The platform that
+  # is not the runner's runs its check stage under QEMU. The build is slow,
+  # so it runs only when the image, go.mod and go.sum (which pin the
+  # helper's version) or this workflow changed. The release workflow
+  # publishes the images on a tag.
+  guest:
+    name: guest image build and check stages
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          fetch-depth: 0
+      - name: did the image change
+        id: changed
+        env:
+          EVENT: ${{ github.event_name }}
+          BASE: ${{ github.base_ref }}
+          BEFORE: ${{ github.event.before }}
+        run: |
+          if [ "$EVENT" = pull_request ]; then
+            range="origin/$BASE...HEAD"
+          elif git cat-file -e "$BEFORE^{commit}" 2>/dev/null; then
+            range="$BEFORE..HEAD"
+          else
+            range=""
+          fi
+          if [ -z "$range" ] || git diff --name-only "$range" | grep -qE '^(guest/|go\.mod$|go\.sum$|\.github/workflows/ci\.yml$)'; then
+            echo "build=true" >>"$GITHUB_OUTPUT"
+          else
+            echo "guest/ is unchanged in $range; skipping the build"
+            echo "build=false" >>"$GITHUB_OUTPUT"
+          fi
+      - name: lint the image scripts
+        if: steps.changed.outputs.build == 'true'
+        run: |
+          command -v shellcheck >/dev/null || { sudo apt-get update -qq && sudo apt-get install -y -qq shellcheck; }
+          shellcheck --version
+          make guest-lint
+      - name: a builder for both platforms
+        if: steps.changed.outputs.build == 'true'
+        run: bash hack/release/setup-buildx.sh
+      - name: build both images for both platforms, check stages included
+        if: steps.changed.outputs.build == 'true'
+        run: make guest-images GUEST_PLATFORMS=linux/amd64,linux/arm64
+
   # The Fleet Manifests (docs/requirements/12-cluster-fleet.md): render
   # deploy/ and deploy/capi with the pinned kustomize, validate every object
   # with kubeconform against the Kubernetes 1.35 schemas and the Cluster API

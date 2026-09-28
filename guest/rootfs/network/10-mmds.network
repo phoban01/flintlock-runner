@@ -1,0 +1,14 @@
+# From battery-operator's real hosts trial, hack/real-hosts/images/rootfs/network/
+# (phoban01/battery-operator#163).
+#
+# eth0 is flintlock's interface for Firecracker's metadata service (MMDS).
+# Its MAC address is aa:ff:00:00:00:01. The Runner does not use it, and
+# systemd-networkd leaves it alone.
+#
+#= docs/requirements/13-guest-image.md#guest-network
+#/ The Guest Image SHALL leave `eth0` unconfigured.
+[Match]
+Name=eth0
+
+[Link]
+Unmanaged=yes
