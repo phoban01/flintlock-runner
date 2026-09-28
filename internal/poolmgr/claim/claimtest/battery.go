@@ -63,10 +63,13 @@ type Battery struct {
 	namespace string
 	hosts     []Host
 
-	mu      sync.Mutex
-	pools   map[string]*fakePool
-	held    map[types.UID]heldVM
-	expire  map[string]bool
+	mu     sync.Mutex
+	pools  map[string]*fakePool
+	held   map[types.UID]heldVM
+	expire map[string]bool
+	// keep names the expiring claims whose MicroVMs stay until the claim
+	// is deleted (ExpireKeepingMicroVM).
+	keep    map[string]bool
 	nextID  int
 	onHost  map[int]int
 	pending map[string]string
@@ -100,6 +103,7 @@ func NewBattery(c client.Client, namespace string, hosts ...Host) *Battery {
 		pools:     map[string]*fakePool{},
 		held:      map[types.UID]heldVM{},
 		expire:    map[string]bool{},
+		keep:      map[string]bool{},
 		onHost:    map[int]int{},
 		pending:   map[string]string{},
 	}
@@ -125,6 +129,20 @@ func (f *Battery) Expire(name string) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.expire[name] = true
+}
+
+// ExpireKeepingMicroVM is Expire, except that the claimed MicroVM stays
+// until the claim is deleted, rather than going with the Lease. A command
+// running in it then keeps running, so that the Holder learns of the lapse
+// from the claim alone and not from its MicroVM going away. It is how the
+// end-to-end harness makes a Lease expire during a Job on the claim stack,
+// as the fake Pool Manager's refused heartbeats do on the battery stack
+// while the MicroVM lives on until the expiry threshold.
+func (f *Battery) ExpireKeepingMicroVM(name string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.expire[name] = true
+	f.keep[name] = true
 }
 
 // Pending reports the reasons the fake has given for leaving claims
@@ -281,6 +299,11 @@ func (f *Battery) renew(ctx context.Context, cl *batteryv1alpha1.MicroVMClaim) {
 			return
 		}
 		delete(f.expire, cl.Name)
+		if f.keep[cl.Name] {
+			// The MicroVM goes when the claim does (reconcile).
+			delete(f.keep, cl.Name)
+			return
+		}
 		if vm, ok := f.held[cl.UID]; ok {
 			f.replace(cl.UID, vm)
 		}
