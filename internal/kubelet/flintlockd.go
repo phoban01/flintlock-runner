@@ -27,10 +27,6 @@ type localFlintlockd struct {
 	vms  mvmv1.MicroVMClient
 }
 
-//= docs/requirements/12-cluster-fleet.md#virtual-node
-//# The Pod Provider SHALL reach `flintlockd` only through the
-//# local endpoint of HI-042.
-
 // DialLocal connects to flintlockd at a local endpoint and refuses any other
 // (KF-018). The connection is plaintext and carries no token: the endpoint
 // is a unix socket or a loopback address that nothing outside the Host can
