@@ -1,0 +1,65 @@
+# The Runner's configuration for a run on a real Host (README.md). run.sh
+# puts it in place of deploy/runner/config.yaml, and writes the Guest Image
+# references in place of KERNEL_IMAGE and ROOTFS_IMAGE. It differs from
+# deploy/runner/config.yaml in four ways:
+#
+#   - GitLab is the fake GitLab in the cluster, over plain HTTP.
+#   - The only Profile is lima-arm64, and it is the default: the trial has
+#     one arm64 Host, so no Host could fill an amd64 Pool.
+#   - The Guest Image comes from the Host's own registry on 127.0.0.1:5000,
+#     by digest. flintlockd pulls from there over plain HTTP.
+#   - The Host Services are off: the trial runs no Host Agent.
+#
+# The one value in double quotes is the job timeout, as in
+# deploy/runner/config.yaml; keep it the only one.
+gitlab:
+  url: http://fake-gitlab.flintlock-system:8080
+  allow_insecure: true
+  name: flintlock-runner
+  concurrent: 1
+  check_interval: 3s
+  shutdown_timeout: "10800s"
+
+pool_manager:
+  backend: claim
+  claim:
+    holder_service_account: flintlock-runner-holder
+    serving_ca:
+      namespace: battery-operator-system
+      name: flintlockd-ca
+      key: serving-ca.crt
+
+profiles:
+  # As deploy/runner/config.yaml's lima-arm64: one MicroVM at a time on the
+  # trial's Host (4 vCPUs and 6 GiB).
+  - name: lima-arm64
+    default: true
+    arch: arm64
+    vcpu: 2
+    memory_mb: 2048
+    images: [flr-arm64]
+    kernel:
+      image: KERNEL_IMAGE
+      filename: boot/vmlinux
+    rootfs: ROOTFS_IMAGE
+    pool:
+      size: 1
+
+host_services:
+  buildkit:
+    enabled: false
+    port: 1234
+  go_proxy:
+    enabled: false
+    port: 3000
+  registry_mirror:
+    enabled: false
+    port: 5000
+  http_cache:
+    enabled: false
+    port: 3128
+
+observability:
+  listen_address: :9252
+
+state_dir: /var/lib/flintlock-runner

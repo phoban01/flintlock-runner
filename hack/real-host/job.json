@@ -1,0 +1,41 @@
+{
+  "id": 1,
+  "token": "glcbt-real-host-1",
+  "allow_git_fetch": false,
+  "job_info": {
+    "name": "real-host",
+    "stage": "test",
+    "project_id": 1,
+    "project_name": "real-host"
+  },
+  "git_info": {
+    "repo_url": "https://gitlab.example.com/flintlock-runner/real-host.git",
+    "ref": "main",
+    "sha": "0000000000000000000000000000000000000000",
+    "ref_type": "branch"
+  },
+  "runner_info": {
+    "timeout": 900
+  },
+  "image": {
+    "name": "flr-arm64"
+  },
+  "variables": [
+    { "key": "GIT_STRATEGY", "value": "none", "public": true },
+    { "key": "CI_JOB_ID", "value": "1", "public": true }
+  ],
+  "steps": [
+    {
+      "name": "script",
+      "script": [
+        "uname -a",
+        "cat /etc/os-release",
+        "git clone --depth 1 https://github.com/liquidmetal-dev/flintlock flintlock",
+        "git -C flintlock log -1 --format='cloned liquidmetal-dev/flintlock at %H'"
+      ],
+      "timeout": 900,
+      "when": "on_success",
+      "allow_failure": false
+    }
+  ]
+}
