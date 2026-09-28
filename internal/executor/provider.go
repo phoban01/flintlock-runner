@@ -75,12 +75,18 @@ func WithGuestTransport(kind transport.Kind) Option {
 	return func(p *provider) { p.transport = kind }
 }
 
-// AgentHosts hands out the clients of Exec Agents by the Host and address a
-// claim names. *transport.AgentHosts is one.
+// AgentHosts hands out the clients of Exec Agents per claim. The Executor
+// asks once per Job, for the claim of that Job's Allocation, and holds the
+// client until the Job ends. An implementation may share one client among
+// the claims on a Host, as *transport.AgentHosts does with the Runner's own
+// token. Or it may bind each client to its claim's own connection, as the
+// claim backend has to: battery-operator's Exec Agent authorizes each call
+// with the claim's token, which that connection carries.
 type AgentHosts interface {
-	// Lease returns the client of the Exec Agent at address on the named
-	// Host and a function that releases it.
-	Lease(host, address string) (flintlock.HostClient, func(), error)
+	// Lease returns the client of the Exec Agent that serves claim, and a
+	// function that releases it. ctx bounds the lookup, not the life of
+	// the client.
+	Lease(ctx context.Context, claim transport.AgentClaim) (flintlock.HostClient, func(), error)
 }
 
 //= docs/requirements/12-cluster-fleet.md#agent-exec-transport

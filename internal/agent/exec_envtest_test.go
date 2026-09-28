@@ -106,7 +106,7 @@ func TestAgentExecRunsAStage(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer func() { _ = agents.Close() }()
-	client, release, err := agents.Lease(f.host.Node, f.host.Address)
+	client, release, err := agents.Lease(context.Background(), transport.AgentClaim{VMUID: f.host.VMUID, Host: f.host.Node, Address: f.host.Address})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -352,7 +352,7 @@ func TestACutResponseIsNeverASuccess(t *testing.T) {
 			t.Fatal(err)
 		}
 		defer func() { _ = agents.Close() }()
-		client, release, err := agents.Lease(f.host.Node, proxy.addr())
+		client, release, err := agents.Lease(context.Background(), transport.AgentClaim{VMUID: f.host.VMUID, Host: f.host.Node, Address: proxy.addr()})
 		if err != nil {
 			t.Fatal(err)
 		}

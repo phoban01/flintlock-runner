@@ -70,10 +70,27 @@ func (c tokenFileCredentials) GetRequestMetadata(context.Context, ...string) (ma
 // RequireTransportSecurity implements credentials.PerRPCCredentials.
 func (tokenFileCredentials) RequireTransportSecurity() bool { return true }
 
+// AgentClaim is the claim that a client of an Exec Agent is asked for: what
+// the Job's claim says about its MicroVM and where it runs (KF-151).
+type AgentClaim struct {
+	// LeaseID is the claim's lease id. With the claim backend it is the
+	// name of the MicroVMClaim, so an implementation can find the claim's
+	// own connection by it.
+	LeaseID string
+	// VMUID is the uid of the claimed MicroVM.
+	VMUID string
+	// Host is the name of the Host the MicroVM runs on, and Address the
+	// address of that Host's Exec Agent, as the claim gives them.
+	Host    string
+	Address string
+}
+
 // AgentHosts hands out Host clients of Exec Agents by the Host and address
-// a claim names. A client is dialled on first use and shared by every Job
-// on that Host, so that each Stage is a stream on one connection (EX-050);
-// it is closed once the last Job holding it releases it.
+// a claim names. It sends the Runner's own token, not a token of the claim,
+// so one client serves every claim on a Host: a client is dialled on first
+// use and shared by every Job on that Host, so that each Stage is a stream
+// on one connection (EX-050); it is closed once the last Job holding it
+// releases it.
 type AgentHosts struct {
 	dialer flintlock.Dialer
 	caFile string
@@ -117,11 +134,14 @@ func NewAgentHosts(cfg AgentExecConfig) (*AgentHosts, error) {
 //# Agent with the Runner's ServiceAccount token and SHALL verify the agent's
 //# serving certificate against the configured certificate authority.
 
-// Lease returns the client of the Exec Agent at address on the named Host,
-// with a function that releases it. The client speaks TLS, verified
-// against the configured certificate authority and never skipped, and
-// sends the Runner's token on every call.
-func (a *AgentHosts) Lease(host, address string) (flintlock.HostClient, func(), error) {
+// Lease returns the client of the Exec Agent at the claim's address on the
+// claim's Host, with a function that releases it. The client speaks TLS,
+// verified against the configured certificate authority and never skipped,
+// and sends the Runner's token on every call. Claims on the same Host and
+// address share one client whatever their lease ids. ctx is not used: the
+// connection is established lazily, and outlives the call.
+func (a *AgentHosts) Lease(_ context.Context, claim AgentClaim) (flintlock.HostClient, func(), error) {
+	host, address := claim.Host, claim.Address
 	if address == "" {
 		return nil, nil, fmt.Errorf("transport: host %s: the claim names no exec agent address", host)
 	}

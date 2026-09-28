@@ -457,6 +457,15 @@ func (v *validator) inventory(c *Config) {
 		}
 		return
 	}
+	// The claim backend takes each MicroVM's Host from its claim and from
+	// nothing else (KF-151), and reaches that Host's Exec Agent, never its
+	// flintlockd. A list would name endpoints nothing reads.
+	if c.PoolManager.IsClaim() {
+		if len(hosts) > 0 {
+			v.errorf("inventory", "is not read with pool_manager.backend %q, whose claims name their Hosts; remove it", PoolBackendClaim)
+		}
+		return
+	}
 	if len(hosts) == 0 {
 		v.errorf("inventory", "at least one Host is required, inline under inventory.hosts or in the file named by inventory.file")
 		return
@@ -521,27 +530,40 @@ func (v *validator) inventory(c *Config) {
 
 func (v *validator) poolManager(c *Config) {
 	pm := &c.PoolManager
-	switch pm.Backend {
-	case "", PoolBackendBattery:
+	onlyKubernetes := func() {
 		if pm.Kubernetes != nil {
 			v.errorf("pool_manager.kubernetes", "is only read with pool_manager.backend %q", PoolBackendKubernetes)
 		}
+	}
+	onlyClaim := func() {
+		if pm.Claim != nil {
+			v.errorf("pool_manager.claim", "is only read with pool_manager.backend %q", PoolBackendClaim)
+		}
+	}
+	switch pm.Backend {
+	case "", PoolBackendBattery:
+		onlyKubernetes()
+		onlyClaim()
 	case PoolBackendKubernetes:
 		v.kubernetesPools(c)
+		onlyClaim()
+	case PoolBackendClaim:
+		v.claimPools(c)
+		onlyKubernetes()
 	default:
-		v.errorf("pool_manager.backend", "must be %q or %q, got %q", PoolBackendBattery, PoolBackendKubernetes, pm.Backend)
+		v.errorf("pool_manager.backend", "must be %q, %q or %q, got %q", PoolBackendBattery, PoolBackendKubernetes, PoolBackendClaim, pm.Backend)
 	}
 	//= docs/requirements/07-configuration.md#pool-manager-section
 	//# If the Pool Manager section is absent or has no endpoint, then the
 	//# Runner SHALL reject the configuration.
 	//
-	// The Kubernetes pool backend has no battery endpoint to name; one that
-	// is given anyway is still checked, so that a typo does not pass
-	// silently.
+	// The Kubernetes and claim pool backends have no battery endpoint to
+	// name; one that is given anyway is still checked, so that a typo does
+	// not pass silently.
 	switch {
 	case strings.TrimSpace(pm.Endpoint) != "":
 		v.hostPort("pool_manager.endpoint", pm.Endpoint)
-	case !pm.IsKubernetes():
+	case !pm.IsKubernetes() && !pm.IsClaim():
 		v.errorf("pool_manager.endpoint", "is required; the pool_manager section has to name the battery endpoint")
 	}
 	v.clientTLS("pool_manager.tls", pm.TLS)
@@ -603,6 +625,42 @@ func (v *validator) kubernetesPools(c *Config) {
 		if cm := k.CloudInitConfigMaps[name]; len(cm) > 253 || !dnsSubdomain.MatchString(cm) {
 			v.errorf(field, "must be a ConfigMap name (an RFC 1123 subdomain), got %q", cm)
 		}
+	}
+}
+
+// configMapKey is what a ConfigMap data key may be.
+var configMapKey = regexp.MustCompile(`^[-._a-zA-Z0-9]+$`)
+
+// claimPools checks the settings of the claim pool backend. Every setting
+// but the Holder has a default, so the section is required for the Holder
+// alone. An empty kubeconfig path means the Runner's own pod.
+func (v *validator) claimPools(c *Config) {
+	const f = "pool_manager.claim"
+	k := c.PoolManager.Claim
+	if k == nil {
+		v.errorf(f+".holder_service_account", "is required with pool_manager.backend %q", PoolBackendClaim)
+		return
+	}
+	if k.Kubeconfig != "" {
+		v.absPath(f+".kubeconfig", k.Kubeconfig)
+	} else if k.Context != "" {
+		v.errorf(f+".context", "needs %s.kubeconfig; the in-cluster configuration has no contexts", f)
+	}
+	if k.Namespace != "" && !dnsLabel.MatchString(k.Namespace) {
+		v.errorf(f+".namespace", "must be a Kubernetes namespace name (an RFC 1123 label), got %q", k.Namespace)
+	}
+	if sa := k.HolderServiceAccount; v.required(f+".holder_service_account", sa) && (len(sa) > 253 || !dnsSubdomain.MatchString(sa)) {
+		v.errorf(f+".holder_service_account", "must be a ServiceAccount name (an RFC 1123 subdomain), got %q", sa)
+	}
+	ca := k.ServingCA
+	if v.required(f+".serving_ca.namespace", ca.Namespace) && !dnsLabel.MatchString(ca.Namespace) {
+		v.errorf(f+".serving_ca.namespace", "must be a Kubernetes namespace name (an RFC 1123 label), got %q", ca.Namespace)
+	}
+	if v.required(f+".serving_ca.name", ca.Name) && (len(ca.Name) > 253 || !dnsSubdomain.MatchString(ca.Name)) {
+		v.errorf(f+".serving_ca.name", "must be a ConfigMap name (an RFC 1123 subdomain), got %q", ca.Name)
+	}
+	if v.required(f+".serving_ca.key", ca.Key) && (len(ca.Key) > 253 || !configMapKey.MatchString(ca.Key)) {
+		v.errorf(f+".serving_ca.key", "must be a ConfigMap key (letters, digits, '-', '_' and '.'), got %q", ca.Key)
 	}
 }
 

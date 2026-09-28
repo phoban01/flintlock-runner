@@ -43,9 +43,14 @@ type kubeAccess struct {
 
 // newPoolClient builds the Pool backend pool_manager.backend selects: the
 // battery gRPC client unless it names Kubernetes. Everything above
-// poolmgr.Client is the same for both (KF-052).
+// poolmgr.Client is the same for both (KF-052). The claim backend is
+// refused: the configuration accepts it, but it is not built yet (#77), and
+// it must not fall back to battery.
 func newPoolClient(cfg *config.Config, log *slog.Logger) (*poolClient, error) {
 	pm := cfg.PoolManager
+	if pm.IsClaim() {
+		return nil, fmt.Errorf("pool_manager.backend %q is not implemented yet", config.PoolBackendClaim)
+	}
 	if !pm.IsKubernetes() {
 		client, err := poolmgr.NewClient(poolmgr.ClientConfig{
 			Endpoint: pm.Endpoint,

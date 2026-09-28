@@ -110,7 +110,7 @@ func (f *fixture) transportFor(token string, deadline time.Duration) transport.T
 		f.t.Fatal(err)
 	}
 	f.t.Cleanup(func() { _ = agents.Close() })
-	client, release, err := agents.Lease(f.host.Node, f.host.Address)
+	client, release, err := agents.Lease(context.Background(), transport.AgentClaim{VMUID: f.host.VMUID, Host: f.host.Node, Address: f.host.Address})
 	if err != nil {
 		f.t.Fatal(err)
 	}

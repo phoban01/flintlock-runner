@@ -299,7 +299,7 @@ func (e *executor) allocate(ctx context.Context, sec *prepareSection) error {
 // Profile's directories in it.
 func (e *executor) startGuest(ctx context.Context, sec *prepareSection) error {
 	a := e.handle.Allocation()
-	target, err := e.guestTarget(a)
+	target, err := e.guestTarget(ctx, a)
 	if err != nil {
 		return err
 	}
@@ -342,7 +342,7 @@ func (e *executor) transportKind() transport.Kind {
 // Host is made or borrowed for the Job (KF-063). Every other transport
 // reaches the guest through the Placement's Host, on which it takes a Lease
 // for the life of the Job (HO-014).
-func (e *executor) guestTarget(a scheduler.Allocation) (transport.Target, error) {
+func (e *executor) guestTarget(ctx context.Context, a scheduler.Allocation) (transport.Target, error) {
 	target := transport.Target{
 		Kind:     e.transportKind(),
 		Deadline: e.p.deps.Timeouts.Transport,
@@ -352,7 +352,7 @@ func (e *executor) guestTarget(a scheduler.Allocation) (transport.Target, error)
 		return target, nil
 	}
 	if target.Kind == transport.KindAgentExec {
-		return e.agentTarget(target, a)
+		return e.agentTarget(ctx, target, a)
 	}
 
 	client, done, err := e.p.deps.Hosts.Lease(a.Placement.Host)
@@ -378,15 +378,22 @@ func (e *executor) guestTarget(a scheduler.Allocation) (transport.Target, error)
 
 // agentTarget is the target of agent-exec: the Exec Agent of the Host the
 // Job's claim names, at the address the claim gives for it, held for the
-// life of the Job. The Host Registry is not asked; in the claim design the
-// claim is the only thing that says where a MicroVM is (KF-151). The Stage
-// script goes on standard input as it does over exec (EX-044), because the
-// transport is the exec transport.
-func (e *executor) agentTarget(target transport.Target, a scheduler.Allocation) (transport.Target, error) {
+// life of the Job. The client is asked for by the claim, its lease id
+// included, so that it can be bound to that claim's own connection. The
+// Host Registry is not asked; in the claim design the claim is the only
+// thing that says where a MicroVM is (KF-151). The Stage script goes on
+// standard input as it does over exec (EX-044), because the transport is
+// the exec transport.
+func (e *executor) agentTarget(ctx context.Context, target transport.Target, a scheduler.Allocation) (transport.Target, error) {
 	if e.p.agents == nil {
 		return target, buildErr(common.ConfigurationError, "the agent-exec guest transport has no exec agent clients")
 	}
-	client, done, err := e.p.agents.Lease(a.Host.Name, a.Host.Address)
+	client, done, err := e.p.agents.Lease(ctx, transport.AgentClaim{
+		LeaseID: a.Lease.ID,
+		VMUID:   a.VMUID,
+		Host:    a.Host.Name,
+		Address: a.Host.Address,
+	})
 	if err != nil {
 		return target, buildErr(common.RunnerSystemFailure, "exec agent of host %s: %w", a.Host.Name, err)
 	}

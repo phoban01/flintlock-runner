@@ -33,7 +33,8 @@ users:
 // TestPoolBackendSelection checks that battery stays the backend of a
 // configuration that names none, and that pool_manager.backend: kubernetes
 // builds the Kubernetes pool backend from the named kubeconfig, without
-// needing the API server to be up, as the battery client needs no battery.
+// needing the API server to be up, as the battery client needs no battery;
+// and that the claim backend, not built yet, is refused.
 func TestPoolBackendSelection(t *testing.T) {
 	t.Parallel()
 	log := slog.New(slog.NewTextHandler(io.Discard, nil))
@@ -71,6 +72,19 @@ func TestPoolBackendSelection(t *testing.T) {
 	cfg.PoolManager.Kubernetes.Kubeconfig = filepath.Join(t.TempDir(), "missing")
 	if _, err := newPoolClient(cfg, log); err == nil {
 		t.Error("a missing kubeconfig was accepted")
+	}
+
+	// The claim backend is not built yet (#77): it is refused, never
+	// served by battery in its place.
+	cfg.PoolManager = config.PoolManager{
+		Backend:  config.PoolBackendClaim,
+		Endpoint: "127.0.0.1:1",
+		TLS:      config.ClientTLS{Insecure: true},
+		Claim:    &config.ClaimPools{HolderServiceAccount: "runner"},
+	}
+	if client, err := newPoolClient(cfg, log); err == nil {
+		_ = client.Close()
+		t.Error("the claim backend was built, want it refused until it exists")
 	}
 }
 
