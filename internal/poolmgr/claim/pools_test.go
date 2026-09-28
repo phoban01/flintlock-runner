@@ -7,6 +7,8 @@ import (
 	"time"
 
 	"google.golang.org/protobuf/proto"
+	"k8s.io/apimachinery/pkg/api/meta"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	batteryv1alpha1 "github.com/phoban01/battery-operator/api/v1alpha1"
@@ -146,4 +148,46 @@ func (f *fixture) tracker(b *claim.Backend, ref poolmgr.PoolRef) *poolmgr.PoolTr
 	tracker.Track(ref, true)
 	go func() { _ = tracker.Run(f.ctx) }()
 	return tracker
+}
+
+//= docs/requirements/08-observability.md#health
+//= type=test
+//# except that where the claim backend is configured, at least one of the
+//# Runner's Pools reporting Ready in its status takes the place of the
+//# healthy Host.
+
+// TestPoolsReadyFollowsThePoolStatus checks the Pool readiness the Runner's
+// /readyz reads under the claim backend: the watch reports the Runner's Pool
+// not Ready until battery-operator sets the Ready condition in its status,
+// and Ready once it does.
+func TestPoolsReadyFollowsThePoolStatus(t *testing.T) {
+	t.Parallel()
+	f := newFixture(t)
+	b := f.backend()
+	ref := f.declare(b)
+
+	readyOf := func() (ready, seen bool) {
+		for _, p := range b.PoolsReady() {
+			if p.Pool == ref {
+				return p.Ready, true
+			}
+		}
+		return false, false
+	}
+	f.eventually("the watch sees the pool", func() bool { _, seen := readyOf(); return seen })
+	if ready, _ := readyOf(); ready {
+		t.Fatal("the pool is ready before its status says so")
+	}
+
+	f.eventually("the ready condition is written", func() bool {
+		pool := &batteryv1alpha1.Pool{}
+		if err := f.kube.Get(f.ctx, client.ObjectKey{Namespace: f.namespace, Name: ref.Name}, pool); err != nil {
+			return false
+		}
+		meta.SetStatusCondition(&pool.Status.Conditions, metav1.Condition{
+			Type: batteryv1alpha1.PoolConditionReady, Status: metav1.ConditionTrue, Reason: "AtSize",
+		})
+		return f.kube.Status().Update(f.ctx, pool) == nil
+	})
+	f.eventually("the watch reports the pool ready", func() bool { ready, _ := readyOf(); return ready })
 }

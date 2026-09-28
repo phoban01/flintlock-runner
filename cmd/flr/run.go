@@ -131,6 +131,9 @@ func runRunner(c *cli.Context) error {
 	// The refresher stops before the Runner's connections close.
 	defer stopRefreshing()
 	health.setStatus(r.sched)
+	if r.client.claim != nil {
+		health.setPools(r.client.claim.backend)
+	}
 
 	//= docs/requirements/01-gitlab-protocol.md#authentication
 	//# The Runner SHALL authenticate to GitLab with a runner

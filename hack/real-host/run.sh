@@ -201,19 +201,6 @@ overlay() {
 		  - name: ghcr.io/phoban01/flintlock-runner/flr
 		    newName: ${FLR_IMAGE%:*}
 		    newTag: ${FLR_IMAGE##*:}
-		# flr serves /healthz and /readyz (OB-030 to OB-032, #94), and the
-		# liveness probe of deploy/runner stays. /readyz also wants a healthy
-		# Host (OB-031), but under the claim backend the Runner probes no
-		# Host, so /readyz never passes. Until OB-031 says what ready means
-		# for the claim backend, probe the port for readiness instead.
-		patches:
-		  - target:
-		      kind: Deployment
-		      name: flintlock-runner
-		    patch: |-
-		      - op: replace
-		        path: /spec/template/spec/containers/0/readinessProbe
-		        value: {tcpSocket: {port: metrics}, periodSeconds: 10}
 	EOF
 	echo "${dir}"
 }
