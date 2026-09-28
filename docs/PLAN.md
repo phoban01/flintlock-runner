@@ -147,32 +147,48 @@ Decided 2026-09-22: the cluster fleet moves from the Virtual Node design to
 battery's claim resources (`12-cluster-fleet.md` from `#battery-claims`).
 battery stays the scheduler and the authority over Pools; the Runner claims
 a MicroVM with a `MicroVMClaim` and runs each Stage through a per-Host Exec
-Agent. The shapes of battery's `Pool` and `MicroVMClaim` are being settled
-with battery upstream; until they are, anything that depends on a field name
-is built behind an interface and tested against a test definition of the
-resources.
+Agent.
+
+Settled 2026-09-28: the resources ship in
+[battery-operator v0.1.0](https://github.com/phoban01/battery-operator/releases/tag/v0.1.0),
+as `Pool` and `MicroVMClaim` in `battery.liquidmetal-x.dev/v1alpha1`,
+in front of an unmodified battery v0.3.3. battery-operator also owns two
+parts that this phase first planned here: the Exec Agent (its EA
+requirements) and the Inventory Controller (its IN requirements). Its
+Client Library, `pkg/claimclient`, claims, renews and releases a claim,
+and dials the claim's Exec Agent with a claim token: a token of the claim's
+Holder, bound to that one claim. So the Runner builds on
+`pkg/claimclient` and `api/v1alpha1` at v0.1.0, and nothing waits for a
+field name any more.
 
 What carries over unchanged: the Host Image, the Cluster API host pool, the
 Host Services, packaging and release, and the Runner's Scheduler and
 Executor above `poolmgr.Client`. The Pod Provider's relay, TLS front,
-readiness checks and drain guard move into the Exec Agent.
+readiness checks and drain guard live on in battery-operator's Exec Agent.
 
-| Key | Package | Owns | Depends on | Done when |
-|-----|---------|------|------------|-----------|
-| `exec-agent` | `internal/agent`, `cmd/flr agent` (from `internal/kubelet`) | KF-170..KF-182 | nothing (claim lookup behind an interface) | a caller without a Bound claim on the MicroVM runs nothing; a cut response is never a success; a hung `flintlockd` fails the request within its deadline |
-| `agent-exec` | `internal/transport`, `internal/executor` | KF-185..KF-189, KF-190 | `exec-agent` (its protocol) | the `exec` transport's suite passes over `agent-exec` against the real Exec Agent |
-| `claim-backend` | `internal/poolmgr/claim` | KF-150..KF-156, KF-191 | the CRD shapes from battery | the Scheduler's scenarios pass against the fake battery |
-| `inventory` | where battery puts it | KF-160, KF-161 | battery | a cordoned or not ready Host leaves the inventory |
-| `manifests-2` | `deploy/` (reworks the held `pr/manifests`) | KF-001..KF-005, KF-070..KF-076, KF-080..KF-082, KF-112, KF-113, KF-144 | `exec-agent` | manifests render and pass the schema check with the Exec Agent in place of the Pod Provider |
-| `claim-harness` | `internal/testing/harness` (reworks the held `wp/kube-harness`) | KF-192, KF-193 | `claim-backend`, `agent-exec` | every TD-051 scenario green over the claim stack |
-| `withdraw-vk` | removes `internal/kubelet`, `internal/poolmgr/kube`, `kube-exec` and their manifests | withdraws KF-010..KF-032, KF-040..KF-052, KF-060..KF-063, KF-090..KF-094, KF-100..KF-102, KF-110, KF-111, KF-120..KF-128, KF-130..KF-137 | `claim-harness` | nothing on `main` cites a withdrawn requirement |
+| Key | Package | Owns | Depends on | Issue | Done when |
+|-----|---------|------|------------|-------|-----------|
+| `exec-agent` | done in battery-operator v0.1.0; here, removes `internal/agent`, `cmd/flr agent`, `deploy/agent` and the Exec Agent parts of `deploy/host-agent` | withdraws KF-170..KF-182, KF-018, KF-135 | `claim-interfaces` | [#74](https://github.com/phoban01/flintlock-runner/issues/74) | nothing on `main` cites a withdrawn requirement, and `deploy/README.md` says the Exec Agent comes from battery-operator's Manifests |
+| `inventory` | done in battery-operator v0.1.0 | withdraws KF-160, KF-161 | nothing | [#75](https://github.com/phoban01/flintlock-runner/issues/75) | withdrawn in `12-cluster-fleet.md` |
+| `claim-interfaces` (lead) | `internal/config/types.go`, `internal/executor/provider.go` (`AgentHosts`) | none | nothing | [#76](https://github.com/phoban01/flintlock-runner/issues/76) | the configuration has a `claim` pool backend and its settings, and `AgentHosts` looks a client up per claim; no behaviour changes |
+| `agent-exec` | `internal/transport`, `internal/executor` | KF-185..KF-189, KF-190 | `claim-interfaces` | [#74](https://github.com/phoban01/flintlock-runner/issues/74) | the `exec` transport's suite passes over `agent-exec` with a claim token for each claim, against battery-operator's Exec Agent or a test double of its protocol |
+| `claim-backend` | `internal/poolmgr/claim`, on battery-operator's `pkg/claimclient` and `api/v1alpha1` at v0.1.0 | KF-150..KF-156, KF-191 | `claim-interfaces` | [#77](https://github.com/phoban01/flintlock-runner/issues/77) | the Scheduler's scenarios pass against the fake battery |
+| `manifests-2` | `cmd/flr` (the claim backend and `agent-exec` wiring), `deploy/runner`, `deploy/README.md` (reworks the held `pr/manifests`) | the KF IDs of KF-001..KF-005, KF-070..KF-076, KF-080..KF-082, KF-112, KF-113, KF-144 that still stand | `agent-exec`, `claim-backend` | [#78](https://github.com/phoban01/flintlock-runner/issues/78) | `flr` runs on the claim backend and `agent-exec`, and the manifests render and pass the schema check next to battery-operator v0.1.0's Manifests |
+| `guest-image` | the guest image build, Host Image networking, and the Profile in `deploy/runner/config.yaml` | the new IDs it adds | nothing | [#82](https://github.com/phoban01/flintlock-runner/issues/82) | a Job in the claim harness can clone a repository and reach the Host Services |
+| `claim-harness` | `internal/testing/harness` (reworks the held `wp/kube-harness`), a scripted run on a real Host | KF-192, KF-193 | `manifests-2`; `guest-image` for a Job that needs the network | [#79](https://github.com/phoban01/flintlock-runner/issues/79) | every TD-051 scenario green over the claim stack, and a Job from the fake GitLab runs end to end on battery-operator's real hosts trial |
+| `withdraw-vk` | removes `internal/kubelet`, `internal/poolmgr/kube`, `kube-exec` and their manifests | withdraws KF-010..KF-032, KF-040..KF-052, KF-060..KF-063, KF-090..KF-094, KF-100..KF-102, KF-110, KF-111, KF-120..KF-128, KF-130..KF-137, less KF-018 and KF-135, which `exec-agent` withdraws | `claim-harness` | none yet | nothing on `main` cites a withdrawn requirement |
 
-`exec-agent` starts now and `agent-exec` as soon as its protocol is fixed.
-`claim-backend` and `inventory` wait for the CRD shapes. The held branches
-of Phase 4 are not merged as they stand: `pr/manifests` becomes
-`manifests-2`, `wp/kube-harness` becomes `claim-harness`, and
-`wp/kube-verify` is dropped until verification is specified for the claim
-design. `wp/hardening-2` (HI-064..HI-066, KF-139) carries over.
+`inventory` is done with this plan. `claim-interfaces` (#76) goes first,
+because it changes lead-owned interfaces. Then `exec-agent` with
+`agent-exec` (#74), and `claim-backend` (#77), in parallel. Then
+`manifests-2` (#78), and last `claim-harness` with the real Host run
+(#79). `guest-image` (#82) can start at any time. A Job in #79 that
+clones a repository or uses the Host Services needs it; a Job that needs
+no network does not. The held branches of Phase 4 are not merged as they stand:
+`pr/manifests` becomes `manifests-2`, `wp/kube-harness` becomes
+`claim-harness`, and `wp/kube-verify` is dropped until verification is
+specified for the claim design. `wp/hardening-2` (HI-064..HI-066, KF-139)
+carries over.
 
 ## Running agents
 

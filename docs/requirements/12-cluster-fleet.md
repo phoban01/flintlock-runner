@@ -30,6 +30,8 @@ Node design described first in this document to battery's claim resources,
 specified in the sections from `#battery-claims` onwards: battery stays the
 scheduler and the authority over Pools, the Runner claims a MicroVM through a
 `MicroVMClaim`, and a per-Host Exec Agent relays each Stage to `flintlockd`.
+The resources, the Exec Agent and the Inventory Controller ship in
+battery-operator v0.1.0 (`#battery-claims`).
 These sections are superseded by that design: Virtual Node, MicroVM pods,
 Pools, Allocation, Guest Transport, Drain, Verification, Least privilege
 (KF-110, KF-111), Hardening (KF-130 to KF-137) and Test doubles (KF-120 to
@@ -433,22 +435,27 @@ the Host, so it is not the threat this addresses.
 ## Battery claim resources {#battery-claims}
 
 - **KF-150** Where the claim backend is configured, the Scheduler SHALL
-  obtain a MicroVM for a Job by creating a `MicroVMClaim` whose
-  `spec.poolRef` names the Pool of the Job's Profile, and SHALL treat the
-  claim as granted only once its status reports the phase `Bound`.
-- **KF-151** The Scheduler SHALL take the claimed MicroVM's uid and its Host,
-  the node name and the Exec Agent address, from the status of the Bound
-  claim and from nothing else.
+  obtain a MicroVM for a Job by creating a `MicroVMClaim` of
+  `battery.liquidmetal-x.dev/v1alpha1` whose `spec.poolRef.name` names the
+  Pool of the Job's Profile and whose `spec.serviceAccountName` names the
+  configured Holder, and SHALL treat the claim as granted only once its
+  `status.phase` is `Bound`.
+- **KF-151** The Scheduler SHALL take the claimed MicroVM's uid, the Host's
+  node name and the Exec Agent's address from the Bound claim's
+  `status.microVM.uid`, `status.host.nodeName` and `status.host.agentAddress`,
+  and from nothing else.
 - **KF-152** While a Job holds a Bound claim, the Scheduler SHALL renew the
-  claim's lease at the Profile's heartbeat interval.
+  claim's Lease by setting its `spec.renewTime` at the Profile's heartbeat
+  interval.
 - **KF-153** When a Job ends, the Scheduler SHALL delete its claim, which
   releases the MicroVM to battery.
-- **KF-154** If a claim's status reports the phase `Expired`, or the claim
+- **KF-154** If a claim's `status.phase` is `Expired`, or the claim
   disappears while its Job runs, then the Scheduler SHALL treat the Lease as
   lost as SC-061 requires.
-- **KF-155** If battery cannot bind a claim because the Pool has no warm
-  MicroVM, then the Scheduler SHALL treat the Pool as exhausted as SC-021
-  requires and SHALL delete the claim when it stops waiting.
+- **KF-155** If a claim is in the phase `Pending` with the condition
+  `Bound` false and the reason `PoolExhausted`, then the Scheduler SHALL
+  treat the Pool as exhausted as SC-021 requires and SHALL delete the claim
+  when it stops waiting.
 - **KF-156** The claim backend SHALL implement the `poolmgr.Client`
   interface, so that the Scheduler's requirements in `03-scheduler.md` hold
   unchanged over it.
@@ -456,26 +463,46 @@ the Host, so it is not the threat this addresses.
 battery keeps its MicroVMs internal: the Kubernetes surface is `Pool` and
 `MicroVMClaim` only, and there is no `MicroVM` resource. A claim names what
 it gets, a MicroVM, and where from, a Pool, the way a PersistentVolumeClaim
-names a volume and its storage class. The shapes of both resources are
-battery's to define and are still open: the API group and version, the
-field that renews a lease, how an exhausted Pool is reported on a pending
-claim, who declares the Pools (the Runner from its Profiles, as PL-010 does
-over gRPC today, or the operator), and how a claim records the identity that
-created it, which KF-174 depends on. The requirements above are written
-against the behaviour, not the field names, and the claim backend is built
-behind an interface so that the names can follow battery.
+names a volume and its storage class.
+
+The shapes of both resources are fixed in
+[battery-operator v0.1.0](https://github.com/phoban01/battery-operator/releases/tag/v0.1.0),
+an operator in front of an unmodified battery v0.3.3. Its
+`01-resources.md` and `02-claims.md` settle what this section left open
+when it was written:
+
+- The API group and version are `battery.liquidmetal-x.dev/v1alpha1`.
+- The Holder renews a Lease by setting the claim's `spec.renewTime`. The
+  operator relays each change to battery as a `Heartbeat` and writes
+  battery's expiry to `status.leaseExpiresAt`.
+- A claim that waits for an exhausted Pool stays `Pending`, with the
+  condition `Bound` false and the reason `PoolExhausted`.
+- Anyone who may write `Pool` resources declares Pools. The Runner declares
+  them from its Profiles, as PL-010 does over gRPC.
+- A claim names its Holder in `spec.serviceAccountName`, and this field
+  cannot change. The Exec Agent admits a request only with a claim token:
+  a token of the Holder bound to the claim's Secret `<claim name>-exec`.
+- battery chooses the lease id, and the claim records it in
+  `status.leaseID`.
+
+The claim backend builds on battery-operator's `api/v1alpha1` and its
+Client Library, `pkg/claimclient`, at v0.1.0. The Client Library creates the
+claim, its Secret and its claim tokens, waits for `Bound`, renews the claim
+and deletes it.
 
 ## Inventory {#battery-inventory}
 
-- **KF-160** The Inventory Controller SHALL register a Host with battery's
-  inventory only while the Host's Node carries the Host label of HI-060, is
-  schedulable, and its Exec Agent reports the Host ready.
-- **KF-161** When a Host's Node is cordoned or deleted, or its Exec Agent
-  reports the Host not ready, the Inventory Controller SHALL remove the Host
-  from battery's inventory, so that battery places nothing new there.
+- **KF-160** (withdrawn) battery-operator's Inventory Controller decides
+  which Nodes are Hosts, from each Node's schedulability and the Host
+  readiness its Exec Agent reports (battery-operator IN-001, IN-003), so
+  this repository has no Inventory Controller. It was never implemented.
+- **KF-161** (withdrawn) battery-operator's Inventory Controller removes a
+  cordoned, deleted or not ready Host from battery's Hosts
+  (battery-operator IN-002). It was never implemented.
 
-Where the Inventory Controller runs, in battery as its node component or in
-this repository, is open; the requirements hold either way.
+The Inventory Controller runs in battery-operator from v0.1.0. It gives
+battery its Hosts by rewriting battery's configuration and restarting it,
+because battery v0.3.3 has no call to change them.
 
 ## Exec Agent {#exec-agent}
 
@@ -559,7 +586,7 @@ neither and is the alternative if that route is not wanted.
   each Stage through the Exec Agent of the Host named in the Job's claim,
   with the Stage script on standard input.
 - **KF-186** The `agent-exec` Guest Transport SHALL authenticate to the Exec
-  Agent with the Runner's ServiceAccount token and SHALL verify the agent's
+  Agent with a claim token of the Job's claim and SHALL verify the agent's
   serving certificate against the configured certificate authority.
 - **KF-187** The `agent-exec` Guest Transport SHALL treat a response that
   ends without an exit status frame as a stream failure, as EX-023 requires.
@@ -569,6 +596,16 @@ neither and is the alternative if that route is not wanted.
 - **KF-189** The Executor SHALL read the Host Service addresses for a Job
   from the annotations of KF-179 on the Node of the Job's Host.
 
+A claim token is the token that battery-operator's Client Library requests
+for a claim (battery-operator CC-002, CC-011, CC-020). It is a
+`TokenRequest` for the claim's Holder, bound to the claim's Secret
+`<claim name>-exec` by name and uid, with the Exec Agent's audience
+`battery.liquidmetal-x.dev/exec-agent`. battery-operator's Exec Agent admits
+a request only with such a token (battery-operator EA-010 to EA-013). The
+Runner's own ServiceAccount token opens nothing, and a token of one claim
+opens no other claim's MicroVM. So the Runner holds one connection to an
+Exec Agent for each claim, not one for each Host.
+
 ## Claim test doubles {#claim-test-doubles}
 
 - **KF-190** The Exec Agent and the `agent-exec` Guest Transport SHALL be
@@ -576,8 +613,9 @@ neither and is the alternative if that route is not wanted.
   claim resources from a test definition, and the fake Host, with no KVM
   and no battery.
 - **KF-191** The claim backend SHALL be tested against a fake battery that
-  serves the `Pool` and `MicroVMClaim` resources and binds claims from warm
-  MicroVMs on the fake Hosts.
+  serves the `Pool` and `MicroVMClaim` resources of
+  `battery.liquidmetal-x.dev/v1alpha1` and binds claims from warm MicroVMs on
+  the fake Hosts.
 - **KF-192** The harness SHALL run every scenario of TD-051 over the claim
   backend, the `agent-exec` Guest Transport, the Exec Agent and the fake
   Host.

@@ -50,12 +50,19 @@ directory. It contains no requirements.
   fleet that relays a Runner's exec request to `MicroVMExec` on the local
   `flintlockd`, after checking that the caller holds a Bound claim on the
   MicroVM, and reports the Host's readiness. It supersedes the Pod Provider.
-- **Inventory Controller** — the controller that registers Hosts with
-  battery's inventory while they are ready and removes them when they are
-  cordoned, deleted or not ready.
+- **Inventory Controller** — battery-operator's controller that gives
+  battery the Hosts that are ready and removes them when they are cordoned,
+  deleted or not ready. This repository has none.
 - **Claim backend** — the implementation of the `poolmgr.Client` interface
-  in which a Lease is a battery `MicroVMClaim` on a `Pool`. It supersedes the
+  in which a Lease is a `MicroVMClaim` on a `Pool`, the resources of
+  battery-operator in `battery.liquidmetal-x.dev/v1alpha1`. It supersedes the
   Kubernetes pool backend.
+- **Holder** — the ServiceAccount that a `MicroVMClaim` names in
+  `spec.serviceAccountName`: the one identity that may use the claimed
+  MicroVM.
+- **Claim token** — a token of a claim's Holder, bound to the claim's Secret
+  `<claim name>-exec`, with which the Exec Agent admits a request on that
+  claim's MicroVM.
 - **Release** — what the release workflow publishes for a version tag: the
   archives and requirements report of `docs/RELEASING.md` and, for a cluster
   fleet, the container images and the rendered Fleet Manifests.
