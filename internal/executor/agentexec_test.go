@@ -28,14 +28,14 @@ import (
 // hands out a stub client.
 type recordingAgents struct {
 	mu       sync.Mutex
-	leases   []poolmgr.HostRef
+	leases   []transport.AgentClaim
 	released int
 }
 
-func (r *recordingAgents) Lease(host, address string) (flintlock.HostClient, func(), error) {
+func (r *recordingAgents) Lease(_ context.Context, claim transport.AgentClaim) (flintlock.HostClient, func(), error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	r.leases = append(r.leases, poolmgr.HostRef{Name: host, Address: address})
+	r.leases = append(r.leases, claim)
 	return agentStub{}, func() {
 		r.mu.Lock()
 		defer r.mu.Unlock()
@@ -67,6 +67,7 @@ func TestAgentExecThroughTheClaimsHost(t *testing.T) {
 	f.sched.profile = profile
 	f.sched.tune = func(a *scheduler.Allocation) {
 		a.VMUID = "vm-7"
+		a.Lease.ID = "lease-7"
 		a.Placement.Host = "host-7"
 		a.Host = poolmgr.HostRef{Name: "host-7", Address: "10.0.0.7:10270"}
 	}
@@ -87,8 +88,9 @@ func TestAgentExecThroughTheClaimsHost(t *testing.T) {
 	}
 	agents.mu.Lock()
 	defer agents.mu.Unlock()
-	if len(agents.leases) != 1 || agents.leases[0] != (poolmgr.HostRef{Name: "host-7", Address: "10.0.0.7:10270"}) {
-		t.Errorf("agent leases = %v, want the claim's host and agent address", agents.leases)
+	want := transport.AgentClaim{LeaseID: "lease-7", VMUID: "vm-7", Host: "host-7", Address: "10.0.0.7:10270"}
+	if len(agents.leases) != 1 || agents.leases[0] != want {
+		t.Errorf("agent leases = %v, want the claim's lease, host and agent address %v", agents.leases, want)
 	}
 	if agents.released != 1 {
 		t.Errorf("the agent client was released %d times, want once", agents.released)

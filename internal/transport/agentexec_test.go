@@ -55,7 +55,8 @@ func TestAgentExecWithoutAnExitStatusIsAStreamFailure(t *testing.T) {
 // read afresh on every call so that a rotated token is used at once, that
 // the credentials require TLS, and that the client pool refuses to be built
 // without a certificate authority or a token, and shares one client per
-// agent until its last user releases it.
+// agent, among claims with different lease ids, until its last user
+// releases it.
 func TestAgentExecCredentials(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
@@ -92,14 +93,14 @@ func TestAgentExecCredentials(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer func() { _ = agents.Close() }()
-	if _, _, err := agents.Lease("host-1", ""); err == nil {
+	if _, _, err := agents.Lease(context.Background(), transport.AgentClaim{LeaseID: "claim-0", Host: "host-1"}); err == nil {
 		t.Error("a claim with no agent address gave a client")
 	}
-	a, releaseA, err := agents.Lease("host-1", "127.0.0.1:10270")
+	a, releaseA, err := agents.Lease(context.Background(), transport.AgentClaim{LeaseID: "claim-a", Host: "host-1", Address: "127.0.0.1:10270"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	b, releaseB, err := agents.Lease("host-1", "127.0.0.1:10270")
+	b, releaseB, err := agents.Lease(context.Background(), transport.AgentClaim{LeaseID: "claim-b", Host: "host-1", Address: "127.0.0.1:10270"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -108,7 +109,7 @@ func TestAgentExecCredentials(t *testing.T) {
 	}
 	releaseA()
 	releaseA()
-	c, releaseC, err := agents.Lease("host-1", "127.0.0.1:10270")
+	c, releaseC, err := agents.Lease(context.Background(), transport.AgentClaim{LeaseID: "claim-c", Host: "host-1", Address: "127.0.0.1:10270"})
 	if err != nil {
 		t.Fatal(err)
 	}

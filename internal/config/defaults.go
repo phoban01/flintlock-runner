@@ -41,6 +41,9 @@ const (
 	DefaultKubernetesJobTimeout                = 2 * time.Hour
 	DefaultKubernetesCleanupMargin             = 15 * time.Minute
 	DefaultKubernetesRolloutInterval           = 10 * time.Second
+	DefaultClaimServingCANamespace             = "battery-operator-system"
+	DefaultClaimServingCAName                  = "flintlockd-ca"
+	DefaultClaimServingCAKey                   = "serving-ca.crt"
 	DefaultAllocationTimeout                   = 5 * time.Minute
 	DefaultHostHealthInterval                  = 10 * time.Second
 	DefaultHostUnhealthyThreshold              = 3
@@ -282,8 +285,12 @@ func applyPoolManagerDefaults(pm *PoolManager) {
 	if pm.ReleaseRetryLimit == 0 {
 		pm.ReleaseRetryLimit = DefaultPoolManagerReleaseRetry
 	}
-	// The Kubernetes section is defaulted only where that backend is
-	// selected, so a battery configuration shows no trace of it.
+	// The Kubernetes and claim sections are defaulted only where their
+	// backend is selected, so a battery configuration shows no trace of
+	// them.
+	if pm.IsClaim() {
+		applyClaimDefaults(pm)
+	}
 	if !pm.IsKubernetes() {
 		return
 	}
@@ -298,6 +305,25 @@ func applyPoolManagerDefaults(pm *PoolManager) {
 	}
 	if pm.Kubernetes.RolloutInterval == 0 {
 		pm.Kubernetes.RolloutInterval = DefaultKubernetesRolloutInterval
+	}
+}
+
+// applyClaimDefaults fills the claim section. The namespace is left empty,
+// because the Runner resolves it where it runs, as for the Kubernetes
+// backend; the Holder has no default.
+func applyClaimDefaults(pm *PoolManager) {
+	if pm.Claim == nil {
+		pm.Claim = &ClaimPools{}
+	}
+	ca := &pm.Claim.ServingCA
+	if ca.Namespace == "" {
+		ca.Namespace = DefaultClaimServingCANamespace
+	}
+	if ca.Name == "" {
+		ca.Name = DefaultClaimServingCAName
+	}
+	if ca.Key == "" {
+		ca.Key = DefaultClaimServingCAKey
 	}
 }
 

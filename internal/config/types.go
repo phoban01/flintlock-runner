@@ -354,19 +354,26 @@ const (
 	// PoolBackendKubernetes keeps each Pool as a ReplicaSet of idle MicroVM
 	// pods (12-cluster-fleet.md, KF-040 to KF-052).
 	PoolBackendKubernetes PoolBackend = "kubernetes"
+	// PoolBackendClaim claims each MicroVM with a battery-operator
+	// MicroVMClaim (12-cluster-fleet.md, KF-150 to KF-156).
+	PoolBackendClaim PoolBackend = "claim"
 )
 
 // PoolManager is the Pool Manager section (CF-040). The endpoint is required
-// (CF-041) unless the Kubernetes pool backend is selected.
+// (CF-041) unless the Kubernetes or the claim pool backend is selected.
 type PoolManager struct {
 	// Backend selects the Pool backend; empty means battery. With the
 	// Kubernetes backend the endpoint and the TLS settings are unused and
 	// the Inventory may be empty, because the Runner reaches no Host
-	// (KF-063).
+	// (KF-063). With the claim backend they are unused too: the claim names
+	// the Host, and the Runner reaches only its Exec Agent (KF-151).
 	Backend PoolBackend `yaml:"backend,omitempty"`
 	// Kubernetes configures the Kubernetes pool backend. It is read only
 	// where Backend selects it.
 	Kubernetes *KubernetesPools `yaml:"kubernetes,omitempty"`
+	// Claim configures the claim pool backend. It is read only where
+	// Backend selects it.
+	Claim *ClaimPools `yaml:"claim,omitempty"`
 	// Endpoint is the battery gRPC address, host:port.
 	Endpoint string `yaml:"endpoint"`
 	// TLS is the client TLS material (PL-003).
@@ -393,6 +400,49 @@ type PoolManager struct {
 
 // IsKubernetes reports whether the Kubernetes pool backend is selected.
 func (pm PoolManager) IsKubernetes() bool { return pm.Backend == PoolBackendKubernetes }
+
+// IsClaim reports whether the claim pool backend is selected.
+func (pm PoolManager) IsClaim() bool { return pm.Backend == PoolBackendClaim }
+
+// ClaimPools configures the claim pool backend (KF-150 to KF-156). A Lease
+// is a battery-operator MicroVMClaim, and a Pool is its Pool resource.
+type ClaimPools struct {
+	// Kubeconfig is the path of a kubeconfig file. Empty means the
+	// in-cluster configuration of the Runner's own pod.
+	Kubeconfig string `yaml:"kubeconfig,omitempty"`
+	// Context selects a context of the kubeconfig file; empty means its
+	// current context. It needs Kubeconfig.
+	Context string `yaml:"context,omitempty"`
+	// Namespace is the Kubernetes namespace of the Runner's claims, of the
+	// Pools they name and of the Holder. Empty means the namespace of the
+	// Runner's own pod in cluster, and the Runner namespace (CF-051)
+	// otherwise.
+	Namespace string `yaml:"namespace,omitempty"`
+	// HolderServiceAccount names the Holder: the ServiceAccount, in
+	// Namespace, that every claim names and that claim tokens are
+	// requested for. The Exec Agent runs a command only for the Holder of
+	// a Bound claim. It is required.
+	HolderServiceAccount string `yaml:"holder_service_account"`
+	// ServingCA is the ConfigMap the Operator publishes its serving CA in.
+	// An Exec Agent's serving certificate is verified against it.
+	ServingCA ServingCAConfigMap `yaml:"serving_ca,omitempty"`
+}
+
+// ServingCAConfigMap names the ConfigMap, and its key, that holds
+// battery-operator's serving CA. The Operator writes it in its own
+// namespace. The defaults are battery-operator v0.1.0's: the namespace of
+// its Manifests, and hostcert.CABundleConfigMap and hostcert.ServingCAKey.
+type ServingCAConfigMap struct {
+	// Namespace is the Operator's namespace. Default
+	// battery-operator-system, the namespace of battery-operator's
+	// Manifests.
+	Namespace string `yaml:"namespace,omitempty"`
+	// Name is the ConfigMap's name. Default flintlockd-ca.
+	Name string `yaml:"name,omitempty"`
+	// Key is the ConfigMap key that holds the PEM certificates. Default
+	// serving-ca.crt.
+	Key string `yaml:"key,omitempty"`
+}
 
 // KubernetesPools configures the Kubernetes pool backend (KF-040 to KF-052).
 type KubernetesPools struct {
