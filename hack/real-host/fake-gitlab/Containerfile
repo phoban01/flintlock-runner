@@ -1,0 +1,8 @@
+# The fake GitLab of a run on a real Host (hack/real-host/README.md). run.sh
+# builds the binary into $TARGETPLATFORM/fake-gitlab of the build context,
+# as goreleaser does for the flr image. It is never published.
+FROM scratch
+ARG TARGETPLATFORM
+COPY --chmod=0555 $TARGETPLATFORM/fake-gitlab /usr/bin/fake-gitlab
+USER 65532:65532
+ENTRYPOINT ["/usr/bin/fake-gitlab"]

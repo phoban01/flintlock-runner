@@ -1,0 +1,65 @@
+# The fake GitLab of a run on a real Host (README.md), in the Runner's
+# namespace. The Runner reaches it at http://fake-gitlab.flintlock-system:8080;
+# run.sh reaches /fake/jobs through the API server's proxy to the Service.
+# run.sh sets the image to the one it built and imported.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: fake-gitlab
+  namespace: flintlock-system
+  labels:
+    app.kubernetes.io/name: fake-gitlab
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: fake-gitlab
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: fake-gitlab
+    spec:
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        runAsGroup: 65532
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: fake-gitlab
+          image: FAKE_GITLAB_IMAGE
+          imagePullPolicy: Never
+          args: [--listen, ":8080"]
+          env:
+            - name: FAKE_GITLAB_RUNNER_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: flintlock-runner-gitlab-token
+                  key: token
+          ports:
+            - name: http
+              containerPort: 8080
+          readinessProbe:
+            tcpSocket:
+              port: http
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: [ALL]
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: fake-gitlab
+  namespace: flintlock-system
+  labels:
+    app.kubernetes.io/name: fake-gitlab
+spec:
+  selector:
+    app.kubernetes.io/name: fake-gitlab
+  ports:
+    - name: http
+      port: 8080
+      targetPort: http
