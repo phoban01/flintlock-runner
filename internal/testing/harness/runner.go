@@ -135,7 +135,7 @@ func (s *Stack) StartRunner(ctx context.Context) error {
 	}
 	cmd := exec.Command(bin, "--config", s.ConfigPath, "run")
 	cmd.Dir = s.Root
-	cmd.Env = runnerEnv(os.Environ(), s.homeDir())
+	cmd.Env = append(runnerEnv(os.Environ(), s.homeDir()), s.runnerExtraEnv()...)
 	var out io.Writer = logFile
 	if s.opts.RunnerOutput != nil {
 		out = io.MultiWriter(logFile, s.opts.RunnerOutput)
@@ -302,4 +302,26 @@ func (s *Stack) RunnerLogTail(n int) string {
 		}
 	}
 	return strings.Join(lines, "\n")
+}
+
+// helperPackage is the import path of the gitlab-runner-helper stand-in.
+const helperPackage = "github.com/phoban01/flintlock-runner/internal/testing/harness/helperstub"
+
+// BuildHelper builds the gitlab-runner-helper stand-in (helperstub) into
+// dir and returns its path, for Options.HelperBinary.
+func BuildHelper(ctx context.Context, dir string) (string, error) {
+	root, err := moduleRoot()
+	if err != nil {
+		return "", err
+	}
+	out := filepath.Join(dir, "gitlab-runner-helper")
+	cmd := exec.CommandContext(ctx, "go", "build", "-o", out, helperPackage)
+	cmd.Dir = root
+	var stderr bytes.Buffer
+	cmd.Stdout = &stderr
+	cmd.Stderr = &stderr
+	if err := cmd.Run(); err != nil {
+		return "", fmt.Errorf("harness: go build %s: %w\n%s", helperPackage, err, stderr.String())
+	}
+	return out, nil
 }

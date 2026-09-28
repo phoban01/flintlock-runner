@@ -37,7 +37,9 @@ const (
 // the Pool Manager holds no Lease, made before the fake Pool Manager stops
 // because stopping it drops every Lease; then the Pool Manager, which
 // deletes the MicroVMs it created; then the Hosts; then the check that no
-// sandbox is left on any fake Host. It returns every failure joined,
+// sandbox is left on any fake Host. On the claim stack the first check is
+// that no MicroVMClaim is left, and the claim stack stops in place of the
+// Pool Manager and the Hosts (checkClaims). It returns every failure joined,
 // including a Runner that crashed, had to be killed, or exited non-zero.
 // The fake GitLab is closed last and the root removed unless KeepRoot is
 // set. Shutdown is idempotent; only the first call does anything.
@@ -61,10 +63,16 @@ func (s *Stack) Shutdown(ctx context.Context) error {
 		grace += s.Config.GitLab.ShutdownTimeout
 	}
 	add(s.stopRunner(grace))
-	add(s.checkLeases(ctx))
-	add(s.stopPoolManager())
-	add(s.stopHosts())
+	if s.Claim != nil {
+		add(s.checkClaims(ctx))
+		add(s.stopClaim())
+	} else {
+		add(s.checkLeases(ctx))
+		add(s.stopPoolManager())
+		add(s.stopHosts())
+	}
 	add(s.checkSandboxes(ctx))
+	s.stopExtras()
 	s.GitLab.Close()
 	if s.opts.KeepRoot {
 		s.logf("kept %s", s.Root)
@@ -226,10 +234,23 @@ func (s *Stack) teardown() {
 	_ = s.stopRunner(0)
 	_ = s.stopPoolManager()
 	_ = s.stopHosts()
+	_ = s.stopClaim()
+	s.stopExtras()
 	if s.GitLab != nil {
 		s.GitLab.Close()
 	}
 	if s.Root != "" && (s.ownRoot || !s.opts.KeepRoot) {
 		_ = os.RemoveAll(s.Root)
+	}
+}
+
+// stopExtras stops the Host Service stand-ins and the distributed cache's
+// fakes.
+func (s *Stack) stopExtras() {
+	if s.serviceClose != nil {
+		s.serviceClose()
+	}
+	if s.cache != nil {
+		s.cache.close()
 	}
 }

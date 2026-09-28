@@ -17,6 +17,7 @@ import (
 	hostfake "github.com/phoban01/flintlock-runner/internal/flintlock/fake"
 	"github.com/phoban01/flintlock-runner/internal/poolmgr"
 	pmfake "github.com/phoban01/flintlock-runner/internal/poolmgr/fake"
+	"github.com/phoban01/flintlock-runner/internal/testing/claimstack"
 	"github.com/phoban01/flintlock-runner/internal/testing/fakegitlab"
 )
 
@@ -107,6 +108,26 @@ type Options struct {
 	// Configure, when set, may change the generated configuration before
 	// it is written, for scenarios that need a different setting.
 	Configure func(*config.Config)
+
+	// Backend selects the stack the Runner runs over: the fake Pool
+	// Manager and the exec Guest Transport (the zero value), or the claim
+	// stack (BackendClaim, KF-192).
+	Backend Backend
+	// HostServices makes the buildkit and Go module proxy Host Services
+	// available on every Host and enables them in the configuration. A
+	// listener on loopback stands in for each. The Hosts publish its
+	// address in the Inventory, as the Fleet Controller does (FL-110), or
+	// on their Node, as the Host Agent does (KF-194).
+	HostServices bool
+	// HelperBinary, when set, is the Profile's gitlab-runner-helper path
+	// on the fake Hosts, which run a Job's commands on this machine. The
+	// artifact and cache scenarios set it to the stand-in BuildHelper
+	// builds. The hardware tier ignores it: its guests have their own.
+	HelperBinary string
+	// Cache configures the distributed cache (CF-080) on the fake object
+	// store (TD-034), served over TLS, with a loopback credentials endpoint
+	// for the Runner's instance credentials (CF-082).
+	Cache bool
 }
 
 // OptionsFromEnv returns opts with the tier switches filled from the
@@ -155,11 +176,15 @@ type Stack struct {
 	// PoolManager is the fake Pool Manager; nil when a real one is used
 	// (TD-053).
 	PoolManager *pmfake.PoolManager
-	// Hosts are the fake Hosts; nil on the hardware tier (TD-052).
+	// Hosts are the fake Hosts; nil on the hardware tier (TD-052). On the
+	// claim stack they are the flintlockds behind its Exec Agents.
 	Hosts []*hostfake.Host
 	// Inventory is what the Runner's Inventory lists: the fake Hosts, or
-	// the hardware Inventory.
+	// the hardware Inventory. The claim stack's Runner has none.
 	Inventory []config.HostEntry
+	// Claim is the claim stack (KF-192): the API server, the fake battery
+	// and the Exec Agents. It is nil on the other backends.
+	Claim *claimstack.Stack
 
 	ownRoot    bool
 	pmAddr     string
@@ -168,6 +193,14 @@ type Stack struct {
 	pmDone     chan error
 	hostCancel context.CancelFunc
 	hostDone   []chan error
+
+	// serviceBackends are the stand-ins of the Host Services, by name, each
+	// a port on loopback.
+	serviceBackends map[string]int
+	serviceClose    func()
+	// cache is the fake object store and credentials endpoint of the
+	// distributed cache.
+	cache *cacheStore
 
 	mu        sync.Mutex
 	runner    *runnerProc
@@ -240,17 +273,33 @@ func Start(ctx context.Context, opts Options) (s *Stack, err error) {
 	}
 	s.logf("fake GitLab listening on %s", s.GitLab.URL())
 
-	if opts.Hardware() {
+	if opts.HostServices {
+		if err := s.startServiceBackends(); err != nil {
+			return s, err
+		}
+	}
+	if opts.Cache {
+		if err := s.startCache(); err != nil {
+			return s, err
+		}
+	}
+
+	switch {
+	case opts.Backend == BackendClaim:
+		err = s.startClaim(ctx)
+	case opts.Hardware():
 		err = s.useHardwareHosts()
-	} else {
+	default:
 		err = s.startFakeHosts(ctx)
 	}
 	if err != nil {
 		return s, err
 	}
 
-	if err := s.startPoolManager(ctx); err != nil {
-		return s, err
+	if opts.Backend != BackendClaim {
+		if err := s.startPoolManager(ctx); err != nil {
+			return s, err
+		}
 	}
 
 	if err := s.writeConfig(); err != nil {
@@ -344,6 +393,7 @@ func (s *Stack) startFakeHosts(ctx context.Context) error {
 			MemoryMB: fakeHostMemoryMB,
 			Token:    HostToken,
 			TLS:      config.ClientTLS{Insecure: true},
+			Services: s.inventoryServices(),
 		})
 		s.logf("fake Host %s listening on %s (sandboxes under %s)", name, h.Addr(), h.SandboxRoot())
 	}
