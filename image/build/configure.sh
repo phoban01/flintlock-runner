@@ -4,9 +4,10 @@
 set -euo pipefail
 
 chmod 0755 /usr/libexec/flr/host-config /usr/libexec/flr/kvm-gate /usr/libexec/flr/thin-pool \
-  /usr/libexec/flr/cache-volume /usr/libexec/flr/network /usr/libexec/flr/kubelet-config \
+  /usr/libexec/flr/cache-volume /usr/libexec/flr/network /usr/libexec/flr/kubelet-config /usr/libexec/flr/flintlockd-certs \
   /usr/libexec/flr/check /usr/libexec/flr/check-thin-pool-cases /usr/libexec/flr/check-flintlockd-access-cases \
-  /usr/libexec/flr/check-host-service-egress-cases /usr/libexec/flr/check-selinux-contexts-cases
+  /usr/libexec/flr/check-host-service-egress-cases /usr/libexec/flr/check-selinux-contexts-cases \
+  /usr/libexec/flr/check-flintlockd-certs-cases /usr/libexec/flr/check-guest-isolation-cases
 chmod 0644 /usr/libexec/flr/lib.sh
 
 #= docs/requirements/11-host-image.md#kernel-and-kvm
@@ -20,7 +21,8 @@ semodule -n -i /usr/share/selinux/packages/flr.pp
 systemctl enable \
   flr-host-config.service flr-kvm.service flr-thin-pool.service flr-cache.service \
   flr-network.service flr-dnsmasq.service flr-kubelet-config.service \
-  containerd.service flintlockd.service kubelet.service
+  flr-flintlockd-certs.service flintlockd.path flr-flintlockd-restart.path \
+  containerd.service kubelet.service
 # cloud-init's unit names differ between releases; enable what this one has.
 for u in cloud-init-local cloud-init-main cloud-init-network cloud-init cloud-config cloud-final; do
   if [ -e "/usr/lib/systemd/system/$u.service" ]; then

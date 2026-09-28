@@ -35,8 +35,8 @@ spec:
             - --oci-worker-no-process-sandbox
           #= docs/requirements/12-cluster-fleet.md#cluster-least-privilege
           #/ The Host Agent SHALL hold only the privileges it needs to bind
-          #/ to the bridge gateway, to write the cache directory and to reach the
-          #/ local `flintlockd` endpoint.
+          #/ to the bridge gateway in the Host's network namespace and to write the
+          #/ cache directory.
           # Rootless buildkitd (FL-102, SE-050) as the image's unprivileged
           # user, 1000. Making the user namespace takes three things and no
           # more: newuidmap and newgidmap, whose file capabilities need

@@ -24,8 +24,8 @@ listed below. A release's `flintlock-runner-fleet.yaml` has this project's
 images by digest already, the Guest Image in the Runner's Profiles
 included (`docs/RELEASING.md`).
 
-The fleet's own Hosts cannot run a Stage through battery-operator's Exec
-Agent yet: the Host Image has to change first (#73). See
+The fleet's own Hosts reach battery once each pool's `host.conf` sets
+`FLINTLOCKD_CLIENT_CIDRS` to the Operator's pod network. See
 [Known gaps](#known-gaps).
 
 ## Order of application
@@ -119,7 +119,8 @@ In the workload cluster:
 In the manifests:
 
 - `capi/pools/default/host-pool.yaml`: the cluster, the AMI, the instance
-  type, and the node and pod CIDRs in `host.conf`.
+  type, and in `host.conf` the node, pod and Service CIDRs and the
+  Operator's pod CIDR.
 - `capi/kustomization.yaml`: the namespace of the workload cluster's Cluster.
 - `runner/config.yaml`: the GitLab URL and the Profiles. Applied from
   source, the Profiles' Guest Image says `:REPLACE`; pin it by the digests
@@ -136,8 +137,8 @@ battery-operator's documentation says what they need: cert-manager for the
 Operator's own certificates, and the Host prerequisites of its Exec Agent.
 
 Its Exec Agent runs on every Node labelled
-`battery.liquidmetal-x.dev/host=true`, so each Host's Node needs that label
-as well as the Host label of this project.
+`battery.liquidmetal-x.dev/host=true`. The Host Image registers each Host's
+Node with that label as well as the Host label of this project (HI-074).
 
 `deploy/` and battery-operator's Manifests can be applied to the same
 cluster. Nothing of one clashes with the other:
@@ -291,19 +292,15 @@ Agent's port, in the list.
 
 ## Known gaps
 
-- **The Host Image and battery-operator's Exec Agent.** battery-operator's
-  Exec Agent reaches `flintlockd` at the Host's address, port 9090, over
-  mutual TLS, with certificates it writes to `/etc/battery/flintlockd`
-  (its EA-001, EA-064). The Host Image serves `flintlockd` on the loopback
-  port 9090 without TLS (HI-042, HI-063), and does not label the Node
-  `battery.liquidmetal-x.dev/host=true`. The Host Image has to change
-  before battery-operator's Exec Agent can run a Stage on it, and so
-  before the fleet's own Hosts can run a Job: it has to serve `flintlockd`
-  over mutual TLS on the Host's address, and label the Node as a Host for
-  battery-operator. Issue #73 tracks both. Until then the Runner, the
-  claims and the Pools work, but no Stage reaches a MicroVM on these Hosts.
-  A Host set up as battery-operator's own documentation says, such as its
-  real hosts trial, can run Jobs now.
+- **The Host Image and battery-operator's Exec Agent.** The Host Image
+  serves `flintlockd` on the Host's address, port 9090, with mutual TLS,
+  from the certificates the Exec Agent writes to `/etc/battery/flintlockd`.
+  It labels the Node `battery.liquidmetal-x.dev/host=true` (HI-067 to
+  HI-074). battery reaches `flintlockd` only from the addresses in the
+  pool's `FLINTLOCKD_CLIENT_CIDRS`. Set it to the Operator's pod network,
+  and add the node range on a CNI that masquerades pod traffic between
+  Nodes. While it is empty, the default, battery cannot reach a Host and no
+  Stage reaches a MicroVM there. None of this has run on a booted Host.
 - **SELinux.** The Host Image enforces SELinux and labels the host paths
   the Host Agent mounts for `container_t` (HI-065): `host.env` read-only,
   the cache directory writable, both at `s0`. The

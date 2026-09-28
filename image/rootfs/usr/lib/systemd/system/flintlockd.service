@@ -2,9 +2,14 @@
 #/ The Host Image SHALL run `flintlockd`, its containerd and every
 #/ hypervisor process they start as systemd services outside the cgroup of
 #/ any Kubernetes pod.
-# Firecracker and Cloud Hypervisor processes are children of flintlockd and
-# stay in this unit's cgroup under system.slice. KillMode=process keeps a
-# restart of flintlockd from killing the MicroVMs it started.
+# Firecracker and Cloud Hypervisor processes are started detached by
+# flintlockd and stay in this unit's cgroup under system.slice.
+# KillMode=process keeps a restart of flintlockd, which a certificate
+# renewal causes, from killing the MicroVMs it started; see "flintlockd" in
+# docs/requirements/11-host-image.md for why they survive it.
+#
+# No [Install] section: flintlockd.path starts this unit once the Exec
+# Agent has written its certificates (HI-071).
 [Unit]
 Description=flintlock microvm service
 Documentation=https://www.liquidmetal.dev
@@ -13,36 +18,51 @@ Documentation=https://www.liquidmetal.dev
 #/ pool and the bridge are present.
 # Requires= as well as After=: when the KVM gate or the thin pool unit
 # fails, flintlockd is not started at all (HI-011, HI-022).
-Requires=flr-kvm.service flr-thin-pool.service flr-network.service containerd.service
-After=flr-kvm.service flr-thin-pool.service flr-network.service containerd.service
+Requires=flr-kvm.service flr-thin-pool.service flr-network.service flr-flintlockd-certs.service containerd.service
+After=flr-kvm.service flr-thin-pool.service flr-network.service flr-flintlockd-certs.service containerd.service
+#= docs/requirements/11-host-image.md#image-flintlockd
+#/ The Host Image SHALL start `flintlockd` only once the serving
+#/ certificate, its key and the client CA bundle exist in
+#/ `/etc/battery/flintlockd`
+# flintlockd.path waits for tls.crt, which the Exec Agent writes last; these
+# keep any other start, a restart among them, from looping on a missing file.
+ConditionPathExists=/etc/battery/flintlockd/tls.crt
+ConditionPathExists=/etc/battery/flintlockd/tls.key
+ConditionPathExists=/etc/battery/flintlockd/client-ca.crt
 
 [Service]
 #= docs/requirements/11-host-image.md#image-flintlockd
-#/ The Host Image SHALL configure `flintlockd` to listen only on a
-#/ local endpoint, a unix socket or a loopback address, that the Pod Provider
-#/ of `12-cluster-fleet.md` can reach and a guest cannot.
-# flintlockd v0.15.1 listens with net.Listen("tcp", ...) only, so the local
-# endpoint is a loopback address rather than a unix socket. The Pod Provider
-# runs in the Host's network namespace (KF-071) and reaches 127.0.0.1:9090;
-# a guest cannot, because the guest firewall's input chain drops everything
-# arriving on the bridge except DHCP, DNS and the Host Service ports, and the
-# kernel refuses loopback destinations arriving on an interface as martians
-# unless something (kube-proxy can) turns route_localnet on. Of the Host's
-# own processes, only the Pod Provider's user id may connect: the guest
-# firewall's output chain resets every other connection to this port over
-# loopback, root's included (HI-063).
+#/ The Host Image SHALL configure `flintlockd` to serve its gRPC
+#/ API only with TLS, on port 9090 of the Host's internal address, with the
+#/ serving certificate and key that the Exec Agent writes to
+#/ `/etc/battery/flintlockd`.
+# flr-network writes FLR_FLINTLOCKD_ENDPOINT, the Host's internal address
+# and port 9090, which battery-operator's Exec Agent reaches as
+# $(HOST_IP):9090 and battery as the Node report's flintlockd address. There
+# is no --insecure, so flintlockd refuses to start without the certificate
+# and key, and it listens nowhere else: not on loopback, and not on the
+# bridge gateway guests see. The HTTP gateway (--enable-http) and the debug
+# endpoint stay off.
 #
 #= docs/requirements/11-host-image.md#image-flintlockd
-#/ The Host Image SHALL NOT expose `flintlockd` on any address
-#/ reachable from outside the Host.
-# No TLS and no token: nothing but this Host can reach the endpoint. The
-# HTTP gateway (--enable-http) and the debug endpoint stay off.
+#/ The Host Image SHALL configure `flintlockd` to require a client
+#/ certificate on every connection and to verify it against the `flintlockd`
+#/ client CA bundle that the Exec Agent writes to `/etc/battery/flintlockd`.
+# --tls-client-validate makes flintlockd's TLS configuration
+# RequireAndVerifyClientCert, against the pool --tls-client-ca names
+# (pkg/auth/tls.go of flintlock v0.15.2). No token: the certificate is the
+# credential, and the Host firewall decides who may try (HI-069, HI-070).
 #
 #= docs/requirements/11-host-image.md#image-flintlockd
 #/ The Host Image SHALL enable the `flintlockd` exec API.
+EnvironmentFile=/run/flr/flintlockd.env
+ExecStartPre=/usr/libexec/flr/flintlockd-certs started
 ExecStart=/usr/bin/flintlockd run \
-    --grpc-endpoint 127.0.0.1:9090 \
-    --insecure \
+    --grpc-endpoint ${FLR_FLINTLOCKD_ENDPOINT} \
+    --tls-cert /etc/battery/flintlockd/tls.crt \
+    --tls-key /etc/battery/flintlockd/tls.key \
+    --tls-client-validate \
+    --tls-client-ca /etc/battery/flintlockd/client-ca.crt \
     --enable-exec-api \
     --bridge-name flbr0 \
     --containerd-socket /run/containerd/containerd.sock \
@@ -52,8 +72,11 @@ ExecStart=/usr/bin/flintlockd run \
 Restart=always
 RestartSec=5
 User=root
+#= docs/requirements/11-host-image.md#image-flintlockd
+#/ When the Host Image stops or restarts `flintlockd`, it SHALL
+#/ stop the `flintlockd` process alone and SHALL leave every hypervisor
+#/ process that `flintlockd` started running.
+# systemd signals the main process alone. There is no ExecStop, so
+# nothing else stops the hypervisors either.
 KillMode=process
 LimitNOFILE=1048576
-
-[Install]
-WantedBy=multi-user.target

@@ -23,10 +23,19 @@ FLR_VG=flintlock
 FLR_CACHE_DIR=/var/lib/flintlock-runner/cache
 FLR_METADATA_V4=169.254.169.254
 FLR_METADATA_V6=fd00:ec2::254
-# flintlockd's local endpoint, as flintlockd.service passes it to
-# --grpc-endpoint (HI-042).
-FLR_FLINTLOCKD_ADDR=127.0.0.1
+# flintlockd's port, the one battery-operator's Exec Agent is given
+# (--flintlockd=$(HOST_IP):9090). flintlockd serves it on the Host's
+# internal address, which flr-network writes into /run/flr/flintlockd.env for
+# flintlockd.service (HI-067).
 FLR_FLINTLOCKD_PORT=9090
+# Where battery-operator's Exec Agent writes flintlockd's serving
+# certificate, its key and the client CA bundle, and the names it gives
+# them; tls.crt is always written last (--flintlockd-cert-dir and
+# internal/execagent/certificates.go there; HI-067, HI-068, HI-071).
+FLR_FLINTLOCKD_CERT_DIR=${FLR_FLINTLOCKD_CERT_DIR:-/etc/battery/flintlockd}
+FLR_FLINTLOCKD_CERT=tls.crt
+FLR_FLINTLOCKD_KEY=tls.key
+FLR_FLINTLOCKD_CLIENT_CA=client-ca.crt
 
 log() { printf '%s: %s\n' "$FLR_UNIT" "$*" >&2; }
 

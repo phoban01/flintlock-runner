@@ -42,6 +42,14 @@ labels="$labels,$prefix/firecracker=$FIRECRACKER_VERSION"
 labels="$labels,$prefix/cloud-hypervisor=$CLOUD_HYPERVISOR_VERSION"
 
 #= docs/requirements/11-host-image.md#kubernetes-node
+#/ The Host Image SHALL register its kubelet with the label
+#/ `battery.liquidmetal-x.dev/host` set to `true`.
+# battery-operator's Host label: its Exec Agent runs only on Nodes that
+# carry it. The kubelet may set it itself, because the NodeRestriction
+# admission plugin limits only labels under kubernetes.io and k8s.io.
+labels="$labels,battery.liquidmetal-x.dev/host=true"
+
+#= docs/requirements/11-host-image.md#kubernetes-node
 #/ The Host Image SHALL configure the kubelet to reserve all CPU
 #/ and memory beyond the configured Host reserve, so that the Host's Node
 #/ offers only the Host reserve to pods and the Virtual Node of KF-012 offers

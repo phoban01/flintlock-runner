@@ -135,8 +135,8 @@ spec:
           command: [/bin/sh, /etc/flr/templates/prepare-cache.sh]
           #= docs/requirements/12-cluster-fleet.md#cluster-least-privilege
           #/ The Host Agent SHALL hold only the privileges it needs to bind
-          #/ to the bridge gateway, to write the cache directory and to reach the
-          #/ local `flintlockd` endpoint.
+          #/ to the bridge gateway in the Host's network namespace and to write the
+          #/ cache directory.
           # Root, because root owns the Host Image's cache directory, and
           # CAP_CHOWN alone, to give each service its directory. A hostPath
           # is never re-owned by the kubelet, and fsGroup does not apply to
@@ -174,9 +174,11 @@ spec:
         # `flr host-services` publishes where the enabled Host Services
         # listen on the Host's Node, for the Runner to read (KF-189), from
         # the configuration render.sh makes for this Host. It serves nothing
-        # and reaches only the API server. Its user id is the flr image's
-        # own, none of the Host Services' (HI-064) and not the one the Host
-        # Image admits to flintlockd (HI-063).
+        # and reaches only the API server. Its user id, 10003, is none of the
+        # Host Services' (HI-064). It is not the flr image's own, 65532,
+        # because that is the Exec Agent's, the one user id the Host Image
+        # admits to flintlockd (HI-070). The binary is mode 0555, so any
+        # user id runs it.
         - name: host-services
           image: ghcr.io/phoban01/flintlock-runner/flr:dev
           args: [host-services, --host-services-config, /etc/flr/rendered/host-services.yaml]
@@ -188,8 +190,8 @@ spec:
                 fieldRef:
                   fieldPath: spec.nodeName
           securityContext:
-            runAsUser: 65532
-            runAsGroup: 65532
+            runAsUser: 10003
+            runAsGroup: 10003
             runAsNonRoot: true
             allowPrivilegeEscalation: false
             readOnlyRootFilesystem: true

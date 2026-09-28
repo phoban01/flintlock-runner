@@ -1,4 +1,4 @@
-policy_module(flr, 1.1.0)
+policy_module(flr, 1.2.0)
 
 # The Host Image's SELinux policy module. See "SELinux" in image/README.md.
 #
@@ -47,6 +47,20 @@ allow dnsmasq_t flr_run_t:file { getattr open read ioctl lock };
 # Both types are declared by container-selinux; requiring them makes the
 # module refuse to install without it rather than install a file context
 # that names nothing.
+#
+#= docs/requirements/11-host-image.md#kernel-and-kvm
+#/ The Host Image SHALL create `/etc/battery/flintlockd` owned by
+#/ the Exec Agent's user id, and SHALL label that directory and every file in
+#/ it so that the Exec Agent's containers can write them and `flintlockd` can
+#/ read them, under the base image's SELinux policy and without changing the
+#/ domain of any container.
+#
+# The same way, and with no rule either: flr.fc labels battery-operator's
+# Exec Agent's certificate directory for flintlockd, and what is in it,
+# container_file_t at s0, which container_t may read and write. A file the
+# agent creates there inherits the type from the directory and takes its
+# pod's level; flintlockd-certs puts it back to s0 whenever it changes.
+# flintlockd reads it as unconfined_service_t.
 gen_require(`
 	type container_file_t;
 	type container_ro_file_t;

@@ -1,0 +1,98 @@
+#!/usr/bin/bash
+# The directory battery-operator's Exec Agent writes flintlockd's serving
+# certificate, its key and the client CA bundle to, and what the Host Image
+# does when they change. See "flintlockd's certificates" in image/README.md.
+#
+#   flintlockd-certs prepare   flr-flintlockd-certs.service, at boot: make
+#                              the directory, owned by the Exec Agent's user
+#                              id, and label it and what is in it
+#   flintlockd-certs started   flintlockd.service's ExecStartPre: record the
+#                              files flintlockd is about to load
+#   flintlockd-certs changed   flr-flintlockd-restart.service, from its path
+#                              unit: label the files again and restart
+#                              flintlockd if they are not the ones it loaded
+FLR_UNIT=flr-flintlockd-certs
+# shellcheck source=image/rootfs/usr/libexec/flr/lib.sh
+. "${FLR_LIB:-/usr/libexec/flr/lib.sh}"
+
+dir=$FLR_FLINTLOCKD_CERT_DIR
+loaded=${FLR_FLINTLOCKD_LOADED:-$FLR_RUN/flintlockd-certs.loaded}
+systemctl=${FLR_SYSTEMCTL:-systemctl}
+
+#= docs/requirements/11-host-image.md#kernel-and-kvm
+#/ The Host Image SHALL create `/etc/battery/flintlockd` owned by
+#/ the Exec Agent's user id, and SHALL label that directory and every file in
+#/ it so that the Exec Agent's containers can write them and `flintlockd` can
+#/ read them
+# label_all gives the directory and every file in it the label of the
+# module's file contexts, container_file_t at s0 (selinux/flr.fc). A file
+# the Exec Agent writes carries its pod's level, which a later pod with
+# other categories could not read or replace; this returns it to s0.
+label_all() {
+  local entries=("$dir")
+  local f
+  for f in "$dir"/* "$dir"/.[!.]*; do
+    [ -e "$f" ] && entries+=("$f")
+  done
+  relabel "${entries[@]}"
+}
+
+# fingerprint prints the checksum of each of the three files, or "absent"
+# for one that is not there.
+fingerprint() {
+  local f
+  for f in "$FLR_FLINTLOCKD_CERT" "$FLR_FLINTLOCKD_KEY" "$FLR_FLINTLOCKD_CLIENT_CA"; do
+    if [ -r "$dir/$f" ]; then
+      printf '%s %s\n' "$(sha256sum <"$dir/$f" | cut -d' ' -f1)" "$f"
+    else
+      printf 'absent %s\n' "$f"
+    fi
+  done
+}
+
+record() {
+  local tmp
+  mkdir -p "$(dirname "$loaded")"
+  tmp=$(mktemp "$loaded.XXXXXX")
+  fingerprint >"$tmp"
+  mv -f "$tmp" "$loaded"
+}
+
+case ${1:-} in
+prepare)
+  load_host_env
+  mkdir -p "$dir"
+  chown "$FLR_EXEC_AGENT_UID:$FLR_EXEC_AGENT_UID" "$dir"
+  chmod 0700 "$dir"
+  label_all || refuse "cannot label $dir for the Exec Agent"
+  ready
+  log "$dir is ready for user id $FLR_EXEC_AGENT_UID"
+  ;;
+started)
+  record
+  ;;
+changed)
+  #= docs/requirements/11-host-image.md#image-flintlockd
+  #/ The Host Image SHALL start `flintlockd` only once the serving
+  #/ certificate, its key and the client CA bundle exist in
+  #/ `/etc/battery/flintlockd`, and SHALL restart `flintlockd` when the serving
+  #/ certificate or the client CA bundle changes.
+  # Labelling a file is itself a change the path unit sees, and so is
+  # anything that touches a file without changing it, so flintlockd is
+  # restarted only when what it would load differs from what it loaded.
+  # What it is about to load is recorded first, so that the change this run
+  # causes by labelling finds nothing to do. try-restart leaves a flintlockd
+  # that is not running alone: flintlockd.path starts it.
+  label_all || log "warning: could not label $dir for the Exec Agent"
+  if [ "$(fingerprint)" = "$(cat "$loaded" 2>/dev/null)" ]; then
+    log "flintlockd's certificates are the ones it loaded"
+    exit 0
+  fi
+  record
+  log "flintlockd's certificates changed; restarting flintlockd"
+  "$systemctl" try-restart flintlockd.service
+  ;;
+*)
+  die "usage: flintlockd-certs prepare|started|changed"
+  ;;
+esac
