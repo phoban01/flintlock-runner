@@ -395,11 +395,16 @@ jobs:
   # lives only inside this job, and the Host Image job above does the same
   # for the Host Image, so the digests are of real pushes; the rendered
   # assets name them under ghcr.io, where they do not exist, and are kept
-  # only as a workflow artifact for review.
+  # only as a workflow artifact for review. On a pull request, tag and verify
+  # are skipped, and a skip passes down through host-image, so the condition
+  # needs !cancelled() to run the job at all.
   dry-run:
     name: packaging dry run
     needs: host-image
-    if: "!startsWith(github.ref, 'refs/tags/')"
+    if: >-
+      !cancelled() &&
+      !startsWith(github.ref, 'refs/tags/') &&
+      needs.host-image.result == 'success'
     runs-on: ubuntu-latest
     services:
       registry:
