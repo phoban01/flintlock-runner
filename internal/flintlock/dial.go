@@ -89,20 +89,15 @@ func WithReconnectBackoff(base, max time.Duration) DialerOption {
 	}
 }
 
-// WithPerRPCCredentials attaches creds to every call and stream on every
-// connection the Dialer opens. It is how the `agent-exec` Guest Transport
-// carries the Runner's ServiceAccount token to an Exec Agent (KF-186); a
-// Host's basic auth token stays on the Endpoint (HO-004). gRPC refuses to
-// send credentials that require transport security over a plaintext
-// connection, so they never leave in the clear.
-func WithPerRPCCredentials(creds credentials.PerRPCCredentials) DialerOption {
-	return func(g *grpcDialer) { g.perRPC = creds }
-}
-
 // NewDialer returns the production Dialer: one long-lived gRPC connection
 // per Host (HO-002), the configured deadline on every unary call (HO-003),
 // basic auth (HO-004) and TLS (HO-005, HO-006) from the Endpoint.
 func NewDialer(opts ...DialerOption) Dialer {
+	return newGRPCDialer(opts...)
+}
+
+// newGRPCDialer applies opts to the defaults.
+func newGRPCDialer(opts ...DialerOption) *grpcDialer {
 	g := &grpcDialer{
 		deadline:         DefaultCallDeadline,
 		keepaliveTime:    keepaliveTime,
@@ -123,8 +118,47 @@ type grpcDialer struct {
 	keepaliveTimeout time.Duration
 	backoffBase      time.Duration
 	backoffMax       time.Duration
-	// perRPC, when set, is sent on every call (WithPerRPCCredentials).
-	perRPC credentials.PerRPCCredentials
+}
+
+// connOptions are the options of every connection the Dialer opens that do
+// not concern credentials: keepalive and reconnection with backoff
+// (HO-002), and the deadline on every unary call (HO-003).
+func (g *grpcDialer) connOptions() []grpc.DialOption {
+	return []grpc.DialOption{
+		grpc.WithKeepaliveParams(keepalive.ClientParameters{
+			Time:                g.keepaliveTime,
+			Timeout:             g.keepaliveTimeout,
+			PermitWithoutStream: true,
+		}),
+		grpc.WithConnectParams(grpc.ConnectParams{
+			Backoff: backoff.Config{
+				BaseDelay:  g.backoffBase,
+				Multiplier: reconnectMultiplier,
+				Jitter:     reconnectJitter,
+				MaxDelay:   g.backoffMax,
+			},
+			MinConnectTimeout: minConnectTimeout,
+		}),
+		grpc.WithChainUnaryInterceptor(deadlineInterceptor(g.deadline)),
+	}
+}
+
+// ConnOptions returns the options the production Dialer gives every
+// connection, less its credentials: keepalive, reconnection with backoff
+// and the call deadline, shaped by opts as NewDialer shapes them. They are
+// for a connection that something else dials with credentials of its own,
+// such as the connection to a claim's Exec Agent that battery-operator's
+// Client Library dials (KF-186).
+func ConnOptions(opts ...DialerOption) []grpc.DialOption {
+	return newGRPCDialer(opts...).connOptions()
+}
+
+// NewConnClient returns the HostClient that owns conn, a connection that
+// the caller has dialled to the Host or Exec Agent at address, named name.
+// Closing the client closes conn, and every stream it opens shares conn
+// (EX-050).
+func NewConnClient(name, address string, conn *grpc.ClientConn) HostClient {
+	return newClient(Endpoint{Name: name, Address: address}, conn)
 }
 
 //= docs/requirements/05-hosts.md#flintlock-client
@@ -149,27 +183,7 @@ func (g *grpcDialer) Dial(_ context.Context, ep Endpoint) (HostClient, error) {
 		return nil, err
 	}
 
-	opts := []grpc.DialOption{
-		grpc.WithTransportCredentials(creds),
-		grpc.WithKeepaliveParams(keepalive.ClientParameters{
-			Time:                g.keepaliveTime,
-			Timeout:             g.keepaliveTimeout,
-			PermitWithoutStream: true,
-		}),
-		grpc.WithConnectParams(grpc.ConnectParams{
-			Backoff: backoff.Config{
-				BaseDelay:  g.backoffBase,
-				Multiplier: reconnectMultiplier,
-				Jitter:     reconnectJitter,
-				MaxDelay:   g.backoffMax,
-			},
-			MinConnectTimeout: minConnectTimeout,
-		}),
-		grpc.WithChainUnaryInterceptor(deadlineInterceptor(g.deadline)),
-	}
-	if g.perRPC != nil {
-		opts = append(opts, grpc.WithPerRPCCredentials(g.perRPC))
-	}
+	opts := append([]grpc.DialOption{grpc.WithTransportCredentials(creds)}, g.connOptions()...)
 	if header := basicAuthHeader(ep.Token); header != "" {
 		opts = append(opts,
 			grpc.WithChainUnaryInterceptor(authUnaryInterceptor(header)),

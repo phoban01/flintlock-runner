@@ -52,13 +52,14 @@ func NewVirtualNodeInventory(nodes NodeGetter, upstreams []config.HTTPCacheUpstr
 
 //= docs/requirements/12-cluster-fleet.md#agent-exec-transport
 //# The Executor SHALL read the Host Service addresses for a Job
-//# from the annotations of KF-179 on the Node of the Job's Host.
+//# from the annotations of KF-194 that the Host Agent publishes on the Node
+//# of the Job's Host.
 
 // NewHostNodeInventory returns the InventoryLookup of the claim design of a
 // cluster fleet. The Placement names the Node of the Host the Job's claim
-// is bound to, and the Exec Agent of that Host has published the Host
+// is bound to, and the Host Agent of that Host has published the Host
 // Services on that Node under the same annotations a Virtual Node carries
-// (KF-179), so each lookup reads them exactly as NewVirtualNodeInventory
+// (KF-194), so each lookup reads them exactly as NewVirtualNodeInventory
 // does. RBAC: get on Nodes.
 func NewHostNodeInventory(nodes NodeGetter, upstreams []config.HTTPCacheUpstream, log *slog.Logger) InventoryLookup {
 	if log == nil {

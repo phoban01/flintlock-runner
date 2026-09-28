@@ -4,10 +4,10 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"os"
-	"strings"
 	"sync"
 	"time"
+
+	"google.golang.org/grpc"
 
 	"github.com/phoban01/flintlock-runner/internal/flintlock"
 )
@@ -18,58 +18,31 @@ import (
 //# streaming, exit status, cancellation and timeouts.
 
 // KindAgentExec is the Guest Transport of the claim design of a cluster
-// fleet: the exec transport pointed at the Exec Agent of the Host named in
-// the Job's claim, which authorizes the request against the claim and
-// relays it to MicroVMExec on its local flintlockd (KF-185). Its framing,
-// its exit status, its cancellation and its liveness watch are the exec
-// transport's, because the Exec Agent serves flintlock's own exec service
-// and relays it message for message (KF-188).
+// fleet: the exec transport pointed at battery-operator's Exec Agent on the
+// Host named in the Job's claim, which authorizes the request against the
+// claim and relays it to MicroVMExec on the Host's flintlockd (KF-185). Its
+// framing, its exit status, its cancellation and its liveness watch are the
+// exec transport's, because the Exec Agent serves flintlock's own exec
+// service and relays it message for message (KF-188).
 const KindAgentExec Kind = "agent-exec"
 
-// AgentExecConfig is what the Runner reaches Exec Agents with.
+// AgentExecConfig is what the Runner reaches Exec Agents with, beyond what
+// each claim gives.
 type AgentExecConfig struct {
-	// CAFile is the certificate authority an Exec Agent's serving
-	// certificate is verified against (KF-186). It is required: an Exec
-	// Agent's certificate is issued for the fleet, not by a public
-	// authority.
-	CAFile string
-	// TokenFile is the Runner's ServiceAccount token, the file the kubelet
-	// projects into the Runner's pod. It is read again for every call, so
-	// that a rotated token is used as soon as the kubelet writes it.
-	TokenFile string
 	// CallDeadline bounds every unary call to an Exec Agent (HO-003); zero
 	// keeps the Host client's default.
 	CallDeadline time.Duration
 }
 
-//= docs/requirements/12-cluster-fleet.md#agent-exec-transport
-//= type=todo
-//= tracking-issue=74
-//# The `agent-exec` Guest Transport SHALL authenticate to the Exec
-//# Agent with a claim token of the Job's claim
-
-// tokenFileCredentials send the token in a file as a bearer token on every
-// call. The file is read each time rather than once, because the kubelet
-// rotates a projected ServiceAccount token in place, and a token read at
-// start would stop working within the hour. They require transport
-// security, so gRPC never sends them over a plaintext connection.
-type tokenFileCredentials struct{ path string }
-
-// GetRequestMetadata implements credentials.PerRPCCredentials.
-func (c tokenFileCredentials) GetRequestMetadata(context.Context, ...string) (map[string]string, error) {
-	data, err := os.ReadFile(c.path)
-	if err != nil {
-		return nil, fmt.Errorf("reading the service account token: %w", err)
-	}
-	token := strings.TrimSpace(string(data))
-	if token == "" {
-		return nil, fmt.Errorf("the service account token file %s is empty", c.path)
-	}
-	return map[string]string{"authorization": "Bearer " + token}, nil
-}
-
-// RequireTransportSecurity implements credentials.PerRPCCredentials.
-func (tokenFileCredentials) RequireTransportSecurity() bool { return true }
+// DialClaimAgent dials the Exec Agent of the claim whose lease id is
+// leaseID, and returns the connection. The claim backend provides it: the
+// connection is the one battery-operator's Client Library dials for that
+// claim with Claim.Dial. It speaks TLS, verified against the Operator's
+// serving CA, and carries the claim's own token on every call, renewed as
+// the Client Library renews it. opts are the Runner's connection options
+// (flintlock.ConnOptions); the dialler applies them before its own
+// credentials, which take precedence.
+type DialClaimAgent func(ctx context.Context, leaseID string, opts ...grpc.DialOption) (*grpc.ClientConn, error)
 
 // AgentClaim is the claim that a client of an Exec Agent is asked for: what
 // the Job's claim says about its MicroVM and where it runs (KF-151).
@@ -86,103 +59,87 @@ type AgentClaim struct {
 	Address string
 }
 
-// AgentHosts hands out Host clients of Exec Agents by the Host and address
-// a claim names. It sends the Runner's own token, not a token of the claim,
-// so one client serves every claim on a Host: a client is dialled on first
-// use and shared by every Job on that Host, so that each Stage is a stream
-// on one connection (EX-050); it is closed once the last Job holding it
-// releases it.
+// AgentHosts hands out Host clients of Exec Agents, one for each claim.
+// battery-operator's Exec Agent admits a request only with a claim token of
+// the claim whose MicroVM it names (its EA-010 to EA-013), so a connection
+// that carries one claim's token opens no other claim's MicroVM. Each Lease
+// therefore dials a connection of its own, through the claim backend, and
+// the Job's Stages are streams on it (EX-050); releasing it closes it.
 type AgentHosts struct {
-	dialer flintlock.Dialer
-	caFile string
+	dial DialClaimAgent
+	opts []grpc.DialOption
 
 	mu      sync.Mutex
-	clients map[agentKey]*agentClient
+	clients map[*agentClient]struct{}
 	closed  bool
 }
 
-type agentKey struct{ host, address string }
-
 type agentClient struct {
 	client flintlock.HostClient
-	users  int
 }
 
-// NewAgentHosts checks the configuration and returns the client pool.
-// Nothing is dialled until a Job asks for a Host.
-func NewAgentHosts(cfg AgentExecConfig) (*AgentHosts, error) {
-	switch {
-	case cfg.CAFile == "":
-		return nil, errors.New("transport: agent-exec needs the certificate authority of the Exec Agents' serving certificates")
-	case cfg.TokenFile == "":
-		return nil, errors.New("transport: agent-exec needs the Runner's service account token file")
-	}
-	if _, err := os.Stat(cfg.CAFile); err != nil {
-		return nil, fmt.Errorf("transport: agent-exec certificate authority: %w", err)
+// NewAgentHosts returns the clients of the Exec Agents of the claims that
+// dial reaches. Nothing is dialled until a Job asks for its claim.
+func NewAgentHosts(dial DialClaimAgent, cfg AgentExecConfig) (*AgentHosts, error) {
+	if dial == nil {
+		return nil, errors.New("transport: agent-exec needs the claim backend's dialler of Exec Agents")
 	}
 	return &AgentHosts{
-		dialer: flintlock.NewDialer(
-			flintlock.WithCallDeadline(cfg.CallDeadline),
-			flintlock.WithPerRPCCredentials(tokenFileCredentials{path: cfg.TokenFile}),
-		),
-		caFile:  cfg.CAFile,
-		clients: map[agentKey]*agentClient{},
+		dial:    dial,
+		opts:    flintlock.ConnOptions(flintlock.WithCallDeadline(cfg.CallDeadline)),
+		clients: map[*agentClient]struct{}{},
 	}, nil
 }
 
 //= docs/requirements/12-cluster-fleet.md#agent-exec-transport
-//# SHALL verify the agent's
+//# The `agent-exec` Guest Transport SHALL authenticate to the Exec
+//# Agent with a claim token of the Job's claim and SHALL verify the agent's
 //# serving certificate against the configured certificate authority.
 
-// Lease returns the client of the Exec Agent at the claim's address on the
-// claim's Host, with a function that releases it. The client speaks TLS,
-// verified against the configured certificate authority and never skipped,
-// and sends the Runner's token on every call. Claims on the same Host and
-// address share one client whatever their lease ids. ctx is not used: the
-// connection is established lazily, and outlives the call.
-func (a *AgentHosts) Lease(_ context.Context, claim AgentClaim) (flintlock.HostClient, func(), error) {
-	host, address := claim.Host, claim.Address
-	if address == "" {
-		return nil, nil, fmt.Errorf("transport: host %s: the claim names no exec agent address", host)
+// Lease returns a client of the Exec Agent of claim, on a connection of its
+// own that the claim backend dials for the claim's lease id, and a function
+// that releases it. The connection carries the claim's token and verifies
+// the agent against the Operator's serving CA, both from the Client
+// Library. The transport adds no credential of its own and never replaces
+// the connection's: the Runner's own identity opens no MicroVM. ctx bounds
+// the dial; the connection outlives the call.
+func (a *AgentHosts) Lease(ctx context.Context, claim AgentClaim) (flintlock.HostClient, func(), error) {
+	if claim.LeaseID == "" {
+		return nil, nil, fmt.Errorf("transport: host %s: the claim has no lease id", claim.Host)
 	}
-	key := agentKey{host: host, address: address}
 	a.mu.Lock()
-	defer a.mu.Unlock()
-	if a.closed {
+	closed := a.closed
+	a.mu.Unlock()
+	if closed {
 		return nil, nil, errors.New("transport: the exec agent clients are closed")
 	}
-	c, ok := a.clients[key]
-	if !ok {
-		client, err := a.dialer.Dial(context.Background(), flintlock.Endpoint{
-			Name:    host,
-			Address: address,
-			TLS:     flintlock.TLSOptions{CAFile: a.caFile},
-		})
-		if err != nil {
-			return nil, nil, err
-		}
-		c = &agentClient{client: client}
-		a.clients[key] = c
+	conn, err := a.dial(ctx, claim.LeaseID, a.opts...)
+	if err != nil {
+		return nil, nil, fmt.Errorf("transport: dialling the exec agent of claim %s on host %s: %w", claim.LeaseID, claim.Host, err)
 	}
-	c.users++
+	address := claim.Address
+	if address == "" {
+		address = conn.Target()
+	}
+	c := &agentClient{client: flintlock.NewConnClient(claim.Host, address, conn)}
+
+	a.mu.Lock()
+	if a.closed {
+		a.mu.Unlock()
+		_ = c.client.Close()
+		return nil, nil, errors.New("transport: the exec agent clients are closed")
+	}
+	a.clients[c] = struct{}{}
+	a.mu.Unlock()
+
 	var once sync.Once
-	return c.client, func() { once.Do(func() { a.release(key) }) }, nil
+	return c.client, func() { once.Do(func() { a.release(c) }) }, nil
 }
 
-// release drops one user of a client and closes it after the last.
-func (a *AgentHosts) release(key agentKey) {
+// release closes one claim's client.
+func (a *AgentHosts) release(c *agentClient) {
 	a.mu.Lock()
-	c, ok := a.clients[key]
-	if !ok {
-		a.mu.Unlock()
-		return
-	}
-	c.users--
-	if c.users > 0 {
-		a.mu.Unlock()
-		return
-	}
-	delete(a.clients, key)
+	delete(a.clients, c)
 	a.mu.Unlock()
 	_ = c.client.Close()
 }
@@ -191,10 +148,10 @@ func (a *AgentHosts) release(key agentKey) {
 func (a *AgentHosts) Close() error {
 	a.mu.Lock()
 	clients := a.clients
-	a.clients, a.closed = map[agentKey]*agentClient{}, true
+	a.clients, a.closed = map[*agentClient]struct{}{}, true
 	a.mu.Unlock()
 	var errs []error
-	for _, c := range clients {
+	for c := range clients {
 		errs = append(errs, c.client.Close())
 	}
 	return errors.Join(errs...)
