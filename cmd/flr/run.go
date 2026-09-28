@@ -73,6 +73,21 @@ func runRunner(c *cli.Context) error {
 		return cli.NewExitError(err.Error(), 1)
 	}
 
+	// The health server takes the observability listen address from the
+	// start, so that /healthz answers while the Runner verifies its token
+	// and reaches the Pool Manager. gitlab-runner's metrics server listens
+	// on a loopback address behind it (healthServer).
+	metricsAddr, err := freeLoopbackAddr()
+	if err != nil {
+		return cli.NewExitError(err.Error(), 1)
+	}
+	health, err := newHealthServer(cfg.Observability.ListenAddress, metricsAddr, log)
+	if err != nil {
+		return cli.NewExitError(err.Error(), 1)
+	}
+	health.serve()
+	defer health.close()
+
 	//= docs/requirements/06-fleet.md#launch-template-mode
 	//# Where launch template mode is selected, the Runner SHALL refresh
 	//# its Inventory from tag discovery at the configured interval so that
@@ -115,6 +130,7 @@ func runRunner(c *cli.Context) error {
 	defer r.close()
 	// The refresher stops before the Runner's connections close.
 	defer stopRefreshing()
+	health.setStatus(r.sched)
 
 	//= docs/requirements/01-gitlab-protocol.md#authentication
 	//# The Runner SHALL authenticate to GitLab with a runner
@@ -138,6 +154,10 @@ func runRunner(c *cli.Context) error {
 	// identifier from; it then sets it on the RunnerConfig that every
 	// runner-scoped request of the network client carries.
 	runnerPath := filepath.Join(cfg.StateDir, runnerConfigFile)
+	// The run loop's metrics server listens on the loopback address that
+	// the health server proxies /metrics to, since the health server holds
+	// the configured one (OB-010).
+	rcfg.ListenAddress = metricsAddr
 	if err := rcfg.SaveConfig(runnerPath); err != nil {
 		return cli.NewExitError(fmt.Sprintf("writing %s: %v", runnerPath, err), 1)
 	}
@@ -157,6 +177,7 @@ func runRunner(c *cli.Context) error {
 	if err := verifyRunner(ctx, client, rcfg.Runners[0], systemID, log); err != nil {
 		return err
 	}
+	health.tokenVerified()
 
 	// SIGHUP reloads the Profiles and the Inventory (CF-007), and so does
 	// every refresh that changes the Hosts: both reach the executor's view

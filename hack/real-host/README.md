@@ -48,7 +48,7 @@ hack/real-host/run.sh clean    # the Runner, its Pool and the fake GitLab go
 | Step | What it does |
 |---|---|
 | `images` | Builds `flr` and `fake-gitlab` for the Host's architecture, each into an image of one binary (`hack/release/flr.Containerfile`, `fake-gitlab/Containerfile`). Imports both into k3s's containerd. Builds the Guest Image with `guest/build.sh --load`, and pushes the kernel and the root filesystem to the Host's registry. Writes the references to `.state/images.env`, the Guest Image by digest. |
-| `deploy` | Applies `deploy/namespace.yaml` and the Secret with the fake's runner token. Deploys the fake GitLab (`fake-gitlab.yaml`). Deploys the Runner from `deploy/runner` through an overlay in `.state/overlay`: the flr image from `images`, and `runner-config.yaml` as its configuration, with the Guest Image references in place. The overlay also probes the Runner's port in place of `/healthz` and `/readyz` (#94). Waits until the Runner's Pool `lima-arm64` is Ready. |
+| `deploy` | Applies `deploy/namespace.yaml` and the Secret with the fake's runner token. Deploys the fake GitLab (`fake-gitlab.yaml`). Deploys the Runner from `deploy/runner` through an overlay in `.state/overlay`: the flr image from `images`, and `runner-config.yaml` as its configuration, with the Guest Image references in place. The overlay also probes the Runner's port in place of `/readyz`, which never passes under the claim backend (OB-031, #94). Waits until the Runner's Pool `lima-arm64` is Ready. |
 | `job` | Queues `job.json` on the fake GitLab. While the Job runs, it records `kubectl get microvmclaims -A` once the claim is Bound. When the Job ends, it waits for the claim to go. It prints the Job's status and log, and the claims during and after, and writes them to `.state/run-<time>.log`. |
 | `clean` | Deletes the Runner, the fake GitLab, the claims and Pools in `flintlock-system`, and the namespace. battery-operator stays. The images stay on the Host. |
 
@@ -119,8 +119,11 @@ On the trial's Lima Host `bo-host-1` (an M4 Mac), with battery-operator at
 
 - `flr` serves no `/healthz` or `/readyz` (OB-030 to OB-032, #94).
   `deploy/runner`'s probes get a 404, so the Runner's pod never becomes
-  Ready, and the kubelet restarts it about every two minutes. The overlay
-  that `run.sh` writes probes the port instead, until `flr` serves them.
+  Ready, and the kubelet restarts it about every two minutes. `flr` now
+  serves both, and the liveness probe of `deploy/runner` stays. `/readyz`
+  also wants a healthy Host (OB-031). Under the claim backend the Runner
+  probes no Host, so the overlay that `run.sh` writes still probes the
+  port for readiness. The next run checks the probes on a real cluster.
 - The Pool of one MicroVM is Ready within seconds. The Job gets its
   MicroVM in about 1 s, the guest agent answers in about 60 ms, and the
   clone from GitHub takes 3 to 5 s.
