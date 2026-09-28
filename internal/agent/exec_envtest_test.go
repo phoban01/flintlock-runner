@@ -36,8 +36,7 @@ import (
 
 //= docs/requirements/12-cluster-fleet.md#agent-exec-transport
 //= type=test
-//# The `agent-exec` Guest Transport SHALL authenticate to the Exec
-//# Agent with the Runner's ServiceAccount token and SHALL verify the agent's
+//# SHALL verify the agent's
 //# serving certificate against the configured certificate authority.
 
 // TestAgentExecRunsAStage is the exec transport's

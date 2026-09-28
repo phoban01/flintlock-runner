@@ -43,9 +43,10 @@ type AgentExecConfig struct {
 }
 
 //= docs/requirements/12-cluster-fleet.md#agent-exec-transport
+//= type=todo
+//= tracking-issue=74
 //# The `agent-exec` Guest Transport SHALL authenticate to the Exec
-//# Agent with the Runner's ServiceAccount token and SHALL verify the agent's
-//# serving certificate against the configured certificate authority.
+//# Agent with a claim token of the Job's claim
 
 // tokenFileCredentials send the token in a file as a bearer token on every
 // call. The file is read each time rather than once, because the kubelet
@@ -113,8 +114,7 @@ func NewAgentHosts(cfg AgentExecConfig) (*AgentHosts, error) {
 }
 
 //= docs/requirements/12-cluster-fleet.md#agent-exec-transport
-//# The `agent-exec` Guest Transport SHALL authenticate to the Exec
-//# Agent with the Runner's ServiceAccount token and SHALL verify the agent's
+//# SHALL verify the agent's
 //# serving certificate against the configured certificate authority.
 
 // Lease returns the client of the Exec Agent at address on the named Host,
