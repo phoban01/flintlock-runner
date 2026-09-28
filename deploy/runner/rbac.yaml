@@ -1,0 +1,131 @@
+# The permissions of the Runner of the claim design
+# (docs/requirements/12-cluster-fleet.md#cluster-least-privilege), next to
+# battery-operator v0.1.0's Manifests. Every rule has one user, named beside
+# it. The Holder (holder.yaml) is bound to nothing.
+#
+# cmd/flr's end-to-end test of the claim backend applies this file
+# unchanged to a test API server and runs a Job as the Runner's
+# ServiceAccount, so a call the Runner makes outside these rules fails that
+# test rather than a deployment.
+#
+# role.yaml in this directory is the Virtual Node design's, and is not
+# deployed.
+#
+#= docs/requirements/12-cluster-fleet.md#cluster-least-privilege
+#/ The Fleet Manifests SHALL grant the Runner only the
+#/ permissions to manage `MicroVMClaim` and `Pool` resources and to create
+#/ Secrets in its own namespace, to request tokens of the Holder alone, to
+#/ read Nodes and to read the serving CA ConfigMap in battery-operator's
+#/ namespace, and SHALL grant the Holder no permission.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: flintlock-runner-claims
+  namespace: flintlock-system
+  labels:
+    app.kubernetes.io/name: flintlock-runner
+rules:
+  # A Lease is a MicroVMClaim (KF-150): created, read until Bound, renewed
+  # by a patch of spec.renewTime (KF-152) and deleted on release (KF-153).
+  # battery-operator's Client Library does each of these.
+  - apiGroups: ["battery.liquidmetal-x.dev"]
+    resources: ["microvmclaims"]
+    verbs: ["create", "get", "list", "watch", "patch", "delete"]
+  # The Runner declares the Pools of its Profiles, as PL-010 does over
+  # gRPC, updates them when a Profile changes, and watches them for the
+  # available count. It never deletes a Pool.
+  - apiGroups: ["battery.liquidmetal-x.dev"]
+    resources: ["pools"]
+    verbs: ["create", "get", "list", "watch", "update", "patch"]
+  # Each claim's Secret `<claim name>-exec`, empty, owned by the claim,
+  # which its claim tokens are bound to (battery-operator CC-001). The
+  # Runner reads no Secret: create cannot be limited by name, but it
+  # returns nothing that was there before.
+  - apiGroups: [""]
+    resources: ["secrets"]
+    verbs: ["create"]
+  # A claim token is a TokenRequest for the Holder (KF-186), and for no
+  # other ServiceAccount: the Runner's own identity opens no MicroVM.
+  - apiGroups: [""]
+    resources: ["serviceaccounts/token"]
+    resourceNames: ["flintlock-runner-holder"]
+    verbs: ["create"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: flintlock-runner-claims
+  namespace: flintlock-system
+  labels:
+    app.kubernetes.io/name: flintlock-runner
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: flintlock-runner-claims
+subjects:
+  - kind: ServiceAccount
+    name: flintlock-runner
+    namespace: flintlock-system
+---
+# The Host Service addresses of a Job are annotations of the Node of its
+# Host, which the Host Agent keeps there (KF-189, KF-194). Nodes are
+# cluster-scoped; the Runner reads one at a time, by name.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: flintlock-runner-host-nodes
+  labels:
+    app.kubernetes.io/name: flintlock-runner
+rules:
+  - apiGroups: [""]
+    resources: ["nodes"]
+    verbs: ["get"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: flintlock-runner-host-nodes
+  labels:
+    app.kubernetes.io/name: flintlock-runner
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: flintlock-runner-host-nodes
+subjects:
+  - kind: ServiceAccount
+    name: flintlock-runner
+    namespace: flintlock-system
+---
+# battery-operator writes its serving CA to the ConfigMap flintlockd-ca, key
+# serving-ca.crt, in its own namespace. The Runner verifies every Exec Agent
+# against it (KF-186), and reads it on its first claim. The namespace is
+# battery-operator's, so battery-operator's Manifests go first
+# (deploy/README.md).
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: flintlock-runner-serving-ca
+  namespace: battery-operator-system
+  labels:
+    app.kubernetes.io/name: flintlock-runner
+rules:
+  - apiGroups: [""]
+    resources: ["configmaps"]
+    resourceNames: ["flintlockd-ca"]
+    verbs: ["get"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: flintlock-runner-serving-ca
+  namespace: battery-operator-system
+  labels:
+    app.kubernetes.io/name: flintlock-runner
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: flintlock-runner-serving-ca
+subjects:
+  - kind: ServiceAccount
+    name: flintlock-runner
+    namespace: flintlock-system

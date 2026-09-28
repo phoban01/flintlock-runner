@@ -259,7 +259,7 @@ func (v *validator) profiles(c *Config) {
 		v.absPath(f+".cache_dir", p.CacheDir)
 		v.absPath(f+".helper_path", p.HelperPath)
 		v.profileOptional(f, p, images, i)
-		v.profileTransport(f, p, c.PoolManager.IsKubernetes())
+		v.profileTransport(f, p, c.PoolManager)
 		if p.Default {
 			defaults++
 		}
@@ -368,13 +368,25 @@ func (v *validator) profileOptional(f string, p *Profile, images map[string]int,
 // and reaches no Host (KF-063), so kube-exec is the only transport it can
 // run, and a Profile that names exec or ssh there is refused rather than
 // quietly run over kube-exec. kube-exec is refused under battery, whose
-// MicroVMs are no pods.
-func (v *validator) profileTransport(f string, p *Profile, kube bool) {
+// MicroVMs are no pods. Under the claim backend the Executor runs every
+// Profile over agent-exec (KF-185), which relays exec alone, so ssh is
+// refused there (KF-195).
+func (v *validator) profileTransport(f string, p *Profile, pm PoolManager) {
 	field := f + ".transport.kind"
+	kube := pm.IsKubernetes()
 	switch p.Transport.Kind {
 	case TransportExec, TransportSSH:
 		if kube {
 			v.errorf(field, "must be %s with pool_manager.backend %q, got %q", TransportKubeExec, PoolBackendKubernetes, p.Transport.Kind)
+			return
+		}
+		//= docs/requirements/12-cluster-fleet.md#agent-exec-transport
+		//# Where the claim backend is configured, the Runner SHALL
+		//# reject a configuration in which a Profile names the `ssh` Guest
+		//# Transport.
+		if p.Transport.Kind == TransportSSH && pm.IsClaim() {
+			v.errorf(field, "must be %s with pool_manager.backend %q, got %q: battery-operator's Exec Agent relays exec only",
+				TransportExec, PoolBackendClaim, p.Transport.Kind)
 			return
 		}
 		if p.Transport.Kind == TransportSSH {

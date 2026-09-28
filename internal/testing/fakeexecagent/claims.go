@@ -184,19 +184,30 @@ func (w *World) Authorize(ctx context.Context, token, node, vmUID string) error 
 	case secret.UID != g.secretUID:
 		return fmt.Errorf("%w: the token's Secret %s was replaced", ErrUnauthenticated, g.secret)
 	}
-	name, ok := strings.CutSuffix(g.secret, batteryv1alpha1.ExecSecretSuffix)
+	return claimOpens(ctx, w.Kube, g.holder, g.secret, node, vmUID)
+}
+
+// claimOpens decides, as battery-operator's Exec Agent does once a token
+// has authenticated, whether a claim token of holder, bound to the Secret
+// secret in the holder's namespace, opens the MicroVM vmUID on the Host
+// whose Node is node: the Secret has to be a claim's, the claim has to name
+// holder as its Holder (EA-011) and, for a MicroVM, be Bound, unexpired and
+// name that MicroVM and this Host (EA-013). An empty vmUID asks only
+// whether the token is a claim token.
+func claimOpens(ctx context.Context, kube client.Client, holder k8stypes.NamespacedName, secret, node, vmUID string) error {
+	name, ok := strings.CutSuffix(secret, batteryv1alpha1.ExecSecretSuffix)
 	if !ok {
-		return fmt.Errorf("%w: the token is bound to %s, which is no claim's Secret", ErrPermissionDenied, g.secret)
+		return fmt.Errorf("%w: the token is bound to %s, which is no claim's Secret", ErrPermissionDenied, secret)
 	}
 	claim := &batteryv1alpha1.MicroVMClaim{}
-	switch err := w.Kube.Get(ctx, client.ObjectKey{Namespace: g.holder.Namespace, Name: name}, claim); {
+	switch err := kube.Get(ctx, client.ObjectKey{Namespace: holder.Namespace, Name: name}, claim); {
 	case apierrors.IsNotFound(err):
 		return fmt.Errorf("%w: claim %s is gone", ErrPermissionDenied, name)
 	case err != nil:
 		return err
 	}
-	if claim.Spec.ServiceAccountName != g.holder.Name {
-		return fmt.Errorf("%w: %s is not the Holder of claim %s", ErrPermissionDenied, g.holder.Name, name)
+	if claim.Spec.ServiceAccountName != holder.Name {
+		return fmt.Errorf("%w: %s is not the Holder of claim %s", ErrPermissionDenied, holder.Name, name)
 	}
 	if vmUID == "" {
 		return nil

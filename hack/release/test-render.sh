@@ -43,7 +43,7 @@ expect_fail() { # expect_fail <name> <pattern the output must contain> <command.
 # fields of init containers and of a DaemonSet included, is this release's
 # digest, and a third-party reference by digest is left as it was.
 expect_ok "render the stand-in deploy/" \
-	"$here/render-manifests.sh" --flr "$flr" --host "$host" --deploy "$here/testdata/deploy" --out "$work/out"
+	"$here/render-manifests.sh" --flr "$flr" --host "$host" --images "$here/testdata/images.txt" --deploy "$here/testdata/deploy" --out "$work/out"
 fleet=$work/out/flintlock-runner-fleet.yaml
 capi=$work/out/flintlock-runner-capi.yaml
 if [ -s "$fleet" ] && [ -s "$capi" ]; then pass "both assets written"; else fail "both assets written"; fi
@@ -69,6 +69,26 @@ expect_fail "--flr in another repository is refused" "must be in ghcr.io/phoban0
 expect_fail "a missing kustomization is refused" "has no kustomization.yaml" \
 	"$here/render-manifests.sh" --flr "$flr" --host "$host" --deploy "$work" --out "$work/x"
 
+# The Guest Image in the Runner's configuration takes the digests of the
+# release's images.txt, and the ConfigMap generated from it carries them.
+kernel=ghcr.io/phoban01/flintlock-runner/guest-kernel@sha256:1111111111111111111111111111111111111111111111111111111111111111
+rootfs=ghcr.io/phoban01/flintlock-runner/guest-rootfs@sha256:2222222222222222222222222222222222222222222222222222222222222222
+if grep -q "image: $kernel\$" "$fleet" && grep -q "rootfs: $rootfs\$" "$fleet"; then pass "the Guest Image by the digests of images.txt"; else fail "the Guest Image by the digests of images.txt"; fi
+if grep -q 'guest-[a-z]*:REPLACE' "$fleet"; then fail "no :REPLACE left in the fleet"; else pass "no :REPLACE left in the fleet"; fi
+if grep -q 'guest-kernel:REPLACE' "$here/testdata/deploy/config.yaml"; then pass "the source is not changed"; else fail "the source is not changed"; fi
+
+# Without images.txt the Guest Image keeps its tag, and the render refuses
+# it; images.txt with two digests for one Guest Image is refused as well.
+expect_fail "the Guest Image by tag is refused" "guest-kernel:REPLACE is not a reference by digest" \
+	"$here/render-manifests.sh" --flr "$flr" --host "$host" --deploy "$here/testdata/deploy" --out "$work/no-images"
+if [ -e "$work/no-images/flintlock-runner-fleet.yaml" ]; then fail "a fleet with the Guest Image by tag is not written"; else pass "a fleet with the Guest Image by tag is not written"; fi
+{ cat "$here/testdata/images.txt"; echo "ghcr.io/phoban01/flintlock-runner/guest-kernel:other ghcr.io/phoban01/flintlock-runner/guest-kernel@sha256:3333333333333333333333333333333333333333333333333333333333333333"; } >"$work/two-kernels.txt"
+expect_fail "images.txt with two guest-kernel digests is refused" "not one" \
+	"$here/render-manifests.sh" --flr "$flr" --host "$host" --images "$work/two-kernels.txt" --deploy "$here/testdata/deploy" --out "$work/x"
+grep -v guest-rootfs "$here/testdata/images.txt" >"$work/no-rootfs.txt"
+expect_fail "images.txt without guest-rootfs is refused" "guest-rootfs, not one" \
+	"$here/render-manifests.sh" --flr "$flr" --host "$host" --images "$work/no-rootfs.txt" --deploy "$here/testdata/deploy" --out "$work/x"
+
 # check-manifests on its own.
 printf 'image: %s\n' "$flr" >"$work/good.yaml"
 expect_ok "a reference by this release's digest passes" \
@@ -90,6 +110,9 @@ expect_fail "a fleet without the flr image fails" "does not reference" \
 	"$here/check-manifests.sh" --flr "$flr" --require-flr "$work/none.yaml"
 expect_fail "an empty asset fails" "missing or empty" \
 	"$here/check-manifests.sh" "$work/nothing.yaml"
+printf 'image: %s\n' "${kernel%@*}@sha256:3333333333333333333333333333333333333333333333333333333333333333" >"$work/stale-kernel.yaml"
+expect_fail "another release's Guest Image digest fails" "is not this release's" \
+	"$here/check-manifests.sh" --flr "$flr" --image "$kernel" "$work/stale-kernel.yaml"
 
 if [ "$failures" -ne 0 ]; then
 	echo "test-render: $failures failure(s)"

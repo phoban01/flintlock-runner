@@ -106,16 +106,21 @@ A release candidate is how a version gets tried before it is called done.
      included, exactly as CI's `guest` job builds them, and pushes each as
      one index tagged `<version>`; `hack/release/check-guest-images.sh`
      checks both platforms and the tags. The Runner's Profiles name these
-     images by digest; `deploy/runner/config.yaml` says what to fill in;
+     images by digest, which the manifests assets fill in;
    - **the flr image and the archives** (job `publish`): goreleaser builds
      the binaries once, archives them, builds the image for both platforms
      from them, pushes it, and creates the GitHub release as a *draft*;
-   - **the manifests assets**: `hack/release/render-manifests.sh` renders
-     `deploy/` and `deploy/capi` through a throwaway overlay that sets every
-     image of this project to the digest just pushed, and refuses any
-     reference that is still by tag. They are attached with `images.txt`
-     and the extended `checksums.txt`, and only then is the draft
-     published as a pre-release.
+   - **the manifests assets**: the workflow writes `images.txt`, each tag
+     it pushed next to its digest. Then `hack/release/render-manifests.sh`
+     renders `deploy/` and `deploy/capi` through a throwaway overlay that
+     sets every image of this project to the digest just pushed. The
+     Runner's Profiles name the Guest Image in its configuration file,
+     which kustomize does not rewrite, so the render first writes the
+     `guest-kernel` and `guest-rootfs` digests of `images.txt` over them,
+     in a copy of `deploy/`. It refuses any reference that is still by
+     tag. The assets are attached with `images.txt` and the extended
+     `checksums.txt`, and only then is the draft published as a
+     pre-release.
 
    Before the release is published, the workflow checks the pushed flr
    image (`hack/release/check-flr-image.sh`: both platforms, nothing but
@@ -200,7 +205,9 @@ without publishing anything:
   the published one;
 - `hack/release/test-render.sh` tests rendering and its checks against the
   stand-in kustomizations in `hack/release/testdata/`, and the real
-  `deploy/` is rendered against the digests of those two throwaway pushes.
+  `deploy/` is rendered against the digests of those two throwaway pushes,
+  and against stand-in digests for the Guest Image, which that job does not
+  push.
   The result is kept as the workflow artifact `manifests-dry-run`; its
   digests do not exist in ghcr.io. Until `deploy/kustomization.yaml`
   exists this step only warns, but a tag without it fails.

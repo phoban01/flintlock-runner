@@ -1,0 +1,9 @@
+# A stand-in for deploy/runner/config.yaml, for test-render.sh only. The
+# Guest Image appears as a Profile names it, in a file kustomize's image
+# transformer does not rewrite.
+profiles:
+  - name: default
+    kernel:
+      image: ghcr.io/phoban01/flintlock-runner/guest-kernel:REPLACE
+      filename: boot/vmlinux
+    rootfs: ghcr.io/phoban01/flintlock-runner/guest-rootfs:REPLACE

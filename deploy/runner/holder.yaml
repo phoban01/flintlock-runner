@@ -1,0 +1,19 @@
+# The Holder: the ServiceAccount that every claim of the Runner names in
+# spec.serviceAccountName (KF-150), and that each claim token is a token of
+# (KF-186). battery-operator's Exec Agent runs a command only with a claim
+# token of the Holder of a Bound claim.
+#
+# It is an identity only. No pod runs as it, so no token of it is mounted
+# anywhere, and no Role or ClusterRole is bound to it (KF-196): a claim
+# token authenticates to the Exec Agent through a TokenReview, which asks
+# nothing of the Holder. The Runner may request its tokens and no other
+# ServiceAccount's (rbac.yaml). The name is the Runner's
+# pool_manager.claim.holder_service_account (config.yaml).
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: flintlock-runner-holder
+  namespace: flintlock-system
+  labels:
+    app.kubernetes.io/name: flintlock-runner
+automountServiceAccountToken: false

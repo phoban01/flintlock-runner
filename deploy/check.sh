@@ -67,9 +67,9 @@ else
 fi
 
 # ---- render ----
-# The Runner is not in deploy/ until the claim backend exists
-# (deploy/runner/kustomization.yaml), so it is rendered and checked on its
-# own.
+# deploy/ includes the Runner. deploy/runner is rendered on its own as well,
+# so that the checks can tell its objects from the Host Agent's, and check
+# that deploy/ renders them unchanged.
 fleet=$work/fleet.yaml
 capi=$work/capi.yaml
 runner=$work/runner.yaml

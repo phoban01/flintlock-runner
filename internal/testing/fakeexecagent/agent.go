@@ -12,11 +12,11 @@
 // ending every exec response with the exit status frame or an error status
 // (EA-020). World, in claims.go, is the API server side: the claims and the
 // claim tokens that battery-operator's Client Library makes and the
-// Authorizer checks.
+// Authorizer checks. Reviewer, in review.go, is the Authorizer for a real
+// API server instead, such as envtest's, whose claim tokens are real.
 //
-// It does not look at a real API server, reach a real flintlockd, check
-// the Host or hold a drain; the agent's own suite in battery-operator
-// covers those.
+// It does not reach a real flintlockd, check the Host or hold a drain; the
+// agent's own suite in battery-operator covers those.
 package fakeexecagent
 
 import (

@@ -89,6 +89,9 @@ func TestClaimBackendRejected(t *testing.T) {
 				HolderServiceAccount: "runner",
 				ServingCA:            ServingCAConfigMap{Namespace: "battery-operator-system", Name: "flintlockd-ca", Key: "serving-ca.crt"},
 			}
+			// full.yaml has an ssh Profile, which the claim backend
+			// refuses (KF-195).
+			execOnly(c)
 			mutate(c.PoolManager.Claim)
 		}
 	}
@@ -157,5 +160,60 @@ func TestClaimBackendRejected(t *testing.T) {
 	cfg.PoolManager.Endpoint = "https://10.0.0.5:9091"
 	if errs := fieldErrors(t, cfg); !hasFieldError(errs, "pool_manager.endpoint", "without a scheme") {
 		t.Errorf("errors = %v, want pool_manager.endpoint checked", errs)
+	}
+}
+
+//= docs/requirements/12-cluster-fleet.md#agent-exec-transport
+//= type=test
+//# Where the claim backend is configured, the Runner SHALL
+//# reject a configuration in which a Profile names the `ssh` Guest
+//# Transport.
+
+// TestClaimBackendRefusesSSH checks that a Profile that names ssh is
+// refused under the claim backend, because battery-operator's Exec Agent
+// relays exec only, and that exec is still accepted there. The same ssh
+// Profile loads under battery.
+func TestClaimBackendRefusesSSH(t *testing.T) {
+	t.Parallel()
+	ssh := Transport{Kind: TransportSSH, SSH: SSHTransport{PrivateKeyFile: "/etc/flintlock-runner/id_ed25519", User: "runner"}}
+	claim := func(c *Config) {
+		c.PoolManager.Backend = PoolBackendClaim
+		c.PoolManager.Endpoint = ""
+		c.Inventory = Inventory{}
+		c.PoolManager.Claim = &ClaimPools{
+			HolderServiceAccount: "runner",
+			ServingCA:            ServingCAConfigMap{Namespace: "battery-operator-system", Name: "flintlockd-ca", Key: "serving-ca.crt"},
+		}
+		execOnly(c)
+	}
+	runRejectCases(t, []rejectCase{{
+		"ssh under claim",
+		func(c *Config) {
+			claim(c)
+			c.Profiles[0].Transport = ssh
+		},
+		"profiles[0].transport.kind", "relays exec only",
+	}})
+
+	cfg := fullWith(t, func(c *Config) {
+		claim(c)
+		c.Profiles[0].Transport = Transport{Kind: TransportExec}
+	})
+	if errs := fieldErrors(t, cfg); errs != nil {
+		t.Errorf("exec under claim: %v", errs)
+	}
+	cfg = fullWith(t, func(c *Config) { c.Profiles[0].Transport = ssh })
+	if errs := fieldErrors(t, cfg); errs != nil {
+		t.Errorf("ssh under battery: %v", errs)
+	}
+}
+
+// execOnly moves every ssh Profile of c to exec, for a configuration of the
+// claim backend.
+func execOnly(c *Config) {
+	for i := range c.Profiles {
+		if c.Profiles[i].Transport.Kind == TransportSSH {
+			c.Profiles[i].Transport = Transport{Kind: TransportExec}
+		}
 	}
 }

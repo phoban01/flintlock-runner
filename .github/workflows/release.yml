@@ -345,13 +345,13 @@ jobs:
         run: hack/release/check-tags.sh published --version "$VERSION" --flr "$FLR_REF" --host "$HOST_REF"
       - name: the Guest Image as published
         run: hack/release/check-guest-images.sh --version "$VERSION" "$GUEST_KERNEL_REF" "$GUEST_ROOTFS_REF"
-      - name: render the manifests assets
-        run: hack/release/render-manifests.sh --flr "$FLR_REF" --host "$HOST_REF" --out dist/manifests
-      - name: attach the manifests and publish the release
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      # images.txt lists every tag this release pushed with its digest. The
+      # render reads the Guest Image's digests from it, for the Runner's
+      # Profiles, so it is written first.
+      - name: list the published images
         run: |
           k8s=$(sed -n 's/^KUBERNETES_VERSION=//p' image/versions.env)
+          mkdir -p dist/manifests
           {
             echo "$FLR_REPOSITORY:$VERSION $FLR_REF"
             echo "$HOST_REPOSITORY:$VERSION $HOST_REF"
@@ -359,6 +359,12 @@ jobs:
             echo "$GUEST_PREFIX/guest-kernel:$VERSION $GUEST_KERNEL_REF"
             echo "$GUEST_PREFIX/guest-rootfs:$VERSION $GUEST_ROOTFS_REF"
           } >dist/manifests/images.txt
+      - name: render the manifests assets
+        run: hack/release/render-manifests.sh --flr "$FLR_REF" --host "$HOST_REF" --images dist/manifests/images.txt --out dist/manifests
+      - name: attach the manifests and publish the release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
           (cd dist/manifests && sha256sum flintlock-runner-fleet.yaml flintlock-runner-capi.yaml images.txt) >>dist/checksums.txt
           gh release upload "$GITHUB_REF_NAME" --clobber \
             dist/manifests/flintlock-runner-fleet.yaml \
@@ -458,6 +464,10 @@ jobs:
           hack/release/check-flr-image.sh --version "$VERSION" --platforms linux/amd64,linux/arm64 --pull "$local@$digest"
       - name: rendering and its checks
         run: hack/release/test-render.sh
+      # The dry run builds no Guest Image, so its images.txt names stand-in
+      # digests for guest-kernel and guest-rootfs: the digests of their own
+      # names, which no registry holds. The render writes them into the
+      # Runner's Profiles as a release writes the pushed ones.
       - name: render the manifests assets
         env:
           HOST_DIGEST: ${{ needs.host-image.outputs.digest }}
@@ -466,9 +476,19 @@ jobs:
             echo "::warning::deploy/kustomization.yaml does not exist yet, so there are no Fleet Manifests to render; a release would fail here"
             exit 0
           fi
+          mkdir -p dist/manifests
+          {
+            echo "$FLR_REPOSITORY:$VERSION $FLR_REPOSITORY@$FLR_DIGEST"
+            echo "$HOST_REPOSITORY:$VERSION $HOST_REPOSITORY@$HOST_DIGEST"
+            for name in guest-kernel guest-rootfs; do
+              echo "$GUEST_PREFIX/$name:$VERSION $GUEST_PREFIX/$name@sha256:$(printf '%s' "dry-run $name" | sha256sum | cut -d' ' -f1)"
+            done
+          } >dist/manifests/images.txt
+          cat dist/manifests/images.txt
           hack/release/render-manifests.sh \
             --flr "$FLR_REPOSITORY@$FLR_DIGEST" \
             --host "$HOST_REPOSITORY@$HOST_DIGEST" \
+            --images dist/manifests/images.txt \
             --out dist/manifests
       - name: keep the rendered assets
         if: hashFiles('dist/manifests/*.yaml') != ''

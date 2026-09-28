@@ -6,6 +6,7 @@ import (
 	"sync"
 	"time"
 
+	flintlocktypes "github.com/liquidmetal-dev/flintlock/api/types"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
@@ -18,10 +19,22 @@ import (
 const tick = 20 * time.Millisecond
 
 // Host is a fake Host the fake battery places MicroVMs on: the name of its
-// Node and the address of its Exec Agent.
+// Node and the address of its Exec Agent, and, optionally, its flintlockd.
 type Host struct {
 	NodeName     string
 	AgentAddress string
+	// MicroVMs, when set, is the Host's flintlockd, normally a fake Host's
+	// client. The fake creates each MicroVM it binds there, under the uid
+	// the claim names, and deletes it when the claim goes, so that an Exec
+	// Agent in front of that flintlockd can run commands in it. Without it
+	// the MicroVMs exist in the fake alone.
+	MicroVMs MicroVMs
+}
+
+// MicroVMs is the part of a Host's flintlockd that the fake battery uses.
+type MicroVMs interface {
+	CreateMicroVM(ctx context.Context, spec *flintlocktypes.MicroVMSpec) (*flintlocktypes.MicroVM, error)
+	DeleteMicroVM(ctx context.Context, uid string) error
 }
 
 //= docs/requirements/12-cluster-fleet.md#claim-test-doubles
@@ -70,6 +83,8 @@ type fakePool struct {
 type heldVM struct {
 	pool string
 	host int
+	// uid is the MicroVM's uid, which the claim names.
+	uid string
 }
 
 // NewBattery returns a fake battery for the namespace, with the Hosts to
@@ -217,10 +232,19 @@ func (f *Battery) bind(ctx context.Context, cl *batteryv1alpha1.MicroVMClaim, fp
 		}
 	}
 	f.nextID++
+	uid := fmt.Sprintf("microvm-%d", f.nextID)
+	vms := f.hosts[host].MicroVMs
+	if vms != nil {
+		// The warm MicroVM, on the Host's flintlockd, under the claim's uid.
+		spec := &flintlocktypes.MicroVMSpec{Id: cl.Name, Namespace: cl.Spec.PoolRef.Name, Uid: &uid}
+		if _, err := vms.CreateMicroVM(ctx, spec); err != nil {
+			return
+		}
+	}
 	now := metav1.Now()
 	cl.Status.Phase = batteryv1alpha1.MicroVMClaimBound
 	cl.Status.LeaseID = fmt.Sprintf("lease-%d", f.nextID)
-	cl.Status.MicroVM = &batteryv1alpha1.MicroVMReference{UID: fmt.Sprintf("microvm-%d", f.nextID)}
+	cl.Status.MicroVM = &batteryv1alpha1.MicroVMReference{UID: uid}
 	cl.Status.Host = &batteryv1alpha1.HostReference{
 		NodeName: f.hosts[host].NodeName, AgentAddress: f.hosts[host].AgentAddress,
 	}
@@ -232,12 +256,15 @@ func (f *Battery) bind(ctx context.Context, cl *batteryv1alpha1.MicroVMClaim, fp
 		Reason: batteryv1alpha1.ReasonBound, Message: "the claim holds a lease",
 	})
 	if err := f.c.Status().Update(ctx, cl); err != nil {
+		if vms != nil {
+			_ = vms.DeleteMicroVM(ctx, uid)
+		}
 		return
 	}
 	fp.warm--
 	fp.leased++
 	f.onHost[host]++
-	f.held[cl.UID] = heldVM{pool: cl.Spec.PoolRef.Name, host: host}
+	f.held[cl.UID] = heldVM{pool: cl.Spec.PoolRef.Name, host: host, uid: uid}
 }
 
 // renew extends a Bound claim's Lease when the Holder has renewed it, and
@@ -283,6 +310,9 @@ func (f *Battery) expiry(cl *batteryv1alpha1.MicroVMClaim) time.Duration {
 // replace deletes a claimed MicroVM and puts a warm one in its place.
 func (f *Battery) replace(uid types.UID, vm heldVM) {
 	delete(f.held, uid)
+	if vms := f.hosts[vm.host].MicroVMs; vms != nil {
+		_ = vms.DeleteMicroVM(context.Background(), vm.uid)
+	}
 	f.onHost[vm.host]--
 	if fp, ok := f.pools[vm.pool]; ok {
 		fp.leased--

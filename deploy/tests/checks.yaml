@@ -6,8 +6,8 @@
 #
 # What a snippet has:
 #   $fleet, $capi       kustomize build of deploy/ and deploy/capi
-#   $runner             kustomize build of deploy/runner, which deploy/ leaves
-#                       out until the claim backend exists
+#   $runner             kustomize build of deploy/runner, which deploy/
+#                       includes
 #   $work/<dir>.yaml    kustomize build of each overlay in deploy/tests/<dir>
 #   $templates          the Host Agent's ConfigMap, one file per entry
 #   $rendered           render.sh's output for the sample Host (gateway
@@ -478,9 +478,12 @@ checks:
   - name: the Runner is a Deployment with its configuration from a ConfigMap and its token from a Secret
     run: |
       [ -x "$FLR" ] || fail "FLR is not an flr binary"
-      # The Runner renders from deploy/runner and is not in deploy/ until its
-      # pool backend, the claim backend, exists (deploy/README.md).
-      [ -z "$(obj "$fleet" Deployment flintlock-runner)" ] || fail "deploy/ deploys a Runner that has no pool backend"
+      # deploy/ renders the Runner, exactly as deploy/runner renders it.
+      for k in $(q "$runner" '.kind + "/" + .metadata.name'); do
+        a=$(obj "$fleet" "${k%%/*}" "${k#*/}" | "$YQ" -o json -I0 'sort_keys(..)')
+        b=$(obj "$runner" "${k%%/*}" "${k#*/}" | "$YQ" -o json -I0 'sort_keys(..)')
+        [ -n "$a" ] && [ "$a" = "$b" ] || fail "deploy/ does not render $k as deploy/runner does"
+      done
       d=$(obj "$runner" Deployment flintlock-runner)
       [ -n "$d" ] || fail "no Deployment flintlock-runner in deploy/runner"
       [ "$(echo "$d" | "$YQ" '.spec.template.spec.containers[0].image')" = ghcr.io/phoban01/flintlock-runner/flr:dev ] || fail "the Runner's image"
@@ -493,29 +496,19 @@ checks:
       [ "$(q "$work/runner-config.yaml" '.gitlab.token')" = null ] || fail "the ConfigMap carries a token"
       ref=$(echo "$d" | "$YQ" '.spec.template.spec.containers[0].env[] | select(.name == "FLINTLOCK_RUNNER_GITLAB_TOKEN") | .valueFrom.secretKeyRef.name + "/" + .valueFrom.secretKeyRef.key')
       [ "$ref" = flintlock-runner-gitlab-token/token ] || fail "the token comes from '$ref'"
-      # No pool backend is configured: not the Virtual Node design's
-      # kubernetes backend, not battery's gRPC one, and no Guest Transport of
-      # either, until the claim backend and agent-exec can be named.
-      [ "$(q "$work/runner-config.yaml" 'has("pool_manager")')" = false ] || fail "the configuration names a pool backend: $(q "$work/runner-config.yaml" '.pool_manager')"
+      # The claim backend with the pod's own identity, no Host inventory,
+      # and no Profile that names a Guest Transport of its own: the Executor
+      # runs every Profile over agent-exec (KF-185).
+      [ "$(q "$work/runner-config.yaml" '.pool_manager.backend')" = claim ] || fail "the pool backend is '$(q "$work/runner-config.yaml" '.pool_manager.backend')', not claim"
+      [ "$(q "$work/runner-config.yaml" '.pool_manager.claim | has("kubeconfig")')" = false ] || fail "the Runner does not use its pod's identity"
       [ "$(q "$work/runner-config.yaml" 'has("inventory")')" = false ] || fail "the configuration has a Host inventory"
       [ "$(q "$work/runner-config.yaml" '[.profiles[] | select(has("transport"))] | length')" -eq 0 ] || fail "a Profile names a Guest Transport"
-      # So flr refuses it, as invalid (2), for want of a pool backend and for
-      # nothing else: every field it names is one that only a backend
-      # fills, the battery endpoint and the Host inventory that it falls
-      # back to asking for. The Profiles, the Host Services and the rest
-      # load as they are.
-      set +e
-      FLINTLOCK_RUNNER_GITLAB_TOKEN=glrt-manifests-check "$FLR" --config "$work/runner-config.yaml" config show >"$work/runner-config.show" 2>&1
-      status=$?
-      set -e
-      cat "$work/runner-config.show"
-      [ "$status" -eq 2 ] || fail "flr config show exited $status, not as an invalid configuration"
-      first=$(sed -n 's/.*invalid configuration: \([][a-z_.0-9]*\): .*/\1/p' "$work/runner-config.show")
-      more=$(sed -n 's/.*(and \([0-9]*\) more)$/\1/p' "$work/runner-config.show")
-      fields=$( (echo "$first"; sed -n 's/^  \([][a-z_.0-9]*\): .*/\1/p' "$work/runner-config.show") | sort -u | xargs)
-      echo "refused for: $fields"
-      [ "$(echo "$fields" | wc -w)" -eq $((1 + ${more:-0})) ] || fail "could not read every error flr reported"
-      [ "$fields" = "inventory pool_manager.endpoint" ] || fail "the configuration is refused for more than the missing pool backend: $fields"
+      # flr loads it as it is, with the GitLab token from the environment.
+      FLINTLOCK_RUNNER_GITLAB_TOKEN=glrt-manifests-check "$FLR" --config "$work/runner-config.yaml" config show >"$work/runner-config.show" 2>&1 || {
+        cat "$work/runner-config.show"
+        fail "flr refuses the Runner's configuration"
+      }
+      grep -q '^  backend: claim$' "$work/runner-config.show" || fail "flr config show does not show the claim backend"
       # The flr image is scratch: the state directory and /tmp, where
       # gitlab-runner buffers job traces, are volumes of their own.
       state=$(q "$work/runner-config.yaml" '.state_dir')
@@ -526,9 +519,55 @@ checks:
       [ "$(echo "$sc" | "$YQ" '.readOnlyRootFilesystem')" = true ] || fail "the Runner's root filesystem is writable"
       [ "$(echo "$sc" | "$YQ" '.capabilities.drop | join(",")')" = ALL ] || fail "the Runner keeps capabilities"
       [ "$(echo "$d" | "$YQ" '.spec.template.spec.securityContext.runAsNonRoot')" = true ] || fail "the Runner may run as root"
-      # Nothing of the Virtual Node design's Runner is left: no Role over
-      # ReplicaSets, pods or pod exec, bound or not.
-      [ -z "$(q "$runner" 'select(.kind == "Role" or .kind == "ClusterRole" or .kind == "RoleBinding" or .kind == "ClusterRoleBinding") | .kind + "/" + .metadata.name')" ] || fail "deploy/runner grants the Runner permissions of the Virtual Node design"
+
+  #= docs/requirements/12-cluster-fleet.md#cluster-least-privilege
+  #= type=test
+  #/ The Fleet Manifests SHALL grant the Runner only the
+  #/ permissions to manage `MicroVMClaim` and `Pool` resources and to create
+  #/ Secrets in its own namespace, to request tokens of the Holder alone, to
+  #/ read Nodes and to read the serving CA ConfigMap in battery-operator's
+  #/ namespace, and SHALL grant the Holder no permission.
+  - name: the Runner holds only the permissions of the claim design, and the Holder none
+    run: |
+      runner_sa='select(.kind == "ServiceAccount" and .namespace == "flintlock-system" and .name == "flintlock-runner")'
+      # Every binding that names the Runner, and the role it grants, in the
+      # whole of deploy/.
+      bindings=$(q "$fleet" "select((.kind == \"RoleBinding\" or .kind == \"ClusterRoleBinding\") and ([.subjects[] | $runner_sa] | length > 0)) | .kind + \"/\" + (.metadata.namespace // \"-\") + \"/\" + .metadata.name + \"=\" + .roleRef.kind + \"/\" + .roleRef.name" | sort | tr '\n' ' ')
+      want="ClusterRoleBinding/-/flintlock-runner-host-nodes=ClusterRole/flintlock-runner-host-nodes RoleBinding/battery-operator-system/flintlock-runner-serving-ca=Role/flintlock-runner-serving-ca RoleBinding/flintlock-system/flintlock-runner-claims=Role/flintlock-runner-claims "
+      [ "$bindings" = "$want" ] || fail "bindings of the Runner: $bindings"
+      # No binding names a group, which would reach the Runner or the Holder
+      # another way.
+      groups=$(q "$fleet" 'select(.kind == "RoleBinding" or .kind == "ClusterRoleBinding") | .subjects[] | select(.kind == "Group") | .name')
+      [ -z "$groups" ] || fail "a binding names a group: $groups"
+      # Each role, rule by rule: group, resource, names and verbs.
+      rules() { # rules KIND NAMESPACE NAME
+        K=$1 NS=$2 N=$3 "$YQ" 'select(.kind == strenv(K) and (.metadata.namespace // "-") == strenv(NS) and .metadata.name == strenv(N)) | .rules[] | (.apiGroups | join(",")) + "|" + (.resources | join(",")) + "|" + ((.resourceNames // []) | join(",")) + "|" + (.verbs | sort | join(","))' "$fleet"
+      }
+      got=$(rules Role flintlock-system flintlock-runner-claims)
+      want=$(printf '%s\n' \
+        'battery.liquidmetal-x.dev|microvmclaims||create,delete,get,list,patch,watch' \
+        'battery.liquidmetal-x.dev|pools||create,get,list,patch,update,watch' \
+        '|secrets||create' \
+        '|serviceaccounts/token|flintlock-runner-holder|create')
+      [ "$got" = "$want" ] || fail "the Runner's Role in its namespace: $got"
+      [ "$(rules ClusterRole - flintlock-runner-host-nodes)" = '|nodes||get' ] || fail "the Runner's ClusterRole: $(rules ClusterRole - flintlock-runner-host-nodes)"
+      [ "$(rules Role battery-operator-system flintlock-runner-serving-ca)" = '|configmaps|flintlockd-ca|get' ] || fail "the Runner's Role in battery-operator-system: $(rules Role battery-operator-system flintlock-runner-serving-ca)"
+      # The Runner's configuration names the Holder whose tokens it may
+      # request, the serving CA it may read, and the namespace its Role is
+      # in.
+      cm=$(obj "$fleet" Deployment flintlock-runner | "$YQ" '.spec.template.spec.volumes[] | select(.name == "config") | .configMap.name')
+      obj "$fleet" ConfigMap "$cm" | "$YQ" '.data["config.yaml"]' >"$work/runner-config.yaml"
+      [ "$(q "$work/runner-config.yaml" '.pool_manager.claim.holder_service_account')" = flintlock-runner-holder ] || fail "the configuration names another Holder"
+      [ "$(q "$work/runner-config.yaml" '.pool_manager.claim.serving_ca | .namespace + "/" + .name')" = battery-operator-system/flintlockd-ca ] || fail "the configuration reads another serving CA"
+      [ "$(obj "$fleet" Deployment flintlock-runner | "$YQ" '.metadata.namespace + "/" + .spec.template.spec.serviceAccountName')" = flintlock-system/flintlock-runner ] || fail "the Runner does not run as flintlock-system/flintlock-runner"
+      # The Holder exists, mounts no token, and nothing is bound to it.
+      [ "$(obj "$fleet" ServiceAccount flintlock-runner-holder | "$YQ" '.metadata.namespace + "/" + (.automountServiceAccountToken | tostring)')" = flintlock-system/false ] || fail "the Holder"
+      holder=$(q "$fleet" 'select(.kind == "RoleBinding" or .kind == "ClusterRoleBinding") | select([.subjects[] | select(.name == "flintlock-runner-holder")] | length > 0) | .metadata.name')
+      [ -z "$holder" ] || fail "the Holder is bound to: $holder"
+      [ -z "$(q "$fleet" 'select(.spec.template.spec.serviceAccountName == "flintlock-runner-holder") | .metadata.name')" ] || fail "a workload runs as the Holder"
+      # Nothing of the Virtual Node design's Runner is deployed.
+      [ -z "$(q "$fleet" 'select(.kind == "Role" and .metadata.name == "flintlock-runner") | .metadata.name')" ] || fail "the Virtual Node design's Role is deployed"
+      [ -z "$(q "$fleet" '.rules[]? | select(.resources[] == "pods/exec" or .resources[] == "replicasets") | .resources[0]')" ] || fail "a role grants pod exec or ReplicaSets"
 
   #= docs/requirements/12-cluster-fleet.md#cluster-runner
   #= type=test
@@ -815,9 +854,10 @@ checks:
       # Release's `kustomize edit set image` rewrites them to digests
       # (KF-143); anywhere else would fail the release render. The one
       # exception is the Guest Image in the Runner's Profiles
-      # (deploy/runner/config.yaml), which kustomize does not rewrite and
-      # the operator pins by digest (CF-027). deploy/ leaves the Runner out,
-      # so no release renders it yet.
+      # (deploy/runner/config.yaml), which kustomize does not rewrite: the
+      # Release writes its guest-kernel and guest-rootfs digests there from
+      # its images.txt (hack/release/render-manifests.sh, KF-143), and an
+      # operator who applies deploy/ from source pins them (CF-027).
       stray=$(grep -hn 'ghcr\.io/phoban01/flintlock-runner/' "$fleet" "$capi" "$runner" |
         grep -Ev '^[0-9]+: +(- )?image: ghcr\.io/phoban01/flintlock-runner/[a-z0-9._-]+(:[A-Za-z0-9._-]+|@sha256:[0-9a-f]{64})$' |
         grep -Ev '^[0-9]+: +rootfs: ghcr\.io/phoban01/flintlock-runner/guest-rootfs(:[A-Za-z0-9._-]+|@sha256:[0-9a-f]{64})$' || true)

@@ -7,18 +7,18 @@
 # instead, from deploy/capi/. deploy/README.md says what an operator supplies
 # before either applies.
 #
-# This renders the Host Agent with the Host Services, and not the Runner:
-# the Runner's pool backend on a cluster fleet, the claim backend, does not
-# exist yet, so the fleet cannot run a Job end to end. deploy/runner renders
-# on its own and is added here when it does; deploy/README.md, "The Runner".
-# The Exec Agent comes from battery-operator's Manifests, applied to the
-# same cluster (deploy/README.md, "The Exec Agent").
+# This renders the Host Agent with the Host Services, and the Runner on the
+# claim backend. battery-operator v0.1.0's Manifests go to the same cluster
+# first: they serve the Pool and MicroVMClaim resources and run battery,
+# the Exec Agent and the Inventory Controller (deploy/README.md, "Order of
+# application").
 apiVersion: kustomize.config.k8s.io/v1beta1
 kind: Kustomization
 
 resources:
   - namespace.yaml
   - host-agent
+  - runner
 
 #= docs/requirements/12-cluster-fleet.md#cluster-host-agent
 #/ Where a Host Service is disabled in the configuration, the Host

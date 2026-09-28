@@ -1,11 +1,16 @@
 #!/usr/bin/env bash
 # Check a rendered manifests asset: every reference to an image of this
 # project (anything under ghcr.io/phoban01/flintlock-runner/) is by digest,
-# and the flr and Host Image references are to exactly the digests of this
-# release. A tag, a missing digest or another release's digest fails.
+# and the flr, Host Image and other --image references are to exactly the
+# digests of this release. A tag, a missing digest or another release's
+# digest fails.
 #
 # usage: check-manifests.sh [--flr REF@DIGEST] [--host REF@DIGEST]
+#                           [--image REF@DIGEST]...
 #                           [--require-flr] FILE...
+#
+# --image names one more image of this release, such as the Guest Image's
+# guest-kernel and guest-rootfs; it may be given more than once.
 #
 # --require-flr fails a file that does not reference the --flr image at all,
 # which the fleet asset must: the Runner and the Host Agent run it.
@@ -17,10 +22,12 @@ set -euo pipefail
 flr=
 host=
 require_flr=
+others=()
 while [ $# -gt 0 ]; do
 	case $1 in
 	--flr) flr=${2:?}; shift 2 ;;
 	--host) host=${2:?}; shift 2 ;;
+	--image) others+=("${2:?}"); shift 2 ;;
 	--require-flr) require_flr=1; shift ;;
 	--) shift; break ;;
 	-*) echo "check-manifests: unknown option $1" >&2; exit 2 ;;
@@ -65,7 +72,7 @@ for file in "$@"; do
 			continue
 		fi
 		[ "$ref" != "$flr" ] || found_flr=1
-		for want in "$flr" "$host"; do
+		for want in "$flr" "$host" "${others[@]}"; do
 			[ -n "$want" ] || continue
 			if [ "${ref%@*}" = "${want%@*}" ] && [ "$ref" != "$want" ]; then
 				echo "check-manifests: $file: $ref is not this release's $want" >&2
