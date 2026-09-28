@@ -2,9 +2,9 @@
 // cluster fleet makes of the Host itself: that a flintlockd endpoint is
 // local (HI-042), what the units of the Host Image report through the
 // not-ready-reason contract (HI-011), and whether a Host Service accepts
-// connections. The Pod Provider (internal/kubelet) and the Exec Agent
-// (internal/agent) both make them, and they are here so that the two agree
-// on the contract with the Host Image while both exist.
+// connections. The Pod Provider (internal/kubelet) makes them. The Exec
+// Agent that made them too is now battery-operator's, which reads the same
+// not-ready-reason directory.
 package hostcheck
 
 import (

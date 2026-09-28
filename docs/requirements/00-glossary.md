@@ -42,14 +42,15 @@ directory. It contains no requirements.
   interface in which a Pool is a ReplicaSet of idle MicroVM pods and a Lease
   is a claimed pod, used in place of the battery client in a cluster fleet.
 - **Host Agent** — the DaemonSet pod on each Host of a cluster fleet, which
-  contains the Pod Provider and the Host Services.
+  contains the Host Services and publishes where they listen.
 - **Fleet Manifests** — the Kubernetes manifests in this repository that
   deploy a cluster fleet: the Host pool's Cluster API objects, the Host
   Agent, the Runner and their access rules.
-- **Exec Agent** — the process in the Host Agent on each Host of a cluster
-  fleet that relays a Runner's exec request to `MicroVMExec` on the local
-  `flintlockd`, after checking that the caller holds a Bound claim on the
-  MicroVM, and reports the Host's readiness. It supersedes the Pod Provider.
+- **Exec Agent** — battery-operator's process on each Host of a cluster
+  fleet that relays a Runner's exec request to `MicroVMExec` on the Host's
+  `flintlockd`, after checking that the request carries a claim token of a
+  Bound claim on the MicroVM, and reports the Host's readiness.
+  battery-operator's Manifests deploy it. It supersedes the Pod Provider.
 - **Inventory Controller** — battery-operator's controller that gives
   battery the Hosts that are ready and removes them when they are cordoned,
   deleted or not ready. This repository has none.

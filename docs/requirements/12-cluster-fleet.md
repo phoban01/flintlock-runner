@@ -35,8 +35,8 @@ battery-operator v0.1.0 (`#battery-claims`).
 These sections are superseded by that design: Virtual Node, MicroVM pods,
 Pools, Allocation, Guest Transport, Drain, Verification, Least privilege
 (KF-110, KF-111), Hardening (KF-130 to KF-137) and Test doubles (KF-120 to
-KF-125). The Host Agent now runs the Exec Agent in the Pod Provider's place
-(KF-070). Their code is still on `main`
+KF-125). battery-operator's Manifests now run the Exec Agent in the Pod
+Provider's place (`#exec-agent`). Their code is still on `main`
 and still cites them, so they are withdrawn in the change that removes that
 code, once the claim design passes the harness, rather than now.
 
@@ -96,8 +96,11 @@ could act on, but nothing in this document requires one.
   the condition's message.
 - **KF-017** The Pod Provider SHALL publish the address and port of each
   enabled Host Service as annotations on the Virtual Node.
-- **KF-018** The Pod Provider SHALL reach `flintlockd` only through the
-  local endpoint of HI-042.
+- **KF-018** (withdrawn) battery-operator's Exec Agent takes the Pod
+  Provider's place as the client of `flintlockd` on a Host, and reaches it
+  over mutual TLS on the Host's address (battery-operator EA-001), not
+  through the local endpoint of HI-042. It was implemented by
+  `flr kubelet`, whose citation is removed.
 
 A Virtual Node per Host, rather than one for the fleet, is what lets the
 scheduler place MicroVMs: each Virtual Node has the real capacity of one
@@ -257,8 +260,8 @@ same path the GitLab Kubernetes executor uses.
 ## Host Agent {#cluster-host-agent}
 
 - **KF-070** The Fleet Manifests SHALL run the Host Agent as a DaemonSet that
-  tolerates the Host taint, selects the Host label and contains the Exec
-  Agent and the Host Services of FL-100.
+  tolerates the Host taint, selects the Host label and contains the Host
+  Services of FL-100.
 - **KF-071** The Host Agent SHALL run in the Host's network namespace and
   SHALL bind every Host Service only to the guest bridge gateway address.
 - **KF-072** The Host Agent SHALL keep all Host Service storage in the Host
@@ -273,6 +276,19 @@ same path the GitLab Kubernetes executor uses.
   Agent SHALL NOT run it.
 - **KF-076** The Host Agent SHALL pre-warm the Go module proxy and the
   registry mirror with the modules and images listed in the configuration.
+- **KF-194** The Host Agent SHALL publish the address and port of each
+  enabled Host Service on the guest bridge gateway, under the names
+  `buildkit`, `go_proxy`, `registry_mirror` and `http_cache`, as the
+  annotations `host-service.gitlab-runner.flintlock.dev/<name>` on its Host's
+  Node.
+
+The Host Agent does not contain the Exec Agent. battery-operator's
+Manifests run it, as a DaemonSet of their own (`#exec-agent`). That Exec
+Agent knows nothing of the Host Services, so the Host Agent, which runs
+them, publishes where they are (KF-194), for the Executor to read
+(KF-189). It keeps the annotation names that `flr agent` used (KF-179), so
+nothing that reads them changes. An admission policy lets the Host Agent's
+identity change only these annotations, and only on its own Host's Node.
 
 Pre-pulling Profile images needs no requirement of its own any more: a Pool
 pod on every Host pulls its root filesystem and kernel images when it is
@@ -361,9 +377,11 @@ would need credentials for it.
 - **KF-134** The Fleet Manifests SHALL give each Pod Provider an identity
   that names its Host, so that the policy of KF-133 can tell one Host's Pod
   Provider from another's.
-- **KF-135** The Fleet Manifests SHALL run the Pod Provider's container as
-  the user id that HI-063 admits to the local `flintlockd` endpoint, and
-  SHALL run no other container of the Host Agent as that user id.
+- **KF-135** (withdrawn) No container of the Host Agent reaches
+  `flintlockd` any more: battery-operator's Exec Agent does, from a
+  DaemonSet of its own and over mutual TLS (battery-operator EA-001,
+  EA-004). The Fleet Manifests still run no container as the user id that
+  HI-063 admits. It was never cited.
 - **KF-138** (withdrawn) Node Leases belong to the Virtual Nodes, which the
   cluster fleet no longer uses after the change to battery's claim resources
   of 2026-09-22; it was never implemented.
@@ -506,79 +524,69 @@ because battery v0.3.3 has no call to change them.
 
 ## Exec Agent {#exec-agent}
 
-- **KF-170** The Fleet Manifests SHALL run the Exec Agent in the Host Agent
-  on every Host.
-- **KF-171** The Exec Agent SHALL reach `flintlockd` only through the local
-  endpoint of HI-042, and the Fleet Manifests SHALL run it as the user id
-  that HI-063 admits there and run no other container as that user id.
-- **KF-172** The Exec Agent SHALL serve its exec API over TLS on the Host's
-  internal address, with a serving certificate that names that address.
-- **KF-173** The Exec Agent SHALL authenticate every request with a
-  TokenReview of the bearer token it carries, and SHALL refuse a request
-  that does not authenticate.
-- **KF-174** The Exec Agent SHALL run a command in a MicroVM only for an
-  identity that created a `MicroVMClaim` which is `Bound`, has not expired,
-  and names that MicroVM's uid and this Host, and SHALL refuse every other
-  request.
-- **KF-175** If the TokenReview or the claim lookup of a request cannot be
-  completed, then the Exec Agent SHALL refuse the request.
-- **KF-176** The Exec Agent SHALL relay a request's streams to
-  `MicroVMExec.ExecCommand` on the local `flintlockd` and SHALL end every
-  response with an exit status frame, sent only after `flintlockd` has
-  reported the command's exit.
-- **KF-177** If `flintlockd` has not answered for the requested MicroVM and
-  accepted the request's exec stream within the configured deadline, then
-  the Exec Agent SHALL end the response as a stream failure.
-- **KF-178** The Exec Agent SHALL report its Host not ready while the local
-  `flintlockd` does not answer `ServerInfo` with the exec service enabled,
-  while an enabled Host Service does not accept connections on the bridge
-  gateway address, or while a unit of the Host Image reports a not ready
-  reason.
-- **KF-179** The Exec Agent SHALL publish the address and port of each
-  enabled Host Service, under the names `buildkit`, `go_proxy`,
-  `registry_mirror` and `http_cache`, as annotations on its Host's Node.
-- **KF-180** The Fleet Manifests SHALL include a ValidatingAdmissionPolicy
-  that lets an Exec Agent's identity change only the annotations of its own
-  Host's Node, under the project's prefix, and nothing else of any Node.
-- **KF-181** While claims are `Bound` on its Host, the Exec Agent SHALL hold
-  an eviction-based drain of the Host's Node open, and SHALL let it complete
-  when none remain or when the configured drain timeout elapses.
-- **KF-182** The Exec Agent SHALL publish the readiness of KF-178 on its
-  Host's Node as the annotation `gitlab-runner.flintlock.dev/exec-agent-ready`
-  set to `true` or `false`, with the reason and message of the last check in
-  `gitlab-runner.flintlock.dev/exec-agent-reason` and
-  `gitlab-runner.flintlock.dev/exec-agent-message`, and its own address in
-  `gitlab-runner.flintlock.dev/exec-agent-address`.
+- **KF-170** (withdrawn) battery-operator's Manifests run its Exec Agent on
+  every Host, as a DaemonSet of their own (battery-operator EA-004); the
+  Host Agent no longer contains one (KF-070). It was implemented by
+  `flr agent`, removed in #74.
+- **KF-171** (withdrawn) battery-operator's Exec Agent reaches only its own
+  Host's `flintlockd`, over mutual TLS (battery-operator EA-001). It was
+  implemented by `flr agent`, removed in #74.
+- **KF-172** (withdrawn) battery-operator's Exec Agent serves its exec API
+  over TLS on the Host's internal address (battery-operator EA-002, EA-068).
+  It was implemented by `flr agent`, removed in #74.
+- **KF-173** (withdrawn) battery-operator's Exec Agent authenticates every
+  request with a TokenReview (battery-operator EA-010). It was implemented by
+  `flr agent`, removed in #74.
+- **KF-174** (withdrawn) battery-operator's Exec Agent runs a command only
+  with a claim token of a Bound claim that names the MicroVM and the Host
+  (battery-operator EA-011 to EA-013). It was implemented by `flr agent`,
+  which checked the claim's creator instead, removed in #74.
+- **KF-175** (withdrawn) battery-operator's Exec Agent refuses a request
+  whose TokenReview or claim lookup cannot be completed (battery-operator
+  EA-014). It was implemented by `flr agent`, removed in #74.
+- **KF-176** (withdrawn) battery-operator's Exec Agent relays each request
+  to `MicroVMExec.ExecCommand` and ends every response with an exit status
+  frame (battery-operator EA-020). It was implemented by `flr agent`, removed
+  in #74.
+- **KF-177** (withdrawn) battery-operator's Exec Agent ends a response as a
+  stream failure when `flintlockd` does not open the exec stream in time
+  (battery-operator EA-021). It was implemented by `flr agent`, removed in
+  #74.
+- **KF-178** (withdrawn) battery-operator's Exec Agent checks its Host
+  (battery-operator EA-030 to EA-033). It checks no Host Service; a unit of
+  the Host Image can still report one through the not ready reason
+  directory (EA-033). It was implemented by `flr agent`, removed in #74.
+- **KF-179** (withdrawn) The Host Agent publishes the Host Services on its
+  Host's Node under the same annotations (KF-194). It was implemented by
+  `flr agent`, removed in #74.
+- **KF-180** (withdrawn) battery-operator's Manifests include the admission
+  policy of its Exec Agent (battery-operator EA-051); the Host Agent has one
+  of its own for KF-194. It was implemented in `deploy/agent`, removed in
+  #74.
+- **KF-181** (withdrawn) battery-operator's Exec Agent holds a drain open
+  while claims are Bound on its Host (battery-operator EA-040). It was
+  implemented by `flr agent`, removed in #74.
+- **KF-182** (withdrawn) battery-operator's Exec Agent publishes its Node
+  report under the prefix `battery.liquidmetal-x.dev/` (battery-operator
+  EA-034), which its Inventory Controller reads. It was implemented by
+  `flr agent`, removed in #74.
 
-The Exec Agent is what the Pod Provider becomes once there are no pods to
-realise: it keeps the relay to `MicroVMExec`, the fail-closed TLS front, the
-readiness checks and the drain guard, and drops the Virtual Node and the pod
-lifecycle. Authorization gets finer in the move. The Pod Provider could only
-ask whether a caller may reach a node (KF-130); the Exec Agent asks whether
-the caller holds the claim on the MicroVM it wants, so a Runner's
-credentials reach the MicroVMs it holds and no others.
+The Exec Agent is battery-operator's from its v0.1.0. It began here as
+KF-170 to KF-182, and battery-operator's `05-exec-agent.md` took them over,
+EA-001 to EA-068, in the order they appear. What the Runner needs of it is
+its protocol: flintlock's `MicroVMExec` service with the `ServerInfo` and
+`GetMicroVM` calls of the `MicroVM` service, over TLS verified against the
+Operator's serving CA, with a claim token as the bearer token of every call
+(battery-operator EA-003, EA-010 to EA-013). The `agent-exec` Guest
+Transport speaks it (`#agent-exec-transport`).
 
-KF-176 and KF-177 answer two defects the harness found in the Pod Provider's
-relay. A pod exec session that was cut, because the provider restarted,
-ended exactly as a successful one does, with no status, and the Job was
-reported as having succeeded; here the exit status is a frame of its own and
-its absence is a failure. And the relay opened its stream to `flintlockd`
-with no deadline, so a Host that stopped answering held a Job until its
-timeout; here opening the stream is bounded. Opening means `flintlockd` has
-answered, not only that the client has a stream: a gRPC stream and its
-first message are accepted on the client's side alone, even by a server
-that answers nothing, so the Exec Agent first asks `flintlockd` for the
-MicroVM and counts the exchange open only once that call has returned.
-
-KF-182 is the contract the Inventory Controller reads (KF-160, KF-161): the
-annotations say whether a Host can take claims and why not, and where
-clients reach its Exec Agent, which battery passes on in a claim's status.
+Authorization is finer than here. `flr agent` asked whether the caller had
+created a claim on the MicroVM; battery-operator's Exec Agent asks for a
+token bound to that one claim, so a Runner's credentials reach each MicroVM
+through its own claim, and a token dies with its claim.
 
 The Runner reaches each Exec Agent on the Host's internal address, which is
-a network route the operator has to allow from wherever the Runner runs, and
-a serving certificate per Host, which KF-172 requires and the Fleet
-Manifests provide. An agent that dials out to the Runner instead would need
-neither and is the alternative if that route is not wanted.
+a network route the operator has to allow from wherever the Runner runs.
 
 ## Agent exec transport {#agent-exec-transport}
 
@@ -594,7 +602,8 @@ neither and is the alternative if that route is not wanted.
   that `02-executor.md` places on the `exec` Guest Transport for output
   streaming, exit status, cancellation and timeouts.
 - **KF-189** The Executor SHALL read the Host Service addresses for a Job
-  from the annotations of KF-179 on the Node of the Job's Host.
+  from the annotations of KF-194 that the Host Agent publishes on the Node
+  of the Job's Host.
 
 A claim token is the token that battery-operator's Client Library requests
 for a claim (battery-operator CC-002, CC-011, CC-020). It is a
@@ -608,10 +617,10 @@ Exec Agent for each claim, not one for each Host.
 
 ## Claim test doubles {#claim-test-doubles}
 
-- **KF-190** The Exec Agent and the `agent-exec` Guest Transport SHALL be
-  tested against a Kubernetes API server test environment serving the
-  claim resources from a test definition, and the fake Host, with no KVM
-  and no battery.
+- **KF-190** The `agent-exec` Guest Transport SHALL be tested with
+  battery-operator's Client Library against a test double of
+  battery-operator's Exec Agent in front of the fake Host, with no KVM and
+  no battery.
 - **KF-191** The claim backend SHALL be tested against a fake battery that
   serves the `Pool` and `MicroVMClaim` resources of
   `battery.liquidmetal-x.dev/v1alpha1` and binds claims from warm MicroVMs on
@@ -684,8 +693,8 @@ This section is not normative.
 | Drain, FL-080, FL-084 | KF-090 to KF-094 |
 | Teardown, FL-081 to FL-083 | deleting the manifests and the MachineDeployment |
 | Launch template mode, FL-090 to FL-092 | the MachineDeployment, KF-001 to KF-005 |
-| Host services, FL-100 to FL-115 | KF-070 to KF-076, HI-036 |
-| Certificate authority and Host mutual TLS, SE-023, FL-024 | none; `flintlockd` is local, KF-018, KF-031 |
+| Host services, FL-100 to FL-115 | KF-070 to KF-076, KF-194, HI-036 |
+| Certificate authority and Host mutual TLS, SE-023, FL-024 | battery-operator's Host certificates, its EA-060 to EA-068 |
 | IAM policy, SE-040 to SE-042 | KF-110 to KF-112 |
 
 No existing requirement is withdrawn by this document. Once a cluster fleet

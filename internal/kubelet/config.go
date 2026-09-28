@@ -278,10 +278,6 @@ func (c *Config) EnabledHostServices() []string {
 	return names
 }
 
-//= docs/requirements/12-cluster-fleet.md#virtual-node
-//# The Pod Provider SHALL reach `flintlockd` only through the
-//# local endpoint of HI-042.
-
 // ValidateLocalEndpoint accepts exactly the two shapes HI-042 allows, a
 // unix socket or a literal loopback address and port, and nothing else;
 // hostcheck.ValidateLocalEndpoint says why each other shape is refused.

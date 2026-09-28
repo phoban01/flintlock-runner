@@ -50,7 +50,7 @@ profiles:
       size: 2
 
 # What Jobs are told about the Host Services. The addresses come from the
-# annotations the Exec Agent keeps on the Host's Node (KF-179, KF-189);
+# annotations the Host Agent keeps on the Host's Node (KF-194, KF-189);
 # these sections say which services the Executor points Jobs at, and have to
 # agree with the Host Service Components enabled in deploy/kustomization.yaml
 # and with the HTTP cache upstreams in

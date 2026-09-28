@@ -11,11 +11,6 @@ import (
 	"github.com/urfave/cli"
 )
 
-//= docs/requirements/12-cluster-fleet.md#virtual-node
-//= type=test
-//# The Pod Provider SHALL reach `flintlockd` only through the
-//# local endpoint of HI-042.
-
 // TestKubeletRefusesARemoteFlintlockd checks that `flr kubelet` exits with
 // the invalid-configuration status, naming the field, before it connects to
 // anything when flintlockd is configured at an address off the Host.

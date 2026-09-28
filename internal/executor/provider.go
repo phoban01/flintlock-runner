@@ -77,11 +77,10 @@ func WithGuestTransport(kind transport.Kind) Option {
 
 // AgentHosts hands out the clients of Exec Agents per claim. The Executor
 // asks once per Job, for the claim of that Job's Allocation, and holds the
-// client until the Job ends. An implementation may share one client among
-// the claims on a Host, as *transport.AgentHosts does with the Runner's own
-// token. Or it may bind each client to its claim's own connection, as the
-// claim backend has to: battery-operator's Exec Agent authorizes each call
-// with the claim's token, which that connection carries.
+// client until the Job ends. *transport.AgentHosts binds each client to
+// its claim's own connection, which the claim backend dials:
+// battery-operator's Exec Agent authorizes each call with the claim's
+// token, which that connection carries.
 type AgentHosts interface {
 	// Lease returns the client of the Exec Agent that serves claim, and a
 	// function that releases it. ctx bounds the lookup, not the life of

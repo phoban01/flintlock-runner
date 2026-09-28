@@ -2,25 +2,30 @@ package executor
 
 import (
 	"context"
-	"errors"
+	"crypto/x509"
 	"fmt"
 	"os"
-	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
 	"time"
 
+	"github.com/liquidmetal-dev/flintlock/api/types"
 	"gitlab.com/gitlab-org/gitlab-runner/common/spec"
-	"k8s.io/client-go/kubernetes"
+	"google.golang.org/grpc"
+	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	kubefake "k8s.io/client-go/kubernetes/fake"
 
-	"github.com/phoban01/flintlock-runner/internal/agent"
-	"github.com/phoban01/flintlock-runner/internal/agent/agenttest"
+	"github.com/phoban01/battery-operator/pkg/claimclient"
+
 	"github.com/phoban01/flintlock-runner/internal/config"
 	"github.com/phoban01/flintlock-runner/internal/flintlock"
+	"github.com/phoban01/flintlock-runner/internal/flintlock/fake"
+	"github.com/phoban01/flintlock-runner/internal/hostservices"
 	"github.com/phoban01/flintlock-runner/internal/poolmgr"
 	"github.com/phoban01/flintlock-runner/internal/scheduler"
+	"github.com/phoban01/flintlock-runner/internal/testing/fakeexecagent"
 	"github.com/phoban01/flintlock-runner/internal/transport"
 )
 
@@ -97,27 +102,43 @@ func TestAgentExecThroughTheClaimsHost(t *testing.T) {
 	}
 }
 
+// publishHostServices publishes services, by name and port on gateway, on
+// the Node node as the Host Agent does (hostservices), with every other
+// Host Service switched off.
+func publishHostServices(t *testing.T, kube *kubefake.Clientset, node, gateway string, services map[string]int) {
+	t.Helper()
+	cfg := &hostservices.Config{HostNode: node, BridgeGateway: gateway, HostServices: map[string]hostservices.HostService{}}
+	for name, port := range services {
+		cfg.HostServices[name] = hostservices.HostService{Enabled: true, Port: port}
+	}
+	if err := hostservices.Publish(context.Background(), kube, node, cfg.Annotations()); err != nil {
+		t.Fatal(err)
+	}
+}
+
 //= docs/requirements/12-cluster-fleet.md#agent-exec-transport
 //= type=test
 //# The Executor SHALL read the Host Service addresses for a Job
-//# from the annotations of KF-179 on the Node of the Job's Host.
+//# from the annotations of KF-194 that the Host Agent publishes on the Node
+//# of the Job's Host.
 
 // TestHostServicesFromTheHostsNode reads a Host's Node carrying the
-// annotations the Exec Agent publishes and gets its Host Services back, and
-// gets none for a Node that cannot be read.
+// annotations the Host Agent publishes and gets its Host Services back,
+// and gets none for a Node that cannot be read.
 func TestHostServicesFromTheHostsNode(t *testing.T) {
 	t.Parallel()
-	nodes := kubefake.NewClientset(virtualNode("host-7", map[string]string{
-		ServiceBuildkit: "10.200.0.1:1234",
-		ServiceGoProxy:  "10.200.0.1:3000",
-	})).CoreV1().Nodes()
-	inv := NewHostNodeInventory(nodes, nil, nil)
+	kube := kubefake.NewClientset(&corev1.Node{ObjectMeta: metav1.ObjectMeta{Name: "host-7"}})
+	publishHostServices(t, kube, "host-7", "10.200.0.1", map[string]int{ServiceBuildkit: 1234, ServiceGoProxy: 3000})
+	inv := NewHostNodeInventory(kube.CoreV1().Nodes(), nil, nil)
 	entry, ok := inv.Host("host-7")
 	if !ok {
 		t.Fatal("the host's node was not read")
 	}
 	if entry.Services.Buildkit != "tcp://10.200.0.1:1234" || entry.Services.GoProxy != "http://10.200.0.1:3000" {
 		t.Errorf("services = %+v", entry.Services)
+	}
+	if entry.Services.RegistryMirror != "" || entry.Services.HTTPCache != nil {
+		t.Errorf("services that are not published were read: %+v", entry.Services)
 	}
 	if _, ok := inv.Host("no-such-node"); ok {
 		t.Error("a node that cannot be read gave host services")
@@ -133,56 +154,86 @@ func TestHostServicesFromTheHostsNode(t *testing.T) {
 //= docs/requirements/12-cluster-fleet.md#agent-exec-transport
 //= type=test
 //# The Executor SHALL read the Host Service addresses for a Job
-//# from the annotations of KF-179 on the Node of the Job's Host.
+//# from the annotations of KF-194 that the Host Agent publishes on the Node
+//# of the Job's Host.
+
+//= docs/requirements/12-cluster-fleet.md#claim-test-doubles
+//= type=test
+//# The `agent-exec` Guest Transport SHALL be tested with
+//# battery-operator's Client Library against a test double of
+//# battery-operator's Exec Agent in front of the fake Host, with no KVM and
+//# no battery.
 
 // TestJobOverAgentExec runs a whole Job through gitlab-runner's Build with
-// the production transport factory and client pool, against a real API
-// server and a real Exec Agent in front of a fake Host (agenttest). The
-// Runner holds its ServiceAccount token and the agents' certificate
-// authority and nothing else; its Host Registry fails the test if asked.
-// The claim is a Bound claim of the Runner's, and the Host Service
-// variables come from the annotations the agent published on the Host's
-// Node.
+// the production transport factory and client pool. The claim is held by
+// battery-operator's Client Library, and the Stages reach the test double
+// of battery-operator's Exec Agent in front of a fake Host with that
+// claim's token. The Host Registry fails the test if asked. The Host
+// Service variables come from the annotations the Host Agent published on
+// the Host's Node.
 func TestJobOverAgentExec(t *testing.T) {
 	t.Parallel()
-	env, err := agenttest.Start()
-	if errors.Is(err, agenttest.ErrNoAssets) {
-		t.Skip(err)
-	}
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+
+	host := fake.New(flintlock.FakeHostConfig{Name: "host-7", ExecEnabled: true, SandboxRoot: t.TempDir()})
+	t.Cleanup(func() { _ = host.Close() })
+	vm, err := host.Client().CreateMicroVM(ctx, &types.MicroVMSpec{Id: "job", Namespace: "ns"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { _ = env.Stop() })
-
-	buildkitPort, _ := agenttest.ListenHostService(t)
-	host := env.NewHost(t, agenttest.HostOptions{HostServices: map[string]int{ServiceBuildkit: buildkitPort}})
-	ns := env.Namespace(t)
-	runner := env.ServiceAccountToken(t, ns, "runner")
-	env.PutClaim(t, ns, "job", runner.User, agenttest.ClaimStatus{
-		Phase: agent.ClaimBound, VMUID: host.VMUID, HostNode: host.Node, ExpiresAt: time.Now().Add(time.Hour),
-	})
-	tokenFile := filepath.Join(t.TempDir(), "token")
-	if err := os.WriteFile(tokenFile, []byte(runner.Token), 0o600); err != nil {
+	certs, err := fake.WriteTestCerts(t.TempDir())
+	if err != nil {
 		t.Fatal(err)
 	}
-	agents, err := transport.NewAgentHosts(transport.AgentExecConfig{CAFile: env.Certs.CAFile, TokenFile: tokenFile})
+	world, err := fakeexecagent.NewWorld("ci", "builders")
+	if err != nil {
+		t.Fatal(err)
+	}
+	agent, err := fakeexecagent.Start(fakeexecagent.Config{
+		Node: "host-7", CertFile: certs.ServerCertFile, KeyFile: certs.ServerKeyFile,
+		Upstream: host.Client(), Authorizer: world,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = agent.Close() })
+	pem, err := os.ReadFile(certs.CAFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	servingCA := x509.NewCertPool()
+	servingCA.AppendCertsFromPEM(pem)
+	claims, err := claimclient.New(claimclient.Config{Client: world.Kube, Namespace: "ci", ServingCA: servingCA})
+	if err != nil {
+		t.Fatal(err)
+	}
+	claim, err := world.Claim(ctx, claims, claimclient.Request{Pool: "builders", ServiceAccountName: "runner", Name: "job"}, vm.GetSpec().GetUid(), agent)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = claim.Release(context.Background()) })
+	// The claim backend's dialler, by lease id.
+	dial := func(ctx context.Context, leaseID string, opts ...grpc.DialOption) (*grpc.ClientConn, error) {
+		if leaseID != claim.Name() {
+			return nil, fmt.Errorf("no claim holds lease %s", leaseID)
+		}
+		return claim.Dial(ctx, opts...)
+	}
+	agents, err := transport.NewAgentHosts(dial, transport.AgentExecConfig{})
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = agents.Close() })
-	admin, err := kubernetes.NewForConfig(env.Config)
-	if err != nil {
-		t.Fatal(err)
-	}
-	agenttest.Eventually(t, "the host service annotations", func() bool {
-		return host.ReadNode().Annotations["host-service.gitlab-runner.flintlock.dev/buildkit"] != ""
-	})
+
+	kube := kubefake.NewClientset(&corev1.Node{ObjectMeta: metav1.ObjectMeta{Name: "host-7"}})
+	publishHostServices(t, kube, "host-7", "10.200.0.1", map[string]int{ServiceBuildkit: 1234})
 
 	f := newFixture(t)
 	f.deps.Hosts = tripwireRegistry{t: t}
 	f.deps.Transports = transport.NewFactory()
 	f.deps.Env = NewHostServiceEnv(config.HostServices{})
-	f.deps.Inventory = NewHostNodeInventory(admin.CoreV1().Nodes(), nil, nil)
+	f.deps.Inventory = NewHostNodeInventory(kube.CoreV1().Nodes(), nil, nil)
 	f.opts = append(f.opts, WithAgentExec(agents))
 	profile := testProfile()
 	root := t.TempDir()
@@ -190,26 +241,26 @@ func TestJobOverAgentExec(t *testing.T) {
 	profile.BuildsDir, profile.CacheDir = root+"/builds", root+"/cache"
 	f.sched.profile = profile
 	f.sched.tune = func(a *scheduler.Allocation) {
-		a.VMUID, a.Placement.Host = host.VMUID, host.Node
-		a.Host = poolmgr.HostRef{Name: host.Node, Address: host.Address}
+		a.VMUID, a.Placement.Host = vm.GetSpec().GetUid(), claim.NodeName()
+		a.Lease.ID = claim.Name()
+		a.Host = poolmgr.HostRef{Name: claim.NodeName(), Address: claim.AgentAddress()}
 	}
 
 	job := testJob()
 	job.Steps[0].Script = spec.StepScript{`echo "$JOB_SECRET_VALUE"`, `echo "buildkit at $BUILDKIT_HOST"`, `pwd`}
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
-	defer cancel()
 	trace, _, err := f.runBuild(ctx, job)
 	if err != nil {
-		t.Fatalf("the job failed: %v\n%s\n%s", err, trace.String(), host.Log())
+		t.Fatalf("the job failed: %v\n%s", err, trace.String())
 	}
 	log := trace.String()
-	for _, want := range []string{
-		"only-in-the-script",
-		fmt.Sprintf("buildkit at tcp://%s:%d", agenttest.HostAddress, buildkitPort),
-		root + "/builds/",
-	} {
+	for _, want := range []string{"only-in-the-script", "buildkit at tcp://10.200.0.1:1234", root + "/builds/"} {
 		if !strings.Contains(log, want) {
 			t.Errorf("the job log lacks %q:\n%s", want, log)
+		}
+	}
+	for _, c := range agent.Calls() {
+		if c.Method == "ExecCommand" && c.Token != world.Tokens("job")[0] {
+			t.Errorf("a Stage reached the agent with %q, not the claim's token", c.Token)
 		}
 	}
 }

@@ -4,12 +4,14 @@ The Kubernetes manifests of a cluster fleet, specified in
 `docs/requirements/12-cluster-fleet.md`, for the design of battery's claim
 resources: battery schedules MicroVMs and owns the Pools, the Runner claims
 a MicroVM with a `MicroVMClaim`, and the Exec Agent on each Host relays
-every Stage to that Host's `flintlockd`. Two kustomize roots, and the
+every Stage to that Host's `flintlockd`. The resources and the Exec Agent
+come from [battery-operator v0.1.0](https://github.com/phoban01/battery-operator/releases/tag/v0.1.0);
+see [The Exec Agent](#the-exec-agent). Two kustomize roots here, and the
 Runner on its own:
 
 | Root | Applied to | What |
 |------|------------|------|
-| `deploy/` | the workload cluster | namespace `flintlock-system`, the Host Agent with the Exec Agent and the Host Services |
+| `deploy/` | the workload cluster | namespace `flintlock-system`, the Host Agent with the Host Services |
 | `deploy/capi/` | the management cluster | one MachineDeployment, KubeadmConfigTemplate, AWSMachineTemplate and MachineHealthCheck per Host pool |
 | `deploy/runner/` | not yet | the Runner; see [The Runner](#the-runner) |
 
@@ -24,19 +26,17 @@ listed below.
 
 **The fleet cannot run a Job end to end yet.** The Runner's pool backend on
 a cluster fleet, the claim backend (`12-cluster-fleet.md#battery-claims`),
-is not built: it waits for battery to settle the shapes of its `Pool` and
-`MicroVMClaim` resources. Until it exists, these manifests bring up Hosts
-with their Host Services and an Exec Agent that answers no exec request,
-and no Runner.
+is not wired into `flr` yet. Until it is, these manifests bring up Hosts
+with their Host Services, and no Runner.
 
 ## Layout
 
 | Path | What |
 |------|------|
 | `kustomization.yaml` | the workload cluster root; lists the Host Service Components |
-| `agent/` | the Exec Agent: its container in the Host Agent (`host-agent-patch.yaml`), `rbac.yaml` and `admission-policy.yaml`, as one Component. internal/agent's tests load these files unchanged |
-| `host-agent/` | the DaemonSet and ServiceAccount of the Host Agent; includes `agent/` |
-| `host-agent/config/` | `render.sh`, `prepare-cache.sh`, `prewarm.sh`, the Exec Agent's configuration template `agent.yaml.tmpl` |
+| `host-agent/` | the DaemonSet and ServiceAccount of the Host Agent, with its `host-services` container |
+| `host-agent/host-services-rbac.yaml`, `host-agent/host-services-admission-policy.yaml` | what the `host-services` container may do: annotate its own Host's Node with the Host Services. internal/hostservices' tests load these files unchanged |
+| `host-agent/config/` | `render.sh`, `prepare-cache.sh`, `prewarm.sh`, and `host-services.yaml.tmpl`, the configuration of `flr host-services` |
 | `host-agent/services/<service>/` | one kustomize Component per Host Service: containers, configuration templates, settings |
 | `host-agent/rbac.yaml`, `host-agent/admission-policy.yaml` | the Pod Provider's, from the Virtual Node design; not deployed, kept for `internal/kubelet`'s tests until that design is withdrawn |
 | `runner/` | Deployment, ServiceAccount and the configuration file `config.yaml`; not in `kustomization.yaml` yet |
@@ -50,19 +50,10 @@ and no Runner.
 
 In the workload cluster:
 
-- **cert-manager and its csi-driver** (`csi.cert-manager.io`), and an
-  **Issuer `flintlock-exec-agent`** in `flintlock-system`, for the Exec
-  Agent's serving certificates; see below. The Host Agent does not start
-  without the driver.
-- **battery's claim resource.** The Exec Agent authorizes every exec
-  request against a `MicroVMClaim` (KF-174). Its group and resource are
-  PROVISIONAL: `claims.test.flintlock-runner.dev/v1alpha1`, `microvmclaims`,
-  this project's test definition
-  (`internal/agent/testdata/crds/microvmclaims.yaml`), named in
-  `host-agent/config/agent.yaml.tmpl` and `agent/rbac.yaml`. No cluster
-  serves it, and nothing here installs it, so the agent refuses every exec
-  request (KF-175) until battery publishes its resource and both files name
-  it.
+- **battery-operator v0.1.0**: its Manifests, `config/default` and
+  `config/exec-agent`, which run the Operator, battery, the Exec Agent on
+  every Host and the Inventory Controller, and serve the `Pool` and
+  `MicroVMClaim` resources. See [The Exec Agent](#the-exec-agent).
 - The Host Service credentials, if an upstream needs them. The Components
   generate both Secrets empty; replace them from an overlay:
 
@@ -95,44 +86,64 @@ In the manifests:
 
 ## The Exec Agent
 
-The Exec Agent (`flr agent`, KF-170 to KF-181) is a container of the Host
-Agent, so it runs on every Host, in the Host's network namespace. It
-listens on port 10270 of the Host's internal address (KF-172), which the
-Runner has to be able to reach; the port is one of the Host Image's
-`HOST_CONTROL_PORTS`, closed to guests (HI-034) and to the Host Services'
-user ids (HI-064). It reaches `flintlockd` on the Host's loopback endpoint
-(HI-042) and runs as user id 10250, the one the Host Image admits there
-(HI-063); no other container of the Host Agent runs as that id. The id is
-set once, in `agent/host-agent-patch.yaml`. The `render` init container
-writes the Host's own `POD_PROVIDER_UID`, from `/run/flr/host.env`, into
-the agent's configuration, and the agent refuses to start as any other id.
-A pool whose `host.conf` sets `POD_PROVIDER_UID` therefore stops the agent
-until the patch says the same; `make manifests-check` compares the patch
-with the Host Image's default and with every pool's `host.conf`.
+The Exec Agent comes from battery-operator's Manifests, not from
+`deploy/`. `flr agent`, this repository's Exec Agent, is gone (KF-170 to
+KF-182 are withdrawn). Apply battery-operator v0.1.0's Manifests,
+`config/default` and `config/exec-agent`, to the same cluster as
+`deploy/`, with the images of that release
+(`ghcr.io/phoban01/battery-operator:v0.1.0` and
+`ghcr.io/phoban01/battery-operator/exec-agent:v0.1.0`).
+battery-operator's documentation says what they need: cert-manager for the
+Operator's own certificates, and the Host prerequisites of its Exec Agent.
 
-It authenticates to the API server with the Host Agent pod's bound
-ServiceAccount token, projected into its container only. `agent/rbac.yaml`
-and `agent/admission-policy.yaml` confine it to its own Host's Node
-annotations and drain guard (KF-180). They replace the Pod Provider's
-`host-agent/rbac.yaml` and `host-agent/admission-policy.yaml`, which match
-the same ServiceAccount and refuse the change to a Host's own Node that the
-Exec Agent has to make, so a cluster runs one pair or the other, never both.
+Its Exec Agent runs on every Node labelled
+`battery.liquidmetal-x.dev/host=true`, so each Host's Node needs that label
+as well as the Host label of this project.
 
-### The Exec Agent's serving certificate
+`deploy/` and battery-operator's Manifests can be applied to the same
+cluster. Nothing of one clashes with the other:
 
-**Unverified: nothing here has run on a cluster.** The certificate has to
-name the Host's internal address (KF-172). The manifests follow
-`deploy/agent`'s proposal: a `csi.cert-manager.io` volume, so that
-cert-manager's csi-driver issues each pod its own certificate and key, with
-the pod's IP as its IP SAN (`${POD_IP}`); in the Host's network namespace
-that is the Host's internal address. The Issuer is `flintlock-exec-agent`,
-kind `Issuer`, in `flintlock-system`, which the operator provides, for
-example a CA Issuer whose certificate authority the Runner's `agent-exec`
-Guest Transport is then configured to trust (KF-186). The files are group
-10250 (`fs-group`) so the agent can read the key. What has not been checked:
-that the installed csi-driver version expands `${POD_IP}` for a pod with
-host networking, that the certificate is renewed without restarting the
-agent, and that the Runner verifies it.
+- **Port 10270.** Only battery-operator's Exec Agent listens on it, on the
+  Host's internal address. The Host Agent listens on no port of its own;
+  its Host Services listen on the guest bridge gateway only (KF-071).
+- **Node annotations.** battery-operator's Exec Agent writes the Node
+  report under `battery.liquidmetal-x.dev/` (its EA-034). The Host Agent
+  writes only the Host Service annotations,
+  `host-service.gitlab-runner.flintlock.dev/<name>` (KF-194).
+- **Admission policies and identities.** Each policy matches its own
+  ServiceAccount: battery-operator's matches
+  `battery-operator-system/battery-operator-exec-agent`, and
+  `host-agent/host-services-admission-policy.yaml` matches
+  `flintlock-system/flintlock-host-agent`. Each lets its identity change
+  only its own annotations of its own Host's Node.
+- **Namespaces.** battery-operator runs in `battery-operator-system`, this
+  project in `flintlock-system`.
+
+The Runner reaches each Exec Agent on port 10270 of the Host's internal
+address, over TLS verified against the Operator's serving CA, with a claim
+token of the Job's claim (KF-186). battery-operator's Client Library
+requests the token and dials the connection.
+
+## The Host Services on the Host's Node
+
+The Runner reads where a Host's Host Services listen from annotations of
+the Host's Node (KF-189). battery-operator's Exec Agent does not publish
+them, so the Host Agent does: its `host-services` container, `flr
+host-services`, writes `host-service.gitlab-runner.flintlock.dev/<name>`
+set to `<bridge gateway>:<port>` for each enabled Host Service, and removes
+the annotation of one that is not enabled (KF-194). It writes them again
+every minute. The names are the ones `flr agent` used, so the Runner reads
+them as before.
+
+The container authenticates to the API server with the Host Agent pod's
+bound ServiceAccount token, projected into its container only.
+`host-agent/host-services-rbac.yaml` lets it patch Nodes, and
+`host-agent/host-services-admission-policy.yaml` narrows that to the Host
+Service annotations of its own Host's Node. The API server tells one Host
+from another by the node name in the token's user information. The policy
+replaces the Pod Provider's `host-agent/admission-policy.yaml`, which
+matches the same ServiceAccount and refuses any change to a Host's own
+Node, so a cluster runs one or the other, never both.
 
 ## The Runner
 
@@ -159,8 +170,8 @@ from `runner/job-timeout.yaml`, which also sets `gitlab.shutdown_timeout`
 ## Requirements on the workload cluster
 
 - **Kubernetes 1.32 or later**, for the node name in bound ServiceAccount
-  tokens that the admission policy relies on (KF-180), and the version of
-  the Host Image's kubelet (`image/versions.env`) for the Hosts.
+  tokens that the admission policies rely on, and the version of the Host
+  Image's kubelet (`image/versions.env`) for the Hosts.
 - **A route from the Runner to port 10270 of every Host's internal
   address**, where the Exec Agents listen.
 - **An AWS cloud controller manager**, as for any CAPA cluster: Hosts join
@@ -169,9 +180,9 @@ from `runner/job-timeout.yaml`, which also sets `gitlab.shutdown_timeout`
 ## Host Services
 
 Each Host Service is a Component listed in `kustomization.yaml`. Removing
-its line removes its containers, its configuration and its entry in the Exec
-Agent's configuration, so that it is neither run, nor probed, nor published
-on the Host's Node (KF-075, KF-179). Remove it from `runner/config.yaml` as
+its line removes its containers, its configuration and its entry in the
+`host-services` configuration, so that it is neither run nor published on
+the Host's Node (KF-075, KF-194). Remove it from `runner/config.yaml` as
 well.
 
 Every Host Service binds only the guest bridge gateway address (KF-071).
@@ -215,17 +226,21 @@ data in the instance's user data instead of Secrets Manager
 (`insecureSkipSecretsManager`); it holds a short-lived join token and the
 Host configuration file, which holds no secret.
 
-If a pool's `host.conf` sets `POD_PROVIDER_UID`, set the same value as the
-Exec Agent's `runAsUser`, `runAsGroup` and `fs-group` in
-`agent/host-agent-patch.yaml`; the name of the key is the Virtual Node
-design's, and the Exec Agent is what it admits now. If it sets
-`HOST_CONTROL_PORTS`, keep 10270, the Exec Agent's port, in the list.
+If a pool's `host.conf` sets `HOST_CONTROL_PORTS`, keep 10270, the Exec
+Agent's port, in the list.
 
 ## Known gaps
 
-- **SELinux.** The Host Image enforces SELinux and labels the three host
-  paths the Host Agent mounts for `container_t` (HI-065): `host.env` and
-  `not-ready.d` read-only, the cache directory writable, all at `s0`. The
+- **The Host Image and battery-operator's Exec Agent.** battery-operator's
+  Exec Agent reaches `flintlockd` at the Host's address, port 9090, over
+  mutual TLS, with certificates it writes to `/etc/battery/flintlockd`
+  (its EA-001, EA-064). The Host Image serves `flintlockd` on the loopback
+  port 9090 without TLS (HI-042, HI-063), and does not label the Node
+  `battery.liquidmetal-x.dev/host=true`. The Host Image has to change
+  before battery-operator's Exec Agent can run a Stage on it.
+- **SELinux.** The Host Image enforces SELinux and labels the host paths
+  the Host Agent mounts for `container_t` (HI-065): `host.env` read-only,
+  the cache directory writable, both at `s0`. The
   Host Agent's pod keeps `container_t` with a fixed MCS level,
   `s0:c311,c827`, so that its caches survive a restart of the pod; see
   "SELinux" in `image/README.md`. The Host Image's containerd labels every
@@ -260,8 +275,9 @@ design's, and the Exec Agent is what it admits now. If it sets
   ones these manifests run the Host Services as. A pool whose `host.conf`
   sets `HOST_SERVICE_UIDS`, or a change to a Host Service's `runAsUser`,
   has to change the other too.
-- **One DaemonSet for every pool.** The Host Service settings and the Exec
-  Agent's user id are the same on every Host.
-- **A Host that cannot run MicroVMs stays in its pool.** The Exec Agent
-  reports a Host not ready (KF-178) in an annotation of its Node, not as a
-  Node condition, so the MachineHealthCheck (KF-005) does not see it.
+- **One DaemonSet for every pool.** The Host Service settings are the same
+  on every Host.
+- **A Host that cannot run MicroVMs stays in its pool.** battery-operator's
+  Exec Agent reports a Host not ready (its EA-030 to EA-034) in an
+  annotation of its Node, not as a Node condition, so the
+  MachineHealthCheck (KF-005) does not see it.

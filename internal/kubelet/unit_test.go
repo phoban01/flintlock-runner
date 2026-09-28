@@ -32,11 +32,6 @@ func validConfig() *Config {
 	return cfg
 }
 
-//= docs/requirements/12-cluster-fleet.md#virtual-node
-//= type=test
-//# The Pod Provider SHALL reach `flintlockd` only through the
-//# local endpoint of HI-042.
-
 func TestFlintlockdEndpointHasToBeLocal(t *testing.T) {
 	t.Parallel()
 	cases := []struct {
