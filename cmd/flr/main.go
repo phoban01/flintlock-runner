@@ -92,7 +92,7 @@ func newApp() *cli.App {
 			Subcommands: fleetCommands(productionSeams()),
 		},
 		kubeletCommand(),
-		agentCommand(),
+		hostServicesCommand(),
 	}
 	return app
 }

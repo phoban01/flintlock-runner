@@ -1,0 +1,17 @@
+# The configuration of `flr host-services` (internal/hostservices), rendered
+# on each Host by render.sh into /etc/flr/rendered/host-services.yaml, which
+# the host-services container of daemonset.yaml reads. host_node is not
+# here: it is the Host's Node name, given by the downward API through
+# FLINTLOCK_RUNNER_HOST_NODE. `flr host-services` refuses unknown keys, and
+# `make manifests-check` loads the rendered file with it.
+
+# KF-194: where every enabled Host Service listens, published on the Host's
+# Node under these names for the Runner to read (KF-189). Each Host Service
+# Component adds its own entry; one left out is not published, and its old
+# annotation is removed.
+bridge_gateway: "@BRIDGE_GATEWAY@"
+@BLOCK:host-services@
+
+# How often the annotations are written again, in case something else
+# changed or removed them.
+resync_interval: 1m

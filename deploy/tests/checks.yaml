@@ -29,8 +29,8 @@ checks:
   #= docs/requirements/12-cluster-fleet.md#cluster-host-agent
   #= type=test
   #/ The Fleet Manifests SHALL run the Host Agent as a DaemonSet that
-  #/ tolerates the Host taint, selects the Host label and contains the Exec
-  #/ Agent and the Host Services of FL-100.
+  #/ tolerates the Host taint, selects the Host label and contains the Host
+  #/ Services of FL-100.
   #
   #= docs/requirements/12-cluster-fleet.md#cluster-runner
   #= type=test
@@ -121,10 +121,11 @@ checks:
   #/ the configured drain timeout on a Host pool's Machines.
   - name: no Machine's node drain timeout is shorter than the Exec Agent's drain timeout
     run: |
-      # The configured drain timeout is how long the Exec Agent holds a
-      # drain open for Bound claims (KF-181).
-      drain=$(seconds "$(q "$rendered/agent.yaml" '.drain_timeout')")
-      [ "$drain" -gt 0 ] || fail "the Exec Agent has no drain_timeout"
+      # The configured drain timeout is how long battery-operator's Exec
+      # Agent holds a drain open for Bound claims (its EA-040): its
+      # --drain-timeout, which battery-operator v0.1.0's Manifests leave at
+      # the default of one hour.
+      drain=$(seconds 1h)
       for md in $(q "$capi" 'select(.kind == "MachineDeployment") | .metadata.name'); do
         t=$(obj "$capi" MachineDeployment "$md" | "$YQ" '.spec.template.spec.deletion.nodeDrainTimeoutSeconds // 0')
         # 0 or unset is no timeout at all, which is never shorter.
@@ -161,9 +162,9 @@ checks:
   #= docs/requirements/12-cluster-fleet.md#cluster-host-agent
   #= type=test
   #/ The Fleet Manifests SHALL run the Host Agent as a DaemonSet that
-  #/ tolerates the Host taint, selects the Host label and contains the Exec
-  #/ Agent and the Host Services of FL-100.
-  - name: the Host Agent tolerates the Host taint, selects Hosts and runs the Exec Agent and the four Host Services
+  #/ tolerates the Host taint, selects the Host label and contains the Host
+  #/ Services of FL-100.
+  - name: the Host Agent tolerates the Host taint, selects Hosts and runs the four Host Services and no Exec Agent
     run: |
       ds=$(obj "$fleet" DaemonSet flintlock-host-agent)
       [ -n "$ds" ] || fail "no DaemonSet flintlock-host-agent"
@@ -172,9 +173,13 @@ checks:
       [ -n "$tol" ] || fail "does not tolerate gitlab-runner.flintlock.dev/host=true:NoSchedule"
       images=$(echo "$ds" | "$YQ" '.spec.template.spec.containers[] | .name + " " + .image')
       echo "$images"
-      echo "$images" | grep -Eq '^exec-agent ghcr\.io/phoban01/flintlock-runner/flr[:@]' || fail "no Exec Agent"
-      [ "$(echo "$ds" | "$YQ" '.spec.template.spec.containers[] | select(.name == "exec-agent") | .args[0]')" = agent ] || fail "the Exec Agent does not run flr agent"
-      [ "$(echo "$ds" | "$YQ" '[.. | select(has("args")) | .args[] | select(. == "kubelet")] | length')" -eq 0 ] || fail "a container runs flr kubelet, the Pod Provider"
+      # The Exec Agent is battery-operator's, in a DaemonSet of its own: no
+      # container of the Host Agent runs `flr agent` or `flr kubelet`, and
+      # the only flr container is host-services.
+      [ "$(echo "$ds" | "$YQ" '[.. | select(has("args")) | .args[] | select(. == "kubelet" or . == "agent")] | length')" -eq 0 ] || fail "a container runs flr kubelet or flr agent"
+      [ "$(echo "$images" | grep -c ' ghcr\.io/phoban01/flintlock-runner/flr[:@]')" -eq 1 ] || fail "the flr image runs in more than the host-services container"
+      echo "$images" | grep -Eq '^host-services ghcr\.io/phoban01/flintlock-runner/flr[:@]' || fail "no host-services container"
+      [ "$(echo "$ds" | "$YQ" '[.spec.template.spec.containers[] | select(.ports) | .name] | length')" -eq 0 ] || fail "a container declares a port"
       echo "$images" | grep -Eq '^buildkitd moby/buildkit:[^ ]*-rootless@' || fail "no rootless buildkitd"
       echo "$images" | grep -Eq '^athens gomods/athens:' || fail "no Go module proxy"
       echo "$images" | grep -Eq '^go-proxy-front nginxinc/nginx-unprivileged:' || fail "no Go module proxy front"
@@ -183,56 +188,52 @@ checks:
 
   #= docs/requirements/12-cluster-fleet.md#cluster-host-agent
   #= type=test
-  #/ The Fleet Manifests SHALL run the Host Agent as a DaemonSet that
-  #/ tolerates the Host taint, selects the Host label and contains the Exec
-  #/ Agent and the Host Services of FL-100.
-  - name: the rendered Exec Agent configuration loads in flr agent and names every Host Service
+  #/ The Host Agent SHALL publish the address and port of each
+  #/ enabled Host Service on the guest bridge gateway, under the names
+  #/ `buildkit`, `go_proxy`, `registry_mirror` and `http_cache`, as the
+  #/ annotations `host-service.gitlab-runner.flintlock.dev/<name>` on its Host's
+  #/ Node.
+  - name: the host-services container publishes every Host Service from a configuration flr loads
     run: |
       [ -x "$FLR" ] || fail "FLR is not an flr binary"
-      cat "$rendered/agent.yaml"
+      cat "$rendered/host-services.yaml"
       # The configuration is valid when flr gets past loading it, where an
-      # invalid one exits 2. Next it checks its own user id against the
-      # rendered flintlockd_user_id and, running as another here, exits 1
-      # saying so; with the check turned off it gets as far as looking for
-      # the in-cluster configuration, which does not exist here.
+      # invalid one exits 2: it gets as far as looking for the in-cluster
+      # configuration, which does not exist here, and exits 1.
       set +e
-      out=$(env -u KUBERNETES_SERVICE_HOST -u KUBERNETES_SERVICE_PORT "$FLR" agent --agent-config "$rendered/agent.yaml" --host-node sample-host 2>&1)
+      out=$(env -u KUBERNETES_SERVICE_HOST -u KUBERNETES_SERVICE_PORT "$FLR" host-services --host-services-config "$rendered/host-services.yaml" --host-node sample-host 2>&1)
       status=$?
       set -e
       echo "$out"
-      if [ "$(id -u)" != 10250 ]; then
-        [ "$status" -eq 1 ] || fail "flr agent exited $status"
-        echo "$out" | grep -q 'flintlockd admits only user id 10250' || fail "flr agent did not load the configuration and check its user id"
-      fi
-      sed 's/^flintlockd_user_id: .*/flintlockd_user_id: -1/' "$rendered/agent.yaml" >"$work/agent-anyuser.yaml"
-      set +e
-      out=$(env -u KUBERNETES_SERVICE_HOST -u KUBERNETES_SERVICE_PORT "$FLR" agent --agent-config "$work/agent-anyuser.yaml" --host-node sample-host 2>&1)
-      status=$?
-      set -e
-      echo "$out"
-      [ "$status" -eq 1 ] || fail "flr agent exited $status"
-      echo "$out" | grep -q 'in-cluster configuration' || fail "flr agent did not get as far as the API server"
-      # The Exec Agent publishes one annotation per Host Service on the
-      # Host's Node under the name it has here, and the Runner reads exactly
-      # the names of its own host_services section (KF-179, KF-189); any
-      # other name is ignored, so the two have to be the same four.
-      names=$(q "$rendered/agent.yaml" '.host_services | keys | sort | join(",")')
-      [ "$names" = buildkit,go_proxy,http_cache,registry_mirror ] || fail "the Exec Agent's Host Services are named $names"
-      [ "$(q "$rendered/agent.yaml" '[.host_services[] | select(.enabled != true)] | length')" -eq 0 ] || fail "a Host Service is listed but not enabled"
+      [ "$status" -eq 1 ] || fail "flr host-services exited $status"
+      echo "$out" | grep -q 'in-cluster configuration' || fail "flr host-services did not get as far as the API server"
+      # The container runs it on that file, for its own Host's Node.
+      c=$(obj "$fleet" DaemonSet flintlock-host-agent | "$YQ" '.spec.template.spec.containers[] | select(.name == "host-services")')
+      [ "$(echo "$c" | "$YQ" '.args | join(" ")')" = "host-services --host-services-config /etc/flr/rendered/host-services.yaml" ] || fail "the host-services container's arguments"
+      [ "$(echo "$c" | "$YQ" '.volumeMounts[] | select(.name == "rendered") | .mountPath + " " + (.readOnly | tostring)')" = "/etc/flr/rendered true" ] || fail "host-services does not read the rendered configuration"
+      [ "$(echo "$c" | "$YQ" '.env[] | select(.name == "FLINTLOCK_RUNNER_HOST_NODE") | .valueFrom.fieldRef.fieldPath')" = spec.nodeName ] || fail "host_node does not come from the downward API"
+      [ "$(q "$rendered/host-services.yaml" 'has("host_node")')" = false ] || fail "the configuration names a host_node of its own"
+      # It publishes one annotation per Host Service under the name it has
+      # here, on the bridge gateway, and the Runner reads exactly the names
+      # of its own host_services section (KF-189); any other name is
+      # ignored, so the two have to be the same four.
+      [ "$(q "$rendered/host-services.yaml" '.bridge_gateway')" = "$gateway" ] || fail "host-services' bridge_gateway is not the gateway"
+      names=$(q "$rendered/host-services.yaml" '.host_services | keys | sort | join(",")')
+      [ "$names" = buildkit,go_proxy,http_cache,registry_mirror ] || fail "host-services' Host Services are named $names"
+      [ "$(q "$rendered/host-services.yaml" '[.host_services[] | select(.enabled != true)] | length')" -eq 0 ] || fail "a Host Service is listed but not enabled"
       cm=$(obj "$runner" Deployment flintlock-runner | "$YQ" '.spec.template.spec.volumes[] | select(.name == "config") | .configMap.name')
       obj "$runner" ConfigMap "$cm" | "$YQ" '.data["config.yaml"]' >"$work/runner-config.yaml"
       rnames=$(q "$work/runner-config.yaml" '.host_services | keys | sort | join(",")')
-      [ "$names" = "$rnames" ] || fail "the Exec Agent names $names, the Runner reads $rnames"
+      [ "$names" = "$rnames" ] || fail "host-services names $names, the Runner reads $rnames"
       for s in buildkit go_proxy http_cache registry_mirror; do
-        [ "$(q "$rendered/agent.yaml" ".host_services.$s.port")" = "$(q "$work/runner-config.yaml" ".host_services.$s.port")" ] || fail "$s: the Exec Agent and the Runner disagree on the port"
+        [ "$(q "$rendered/host-services.yaml" ".host_services.$s.port")" = "$(q "$work/runner-config.yaml" ".host_services.$s.port")" ] || fail "$s: host-services and the Runner disagree on the port"
       done
       # The ports are the ones the Host Image opens to guests (HI-036).
       open=$(sed -n 's/^HOST_SERVICE_PORTS=//p' "$root/image/rootfs/usr/share/flr/host.conf.defaults")
       for s in buildkit go_proxy http_cache registry_mirror; do
-        p=$(q "$rendered/agent.yaml" ".host_services.$s.port")
+        p=$(q "$rendered/host-services.yaml" ".host_services.$s.port")
         case ,$open, in *,$p,*) ;; *) fail "$s port $p is not in the Host Image's HOST_SERVICE_PORTS $open" ;; esac
       done
-      [ "$(q "$rendered/agent.yaml" '.flintlockd')" = 127.0.0.1:9090 ] || fail "flintlockd is not the Host Image's loopback endpoint"
 
   #= docs/requirements/12-cluster-fleet.md#cluster-host-agent
   #= type=test
@@ -244,7 +245,7 @@ checks:
       [ "$(echo "$ds" | "$YQ" '.spec.template.spec.hostNetwork')" = true ] || fail "hostNetwork is not true"
       for r in "$rendered" "$rendered_full"; do
         [ "$(cat "$r/gateway")" = "$gateway" ] || fail "render.sh did not take the gateway from host.env"
-        [ "$(q "$r/agent.yaml" '.bridge_gateway')" = "$gateway" ] || fail "the Exec Agent's bridge_gateway is not the gateway"
+        [ "$(q "$r/host-services.yaml" '.bridge_gateway')" = "$gateway" ] || fail "host-services' bridge_gateway is not the gateway"
         grep -q "^  address = \[\"tcp://$gateway:1234\"\]$" "$r/buildkitd.toml" || fail "buildkitd does not listen on $gateway:1234 only"
         [ "$(grep -c 'address' "$r/buildkitd.toml")" -eq 1 ] || fail "buildkitd has another address"
         [ "$("$YQ" -p json '.http.address + ":" + .http.port' "$r/zot.json")" = "$gateway:5000" ] || fail "zot does not listen on $gateway:5000"
@@ -257,10 +258,10 @@ checks:
         grep -q '^Port = "127.0.0.1:3999"$' "$r/athens.toml" || fail "athens is not on loopback"
       done
       # No Host Service container publishes a port of its own on the Host.
-      [ "$(echo "$ds" | "$YQ" '[.spec.template.spec.containers[] | select(.name != "exec-agent") | .ports // [] | .[]] | length')" -eq 0 ] || fail "a Host Service container declares ports"
+      [ "$(echo "$ds" | "$YQ" '[.spec.template.spec.containers[] | .ports // [] | .[]] | length')" -eq 0 ] || fail "a Host Agent container declares ports"
       # render.sh refuses a Host whose gateway it cannot read, rather than
       # let a service bind something else.
-      printf 'FLR_GATEWAY=\nFLR_POD_PROVIDER_UID=10250\n' >"$work/bad.env"
+      printf 'FLR_GATEWAY=\n' >"$work/bad.env"
       if FLR_TEMPLATES=$templates FLR_HOST_ENV=$work/bad.env FLR_OUT=$work/bad sh "$templates/render.sh" 2>/dev/null; then
         fail "render.sh accepted a host.env without a gateway"
       fi
@@ -417,19 +418,19 @@ checks:
       [ ! -e "$extract/buildkitd.toml.tmpl" ] || fail "buildkitd's configuration is still shipped"
       [ ! -e "$extract/cache-dirs.buildkit" ] || fail "buildkitd's cache directory is still made"
       FLR_TEMPLATES=$extract FLR_HOST_ENV=$work/host.env FLR_OUT=$work/rendered-without-buildkit sh "$extract/render.sh"
-      [ "$(q "$work/rendered-without-buildkit/agent.yaml" '.host_services | keys | sort | join(",")')" = go_proxy,http_cache,registry_mirror ] || fail "the Exec Agent still probes and publishes buildkit"
-      # With every Component left out the Exec Agent is alone and has no
-      # Host Service to probe or publish.
+      [ "$(q "$work/rendered-without-buildkit/host-services.yaml" '.host_services | keys | sort | join(",")')" = go_proxy,http_cache,registry_mirror ] || fail "host-services still publishes buildkit"
+      # With every Component left out the host-services container is alone
+      # and has no Host Service to publish.
       w=$work/without-services.yaml
       ds=$(obj "$w" DaemonSet flintlock-host-agent)
-      [ "$(echo "$ds" | "$YQ" '[.spec.template.spec.containers[].name] | join(",")')" = exec-agent ] || fail "a Host Service runs with every Component left out"
+      [ "$(echo "$ds" | "$YQ" '[.spec.template.spec.containers[].name] | join(",")')" = host-services ] || fail "a Host Service runs with every Component left out"
       extract=$work/templates-without-services
       mkdir -p "$extract"
       for k in $("$YQ" 'select(.kind == "ConfigMap" and (.metadata.name | test("^flintlock-host-agent-config-"))) | .data | keys | .[]' "$w"); do
         K=$k "$YQ" 'select(.kind == "ConfigMap" and (.metadata.name | test("^flintlock-host-agent-config-"))) | .data[strenv(K)]' "$w" >"$extract/$k"
       done
       FLR_TEMPLATES=$extract FLR_HOST_ENV=$work/host.env FLR_OUT=$work/rendered-without-services sh "$extract/render.sh"
-      [ "$(q "$work/rendered-without-services/agent.yaml" '.host_services | length')" -eq 0 ] || fail "the Exec Agent probes Host Services that do not run"
+      [ "$(q "$work/rendered-without-services/host-services.yaml" '.host_services | length')" -eq 0 ] || fail "host-services publishes Host Services that do not run"
 
   #= docs/requirements/12-cluster-fleet.md#cluster-host-agent
   #= type=test
@@ -620,189 +621,67 @@ checks:
       [ "$(echo "$spec" | "$YQ" '.securityContext.seccompProfile.type')" = RuntimeDefault ] || fail "the pod's seccomp profile"
       root=$(echo "$spec" | "$YQ" "$all | select(.securityContext.runAsUser == 0) | .name" | tr '\n' ' ')
       [ "$root" = "prepare-cache " ] || fail "running as root: $root"
-      # Exactly three host paths, the two under /run/flr read-only.
-      [ "$(echo "$spec" | "$YQ" '[.volumes[] | select(.hostPath) | .hostPath.path] | sort | join(" ")')" = "/run/flr/host.env /run/flr/not-ready.d /var/lib/flintlock-runner/cache" ] || fail "unexpected host paths"
-      for v in host-env:render not-ready:exec-agent; do
-        m=$(echo "$spec" | V=${v%%:*} "$YQ" "$all | .name as \$c | .volumeMounts[] | select(.name == strenv(V)) | \$c + \"=\" + (.readOnly | tostring)" | tr '\n' ' ')
-        [ "$m" = "${v#*:}=true " ] || fail "${v%%:*} is mounted as: $m"
-      done
-      # Only the Exec Agent has API credentials or the serving key, and no
+      # Exactly two host paths, host.env read-only.
+      [ "$(echo "$spec" | "$YQ" '[.volumes[] | select(.hostPath) | .hostPath.path] | sort | join(" ")')" = "/run/flr/host.env /var/lib/flintlock-runner/cache" ] || fail "unexpected host paths"
+      m=$(echo "$spec" | "$YQ" "$all | .name as \$c | .volumeMounts[] | select(.name == \"host-env\") | \$c + \"=\" + (.readOnly | tostring)" | tr '\n' ' ')
+      [ "$m" = "render=true " ] || fail "host-env is mounted as: $m"
+      # Only the host-services container has API credentials, and no
       # container anywhere mounts the API token another way.
-      for v in exec-agent-token exec-agent-tls; do
-        m=$(echo "$spec" | V=$v "$YQ" "$all | select([.volumeMounts[] | select(.name == strenv(V))] | length > 0) | .name" | tr '\n' ' ')
-        [ "$m" = "exec-agent " ] || fail "$v is mounted into: $m"
-      done
+      m=$(echo "$spec" | "$YQ" "$all | select([.volumeMounts[] | select(.name == \"host-services-token\")] | length > 0) | .name" | tr '\n' ' ')
+      [ "$m" = "host-services " ] || fail "host-services-token is mounted into: $m"
       [ "$(echo "$spec" | "$YQ" '[.volumes[] | select(.projected.sources[]?.serviceAccountToken)] | length')" -eq 1 ] || fail "more than one volume carries a ServiceAccount token"
-      # The Host Agent's API permissions are the Exec Agent's RBAC,
-      # deploy/agent/rbac.yaml as internal/agent's tests load it, and no
-      # more: no other binding names its account, and none of the Pod
-      # Provider's is deployed.
+      [ "$(echo "$spec" | "$YQ" '.volumes[] | select(.name == "host-services-token") | .projected.defaultMode')" = 292 ] || fail "the token is not mode 0444"
+      # The Host Agent's API permissions are those of
+      # deploy/host-agent/host-services-rbac.yaml, as internal/hostservices'
+      # tests load it, and no more: no other binding names its account, and
+      # none of the Pod Provider's is deployed.
       bindings=$(q "$fleet" 'select((.kind == "RoleBinding" or .kind == "ClusterRoleBinding") and ([.subjects[] | select(.name == "flintlock-host-agent")] | length > 0)) | .kind + "/" + .metadata.name' | sort | tr '\n' ' ')
-      [ "$bindings" = "ClusterRoleBinding/flintlock-exec-agent RoleBinding/flintlock-exec-agent-guard " ] || fail "bindings of the Host Agent: $bindings"
-      for k in ClusterRole/flintlock-exec-agent Role/flintlock-exec-agent-guard ClusterRoleBinding/flintlock-exec-agent RoleBinding/flintlock-exec-agent-guard; do
+      [ "$bindings" = "ClusterRoleBinding/flintlock-host-services " ] || fail "bindings of the Host Agent: $bindings"
+      for k in ClusterRole/flintlock-host-services ClusterRoleBinding/flintlock-host-services; do
         a=$(obj "$fleet" "${k%%/*}" "${k#*/}" | "$YQ" -o json -I0 'sort_keys(..)')
-        b=$(obj "$deploy/agent/rbac.yaml" "${k%%/*}" "${k#*/}" | "$YQ" -o json -I0 'sort_keys(..)')
-        [ -n "$b" ] && [ "$a" = "$b" ] || fail "$k is not deploy/agent/rbac.yaml's as tested"
+        b=$(obj "$deploy/host-agent/host-services-rbac.yaml" "${k%%/*}" "${k#*/}" | "$YQ" -o json -I0 'sort_keys(..)')
+        [ -n "$b" ] && [ "$a" = "$b" ] || fail "$k is not deploy/host-agent/host-services-rbac.yaml's as tested"
       done
       [ -z "$(q "$fleet" 'select(.metadata.name | test("pod-provider")) | .kind + "/" + .metadata.name')" ] || fail "an object of the Pod Provider is deployed"
 
-  #= docs/requirements/12-cluster-fleet.md#exec-agent
-  #= type=test
-  #/ The Fleet Manifests SHALL run the Exec Agent in the Host Agent
-  #/ on every Host.
-  - name: the Exec Agent runs in the Host Agent on every Host, on the Host's internal address
-    run: |
-      for w in "$fleet" "$work/without-services.yaml" "$work/without-buildkit.yaml"; do
-        ds=$(obj "$w" DaemonSet flintlock-host-agent)
-        # Every Host: the DaemonSet with the Host label and taint, checked
-        # above, and the agent in it whatever Host Services are left out.
-        [ "$(echo "$ds" | "$YQ" '[.spec.template.spec.containers[] | select(.name == "exec-agent")] | length')" -eq 1 ] || fail "$(basename "$w"): no exec-agent container"
-      done
-      spec=$(obj "$fleet" DaemonSet flintlock-host-agent | "$YQ" '.spec.template.spec')
-      agent=$(echo "$spec" | "$YQ" '.containers[] | select(.name == "exec-agent")')
-      [ "$(echo "$agent" | "$YQ" '.image')" = ghcr.io/phoban01/flintlock-runner/flr:dev ] || fail "the Exec Agent's image is $(echo "$agent" | "$YQ" '.image')"
-      [ "$(echo "$agent" | "$YQ" '.args | join(" ")')" = "agent --agent-config /etc/flr/rendered/agent.yaml" ] || fail "the Exec Agent's arguments"
-      # The configuration is the one render.sh writes for this Host, from
-      # the rendered volume render writes it into.
-      [ "$(echo "$agent" | "$YQ" '.volumeMounts[] | select(.name == "rendered") | .mountPath + " " + (.readOnly | tostring)')" = "/etc/flr/rendered true" ] || fail "the Exec Agent does not read the rendered configuration"
-      [ "$(echo "$spec" | "$YQ" '.initContainers[] | select(.name == "render") | .volumeMounts[] | select(.name == "rendered") | .mountPath')" = /etc/flr/rendered ] || fail "render does not write where the Exec Agent reads"
-      # host_node from the downward API.
-      [ "$(echo "$agent" | "$YQ" '.env[] | select(.name == "FLINTLOCK_RUNNER_HOST_NODE") | .valueFrom.fieldRef.fieldPath')" = spec.nodeName ] || fail "host_node does not come from the downward API"
-      [ "$(q "$rendered/agent.yaml" 'has("host_node")')" = false ] || fail "the configuration names a host_node of its own"
-      # KF-172's address: in the Host's network namespace, with no address
-      # of its own, the agent serves on the Host's internal address, on the
-      # port it declares.
-      [ "$(echo "$spec" | "$YQ" '.hostNetwork')" = true ] || fail "the Exec Agent is not in the Host's network namespace"
-      [ "$(q "$rendered/agent.yaml" 'has("address")')" = false ] || fail "the configuration names an address, not the Host's internal one"
-      port=$(q "$rendered/agent.yaml" '.port')
-      [ "$port" = 10270 ] || fail "the exec API is on port $port"
-      [ "$(echo "$agent" | "$YQ" '.ports[] | select(.name == "exec-api") | .containerPort')" = "$port" ] || fail "the container does not declare the exec API's port"
-      # The port is one of the Host's control ports, which the Host Image
-      # closes to guests (HI-034) and to the Host Services' user ids
-      # (HI-064), by default and in every pool that sets its own list.
-      defaults=$root/image/rootfs/usr/share/flr/host.conf.defaults
-      ctl=$(sed -n 's/^HOST_CONTROL_PORTS=//p' "$defaults" | tail -n 1)
-      case ,$ctl, in *,$port,*) ;; *) fail "the Host Image's HOST_CONTROL_PORTS $ctl leaves the exec API's port $port open" ;; esac
-      grep -q "^FLR_HOST_CONTROL_PORTS=.*,$port," "$work/host.env" || fail "the sample host.env is not the Host Image's"
-      for md in $(q "$capi" 'select(.kind == "MachineDeployment") | .metadata.name'); do
-        ref=$(obj "$capi" MachineDeployment "$md" | "$YQ" '.spec.template.spec.bootstrap.configRef.name')
-        pool=$(obj "$capi" KubeadmConfigTemplate "$ref" | "$YQ" '.spec.template.spec.files[] | select(.path == "/etc/flintlock-runner/host.conf") | .content' | sed -n 's/^HOST_CONTROL_PORTS=//p' | tail -n 1)
-        [ -z "$pool" ] || case ,$pool, in *,$port,*) ;; *) fail "$md: host.conf's HOST_CONTROL_PORTS $pool leaves $port open" ;; esac
-      done
-      # The serving certificate: cert-manager's csi-driver, for the pod's
-      # IP, from the operator's Issuer, readable by the agent's group, where
-      # the configuration looks for it.
-      tls=$(echo "$spec" | "$YQ" '.volumes[] | select(.name == "exec-agent-tls") | .csi')
-      [ "$(echo "$tls" | "$YQ" '.driver')" = csi.cert-manager.io ] || fail "the serving certificate does not come from cert-manager's csi-driver"
-      [ "$(echo "$tls" | "$YQ" '.volumeAttributes["csi.cert-manager.io/issuer-name"] + "/" + .volumeAttributes["csi.cert-manager.io/issuer-kind"]')" = flintlock-exec-agent/Issuer ] || fail "the serving certificate's Issuer"
-      [ "$(echo "$tls" | "$YQ" '.volumeAttributes["csi.cert-manager.io/ip-sans"]')" = '${POD_IP}' ] || fail "the serving certificate does not name the pod's IP"
-      [ "$(echo "$tls" | "$YQ" '.volumeAttributes["csi.cert-manager.io/fs-group"]')" = "$(echo "$agent" | "$YQ" '.securityContext.runAsGroup')" ] || fail "the key is not readable by the agent's group"
-      dir=$(echo "$agent" | "$YQ" '.volumeMounts[] | select(.name == "exec-agent-tls") | .mountPath')
-      [ "$(q "$rendered/agent.yaml" '.tls.cert_file + " " + .tls.key_file')" = "$dir/tls.crt $dir/tls.key" ] || fail "the configuration reads the certificate from elsewhere than $dir"
-      # The API credentials the agent's in-cluster configuration finds: the
-      # pod's bound token, at the standard path, in this container only.
-      [ "$(echo "$agent" | "$YQ" '.volumeMounts[] | select(.name == "exec-agent-token") | .mountPath')" = /var/run/secrets/kubernetes.io/serviceaccount ] || fail "the Exec Agent's token is not where client-go looks"
-      # The drain guard is made in the Host Agent's namespace, where the
-      # guard Role of deploy/agent/rbac.yaml applies.
-      [ "$(q "$rendered/agent.yaml" '.guard.namespace')" = "$(obj "$fleet" DaemonSet flintlock-host-agent | "$YQ" '.metadata.namespace')" ] || fail "the guard is not made in the Host Agent's namespace"
-      [ "$(q "$rendered/agent.yaml" '.guard.namespace')" = "$(q "$deploy/agent/rbac.yaml" 'select(.kind == "Role") | .metadata.namespace')" ] || fail "the guard Role is in another namespace"
-
-  #= docs/requirements/12-cluster-fleet.md#exec-agent
-  #= type=test
-  #/ The Fleet Manifests SHALL run the Exec Agent in the Host Agent
-  #/ on every Host.
-  - name: the Exec Agent authenticates as the identity its RBAC and admission policy name, and the claim group is marked provisional
+  - name: the host-services container authenticates as the identity its RBAC and admission policy name, and no container runs as the user id flintlockd admits
     run: |
       ds=$(obj "$fleet" DaemonSet flintlock-host-agent)
       sa="system:serviceaccount:$(echo "$ds" | "$YQ" '.metadata.namespace'):$(echo "$ds" | "$YQ" '.spec.template.spec.serviceAccountName')"
       echo "the Host Agent authenticates as $sa"
       [ -n "$(obj "$fleet" ServiceAccount flintlock-host-agent)" ] || fail "no ServiceAccount flintlock-host-agent"
-      # The admission policy is deploy/agent's, as internal/agent's tests
-      # load it, matching that identity; the Pod Provider's, which refuses
-      # the Exec Agent's change to its own Node, is not deployed.
+      # The admission policy is deploy/host-agent's, as internal/hostservices'
+      # tests load it, matching that identity; the Pod Provider's, which
+      # refuses any change to a Host's own Node, is not deployed.
       policies=$(q "$fleet" 'select(.kind == "ValidatingAdmissionPolicy") | .metadata.name' | xargs)
-      [ "$policies" = flintlock-exec-agent-own-host ] || fail "admission policies: $policies"
+      [ "$policies" = flintlock-host-services-own-host ] || fail "admission policies: $policies"
       for k in ValidatingAdmissionPolicy ValidatingAdmissionPolicyBinding; do
-        a=$(obj "$fleet" "$k" flintlock-exec-agent-own-host | "$YQ" -o json -I0 'sort_keys(..)')
-        b=$(obj "$deploy/agent/admission-policy.yaml" "$k" flintlock-exec-agent-own-host | "$YQ" -o json -I0 'sort_keys(..)')
-        [ -n "$b" ] && [ "$a" = "$b" ] || fail "$k is not deploy/agent/admission-policy.yaml's as tested"
+        a=$(obj "$fleet" "$k" flintlock-host-services-own-host | "$YQ" -o json -I0 'sort_keys(..)')
+        b=$(obj "$deploy/host-agent/host-services-admission-policy.yaml" "$k" flintlock-host-services-own-host | "$YQ" -o json -I0 'sort_keys(..)')
+        [ -n "$b" ] && [ "$a" = "$b" ] || fail "$k is not deploy/host-agent/host-services-admission-policy.yaml's as tested"
       done
-      match=$(obj "$fleet" ValidatingAdmissionPolicy flintlock-exec-agent-own-host | "$YQ" '.spec.matchConditions[] | select(.name == "exec-agent") | .expression')
+      match=$(obj "$fleet" ValidatingAdmissionPolicy flintlock-host-services-own-host | "$YQ" '.spec.matchConditions[] | select(.name == "host-agent") | .expression')
       [ "$match" = "request.userInfo.username == '$sa'" ] || fail "the policy matches $match, not $sa"
-      for b in ClusterRoleBinding/flintlock-exec-agent RoleBinding/flintlock-exec-agent-guard; do
-        s=$(obj "$fleet" "${b%%/*}" "${b#*/}" | "$YQ" '.subjects[] | "system:serviceaccount:" + .namespace + ":" + .name')
-        [ "$s" = "$sa" ] || fail "$b binds $s"
-      done
-      # The claim resource is the provisional test definition until battery
-      # publishes MicroVMClaim; wherever it appears it says so, and the
-      # agent's configuration and its RBAC name the same one.
-      group=$(q "$rendered/agent.yaml" '.claims.group')
-      [ "$group" = "$(q "$deploy/agent/rbac.yaml" 'select(.kind == "ClusterRole") | .rules[] | select(.resources[] == "microvmclaims") | .apiGroups[0]')" ] || fail "the configuration and the RBAC name different claim groups"
-      [ "$(q "$rendered/agent.yaml" '.claims.resource')" = "$(q "$deploy/agent/rbac.yaml" 'select(.kind == "ClusterRole") | .rules[] | select(.apiGroups[0] == "'"$group"'") | .resources[0]')" ] || fail "the configuration and the RBAC name different claim resources"
-      files=$(grep -rlF "$group" "$deploy" | sort)
-      echo "$files"
-      for f in $files; do
-        grep -q PROVISIONAL "$f" || fail "$f names the claim group $group without marking it PROVISIONAL"
-      done
-      echo "$files" | grep -q 'agent.yaml.tmpl$' || fail "the agent's configuration does not name the claim group"
-
-  #= docs/requirements/12-cluster-fleet.md#exec-agent
-  #= type=test
-  #/ The Exec Agent SHALL reach `flintlockd` only through the local
-  #/ endpoint of HI-042, and the Fleet Manifests SHALL run it as the user id
-  #/ that HI-063 admits there and run no other container as that user id.
-  - name: the Exec Agent runs as the user id flintlockd admits, reaches it locally, and nothing else runs as that id
-    run: |
-      spec=$(obj "$fleet" DaemonSet flintlock-host-agent | "$YQ" '.spec.template.spec')
-      agent=$(echo "$spec" | "$YQ" '.containers[] | select(.name == "exec-agent") | .securityContext')
-      uid=$(echo "$agent" | "$YQ" '.runAsUser')
-      echo "the Exec Agent's user id: $uid"
-      case $uid in '' | null | 0 | *[!0-9]*) fail "'$uid' is not a non-root user id" ;; esac
-      # Not an id that images default to, the flr image's own 65532 among
-      # them, or a container that leaves its user unset could share it.
-      case $uid in 65532 | 65534 | 1000 | 101) fail "$uid is an image's default user id" ;; esac
-      [ "$(echo "$agent" | "$YQ" '.runAsNonRoot')" = true ] || fail "the Exec Agent does not set runAsNonRoot"
-      # HI-063: the Host Image admits POD_PROVIDER_UID of the Host
-      # configuration file, its default when a pool's host.conf sets none.
+      s=$(obj "$fleet" ClusterRoleBinding flintlock-host-services | "$YQ" '.subjects[] | "system:serviceaccount:" + .namespace + ":" + .name')
+      [ "$s" = "$sa" ] || fail "ClusterRoleBinding/flintlock-host-services binds $s"
+      # No container of the Host Agent reaches flintlockd: none runs as the
+      # user id the Host Image admits to it (HI-063), by default or in any
+      # pool, and every container names its own user id.
+      spec=$(echo "$ds" | "$YQ" '.spec.template.spec')
       defaults=$root/image/rootfs/usr/share/flr/host.conf.defaults
-      img=$(sed -n 's/^POD_PROVIDER_UID=\([0-9][0-9]*\)$/\1/p' "$defaults" | tail -n 1)
-      [ "$img" = "$uid" ] || fail "the Host Image admits '$img' by default, the manifests run the Exec Agent as $uid"
+      admitted=$(sed -n 's/^POD_PROVIDER_UID=\([0-9][0-9]*\)$/\1/p' "$defaults" | tail -n 1)
       for md in $(q "$capi" 'select(.kind == "MachineDeployment") | .metadata.name'); do
         ref=$(obj "$capi" MachineDeployment "$md" | "$YQ" '.spec.template.spec.bootstrap.configRef.name')
         pool=$(obj "$capi" KubeadmConfigTemplate "$ref" | "$YQ" '.spec.template.spec.files[] | select(.path == "/etc/flintlock-runner/host.conf") | .content' | sed -n 's/^POD_PROVIDER_UID=\([0-9]*\)$/\1/p' | tail -n 1)
-        [ -z "$pool" ] || [ "$pool" = "$uid" ] || fail "$md: host.conf admits $pool, the manifests run the Exec Agent as $uid"
+        admitted="$admitted $pool"
       done
-      # The agent is told the Host's own id, from host.env, and refuses to
-      # start as any other, so a Host that admits another fails loudly.
-      [ "$(q "$rendered/agent.yaml" '.flintlockd_user_id')" = "$(sed -n 's/^FLR_POD_PROVIDER_UID=//p' "$work/host.env")" ] || fail "flintlockd_user_id is not the Host's POD_PROVIDER_UID"
-      sed 's/^FLR_POD_PROVIDER_UID=.*/FLR_POD_PROVIDER_UID=20000/' "$work/host.env" >"$work/host-20000.env"
-      FLR_TEMPLATES=$templates FLR_HOST_ENV=$work/host-20000.env FLR_OUT=$work/rendered-20000 sh "$templates/render.sh" >/dev/null
-      [ "$(q "$work/rendered-20000/agent.yaml" '.flintlockd_user_id')" = 20000 ] || fail "flintlockd_user_id does not follow the Host's POD_PROVIDER_UID"
-      for bad in 0 '' root; do
-        sed "s/^FLR_POD_PROVIDER_UID=.*/FLR_POD_PROVIDER_UID=$bad/" "$work/host.env" >"$work/host-bad-uid.env"
-        if FLR_TEMPLATES=$templates FLR_HOST_ENV=$work/host-bad-uid.env FLR_OUT=$work/rendered-bad-uid sh "$templates/render.sh" 2>/dev/null; then
-          fail "render.sh accepted FLR_POD_PROVIDER_UID='$bad'"
-        fi
-      done
-      # Only through the local endpoint of HI-042.
-      [ "$(q "$rendered/agent.yaml" '.flintlockd')" = 127.0.0.1:9090 ] || fail "flintlockd is not the Host Image's loopback endpoint"
-      # The id is set on this container only: the pod sets none, no user
-      # namespace changes what the Host sees, and every other container
-      # names its own, none of them this one; an unset one would take its
-      # image's, which could be.
       [ "$(echo "$spec" | "$YQ" '.securityContext.runAsUser // "unset"')" = unset ] || fail "the pod sets a user id for every container"
-      [ "$(echo "$spec" | "$YQ" '.hostUsers // true')" = true ] || fail "a user namespace would change the id the Host sees"
-      others=$(echo "$spec" | "$YQ" '(.containers + .initContainers)[] | select(.name != "exec-agent") | .name + "=" + ((.securityContext.runAsUser // "unset") | tostring)')
-      echo "$others"
-      [ -n "$others" ] || fail "no other container to compare"
-      echo "$others" | while IFS== read -r c u; do
+      users=$(echo "$spec" | "$YQ" '(.containers + .initContainers)[] | .name + "=" + ((.securityContext.runAsUser // "unset") | tostring)')
+      echo "$users"
+      echo "$users" | while IFS== read -r c u; do
         [ "$u" != unset ] || fail "$c does not name its user id"
-        [ "$u" != "$uid" ] || fail "$c runs as the Exec Agent's user id"
+        for a in $admitted; do [ "$u" != "$a" ] || fail "$c runs as $a, the user id flintlockd admits"; done
       done
-      # What it reads is readable by that id: the token mode 0444, the
-      # serving key by its group.
-      [ "$(echo "$spec" | "$YQ" '.volumes[] | select(.name == "exec-agent-token") | .projected.defaultMode')" = 292 ] || fail "the token is not mode 0444"
-      [ "$(echo "$agent" | "$YQ" '.runAsGroup')" = "$uid" ] || fail "the Exec Agent's group is not its user id"
 
   #= docs/requirements/11-host-image.md#image-networking
   #= type=test
@@ -823,11 +702,12 @@ checks:
       [ -n "$img" ] || fail "the Host Image names no HOST_SERVICE_UIDS default"
       echo "the Host Image's default Host Service user ids: $img"
       spec=$(obj "$fleet" DaemonSet flintlock-host-agent | "$YQ" '.spec.template.spec')
-      # The Host Services are every container but the Exec Agent and the
-      # Host Agent's own scripts: the init containers and the pre-warm
-      # containers, which run prewarm.sh on the configured lists as nobody
-      # and run nothing a Job supplies.
-      services=$(echo "$spec" | "$YQ" '.containers[] | select(.name != "exec-agent" and (.name | test("^prewarm-") | not)) | .name + "=" + ((.securityContext.runAsUser // "unset") | tostring)')
+      # The Host Services are every container but host-services, which
+      # runs flr and reaches only the API server, and the Host Agent's own
+      # scripts: the init containers and the pre-warm containers, which run
+      # prewarm.sh on the configured lists as nobody and run nothing a Job
+      # supplies.
+      services=$(echo "$spec" | "$YQ" '.containers[] | select(.name != "host-services" and (.name | test("^prewarm-") | not)) | .name + "=" + ((.securityContext.runAsUser // "unset") | tostring)')
       prewarm=$(echo "$spec" | "$YQ" '.containers[] | select(.name | test("^prewarm-")) | .command | join(" ")' | sort -u)
       if echo "$prewarm" | grep -qv '/etc/flr/templates/prewarm.sh '; then fail "a prewarm- container runs something other than prewarm.sh: $prewarm"; fi
       echo "$services"
@@ -846,11 +726,10 @@ checks:
         [ -z "$pool" ] || [ "$(echo "$pool" | tr ',' '\n' | grep -v -- - | sort -n -u | xargs)" = "$manifest" ] ||
           fail "$md: host.conf drops traffic from $pool, the Host Services run as $manifest"
       done
-      # The Exec Agent's id is none of them, or its own traffic to
-      # flintlockd would be dropped.
-      uid=$(obj "$fleet" DaemonSet flintlock-host-agent | "$YQ" '.spec.template.spec.containers[] | select(.name == "exec-agent") | .securityContext.runAsUser')
-      [ -n "$uid" ] || fail "no Exec Agent user id"
-      for s in $singles; do [ "$s" != "$uid" ] || fail "the Exec Agent's user id $uid is a Host Service's"; done
+      # host-services' id is none of them: it runs no Host Service.
+      uid=$(obj "$fleet" DaemonSet flintlock-host-agent | "$YQ" '.spec.template.spec.containers[] | select(.name == "host-services") | .securityContext.runAsUser')
+      [ -n "$uid" ] || fail "no host-services user id"
+      for s in $singles; do [ "$s" != "$uid" ] || fail "host-services' user id $uid is a Host Service's"; done
 
   #= docs/requirements/11-host-image.md#kernel-and-kvm
   #= type=test
@@ -920,7 +799,7 @@ checks:
   - name: every third-party image is referenced by digest
     run: |
       own=ghcr.io/phoban01/flintlock-runner/flr
-      images=$( (q "$fleet" '.. | select(has("image")) | .image'; q "$capi" '.. | select(has("image")) | .image'; q "$runner" '.. | select(has("image")) | .image'; q "$rendered/agent.yaml" '.guard.image') | sort -u)
+      images=$( (q "$fleet" '.. | select(has("image")) | .image'; q "$capi" '.. | select(has("image")) | .image'; q "$runner" '.. | select(has("image")) | .image') | sort -u)
       echo "$images"
       [ -n "$images" ] || fail "no images found"
       n=0
@@ -931,7 +810,7 @@ checks:
         n=$((n + 1))
         echo "$i" | grep -Eq '@sha256:[0-9a-f]{64}$' || fail "$i is not pinned by digest"
       done
-      [ "$n" -ge 6 ] || fail "expected at least six third-party images, found $n"
+      [ "$n" -ge 5 ] || fail "expected at least five third-party images, found $n"
       # This project's images appear in image fields only, where the
       # Release's `kustomize edit set image` rewrites them to digests
       # (KF-143); anywhere else would fail the release render.

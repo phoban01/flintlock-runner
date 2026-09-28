@@ -1,7 +1,7 @@
 #!/bin/sh
 # render.sh: the Host Agent's first init container. It turns the templates of
 # the ConfigMap flintlock-host-agent-config into the configuration files of
-# the Exec Agent and of every enabled Host Service, for this Host.
+# `flr host-services` and of every enabled Host Service, for this Host.
 #
 # The Host's own settings come from /run/flr/host.env, which the Host Image's
 # flr-host-config unit writes at every boot from the Host configuration file
@@ -45,13 +45,7 @@ is_ipv4() {
 
 [ -r "$host_env" ] || die "$host_env is missing: flr-host-config has not run on this Host"
 gateway=$(get "$host_env" FLR_GATEWAY)
-# POD_PROVIDER_UID of the Host configuration file: the one user id the Host
-# Image admits to flintlockd (HI-063), which the Exec Agent has to run as.
-agent_uid=$(get "$host_env" FLR_POD_PROVIDER_UID)
 is_ipv4 "$gateway" || die "FLR_GATEWAY '$gateway' in $host_env is not an IPv4 address"
-if ! is_uint "$agent_uid" || [ "$agent_uid" -eq 0 ]; then
-  die "FLR_POD_PROVIDER_UID '$agent_uid' in $host_env is not a user id other than root"
-fi
 
 mkdir -p "$out"
 
@@ -126,9 +120,9 @@ fi
 # block NAME prints the lines a @BLOCK:NAME@ line expands to.
 block() {
   case $1 in
-  agent-host-services)
-    # One fragment per enabled Host Service component (KF-178, KF-179).
-    set -- "$templates"/agent.host-service.*.yaml
+  host-services)
+    # One fragment per enabled Host Service component (KF-194).
+    set -- "$templates"/host-service.*.yaml
     if [ -e "$1" ]; then
       echo "host_services:"
       cat "$@"
@@ -224,9 +218,7 @@ render() {
       block "$name" >>"$tmp"
       ;;
     *)
-      printf '%s\n' "$line" | sed \
-        -e "s|@BRIDGE_GATEWAY@|$gateway|g" \
-        -e "s|@FLINTLOCKD_USER_ID@|$agent_uid|g" >>"$tmp"
+      printf '%s\n' "$line" | sed -e "s|@BRIDGE_GATEWAY@|$gateway|g" >>"$tmp"
       ;;
     esac
   done <"$1"
@@ -247,4 +239,4 @@ done
 # The gateway, for the pre-warm containers.
 printf '%s\n' "$gateway" >"$out/gateway"
 chmod 0444 "$out/gateway"
-echo "render: bridge gateway $gateway, flintlockd user id $agent_uid"
+echo "render: bridge gateway $gateway"

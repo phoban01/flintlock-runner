@@ -1,0 +1,37 @@
+# RBAC of the Host Agent's host-services container (`flr host-services`),
+# which publishes where the Host Services listen on its Host's Node (KF-194).
+#
+# The container authenticates as the Host Agent's ServiceAccount,
+# `flintlock-host-agent` in `flintlock-system`. This file is only what it is
+# allowed to do, and internal/hostservices' tests run it as this
+# ServiceAccount with exactly these rules, so a call the code makes and this
+# file lacks fails a test.
+#
+# RBAC cannot say "this Host's Node": one DaemonSet shares one
+# ServiceAccount. host-services-admission-policy.yaml beside this file
+# narrows the rule to the annotations of the container's own Host's Node in
+# the API server.
+#
+# The container patches the Node and does nothing else with it: it never
+# reads, creates, deletes or lists Nodes, and never writes their status.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: flintlock-host-services
+rules:
+  - apiGroups: [""]
+    resources: ["nodes"]
+    verbs: ["patch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: flintlock-host-services
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: flintlock-host-services
+subjects:
+  - kind: ServiceAccount
+    name: flintlock-host-agent
+    namespace: flintlock-system

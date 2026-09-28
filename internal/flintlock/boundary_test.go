@@ -86,14 +86,13 @@ func repoRoot(t *testing.T) string {
 // The Pod Provider of a cluster fleet is on this side too: it is the process
 // on a Host that creates a MicroVM for each pod and deletes it with the pod
 // (KF-020, KF-027), and it is never linked into a Runner's code path. The
-// Exec Agent's test environment plays battery, seeding each fake Host with
-// the MicroVM a claim is bound to; the Exec Agent itself is not exempt.
-// Everything else in the module is the Runner.
+// test double of battery-operator's Exec Agent (internal/testing/
+// fakeexecagent) is not exempt: the tests that use it seed the fake Host
+// themselves. Everything else in the module is the Runner.
 var poolManagerSide = []string{
 	filepath.Join("internal", "flintlock", "fake"),
 	filepath.Join("internal", "poolmgr"),
 	filepath.Join("internal", "kubelet"),
-	filepath.Join("internal", "agent", "agenttest"),
 }
 
 // runnerSideFiles lists every non-test Go file in the module that is not

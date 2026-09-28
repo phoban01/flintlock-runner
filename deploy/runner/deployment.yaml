@@ -44,8 +44,8 @@ spec:
         app.kubernetes.io/component: runner
     spec:
       serviceAccountName: flintlock-runner
-      # The Runner talks to the API server for its claims, and presents
-      # this token to the Exec Agents (KF-186).
+      # The Runner talks to the API server for its claims, and requests a
+      # claim token for each claim, which the Exec Agents admit (KF-186).
       automountServiceAccountToken: true
       #= docs/requirements/12-cluster-fleet.md#cluster-runner
       #/ The Fleet Manifests SHALL give the Runner's pod a termination

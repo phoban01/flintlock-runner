@@ -1,0 +1,102 @@
+# Admission policy of the Host Agent's host-services container
+# (`flr host-services`).
+#
+# host-services-rbac.yaml has to grant every Host's Host Agent the same
+# cluster-wide rule, because RBAC cannot say "this Host's Node". This policy
+# says it, in the API server: a Host Agent may change only the Host Service
+# annotations, `host-service.gitlab-runner.flintlock.dev/<name>`, of its own
+# Host's Node, and nothing else of any Node. A compromised Host cannot point
+# another Host's Jobs at its own services.
+#
+# Which Host a request comes from is read from the requester's identity, not
+# from anything the request says. The container authenticates with the bound
+# ServiceAccount token the kubelet projects into it, and the API server puts
+# the node that pod runs on into the token's user information as the extra
+# `authentication.kubernetes.io/node-name` (the ServiceAccountTokenPodNodeInfo
+# feature, generally available since Kubernetes 1.32). A request by the Host
+# Agent's ServiceAccount whose identity carries no node, a legacy Secret
+# token or a TokenRequest not bound to a pod, is refused outright.
+#
+# It matches the Host Agent's ServiceAccount, as the Pod Provider's
+# admission-policy.yaml in this directory does. The two are alternatives: the
+# Pod Provider's refuses any change to a Host's own Node, which this
+# container has to make. A fleet deploys one or the other.
+#
+# battery-operator's Exec Agent has a policy of its own for its own
+# ServiceAccount and the prefix `battery.liquidmetal-x.dev/`. The two match
+# different identities and different annotations, so both apply to the same
+# cluster.
+#
+# internal/hostservices' tests load this file unchanged and test it with real
+# bound tokens.
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: flintlock-host-services-own-host
+spec:
+  # A policy that cannot be evaluated refuses.
+  failurePolicy: Fail
+  matchConstraints:
+    # A patch is an UPDATE to admission. Every subresource whose object is
+    # the Node itself is matched, so that none is a way round.
+    resourceRules:
+      - apiGroups: [""]
+        apiVersions: ["*"]
+        operations: ["CREATE", "UPDATE", "DELETE"]
+        resources: ["nodes", "nodes/status"]
+  matchConditions:
+    - name: host-agent
+      expression: request.userInfo.username == 'system:serviceaccount:flintlock-system:flintlock-host-agent'
+  variables:
+    # The node of the requester's pod, or empty when its identity names none.
+    - name: host
+      expression: >-
+        has(request.userInfo.extra)
+        && 'authentication.kubernetes.io/node-name' in request.userInfo.extra
+        && size(request.userInfo.extra['authentication.kubernetes.io/node-name']) == 1
+        ? request.userInfo.extra['authentication.kubernetes.io/node-name'][0] : ''
+    - name: isNodeUpdate
+      expression: request.resource.resource == 'nodes' && request.?subResource.orValue('') == '' && request.operation == 'UPDATE'
+    - name: oldAnnotations
+      expression: "variables.isNodeUpdate ? oldObject.metadata.?annotations.orValue({}) : {}"
+    - name: newAnnotations
+      expression: "variables.isNodeUpdate ? object.metadata.?annotations.orValue({}) : {}"
+  validations:
+    - expression: variables.host != ''
+      reason: Forbidden
+      message: >-
+        the Host Agent's identity names no Host: it has to authenticate with
+        the bound ServiceAccount token of a pod scheduled to its Host's Node
+    # A Node is only ever updated, and only the Host's own, and never
+    # through its status.
+    - expression: variables.isNodeUpdate && oldObject.metadata.name == variables.host
+      reason: Forbidden
+      messageExpression: >-
+        'the Host Agent of ' + variables.host + ' may change no Node but ' + variables.host
+        + ', and that only by its Host Service annotations'
+    # Of that Node, only the Host Service annotations change: its labels,
+    # owners, finalizers and spec stay as they were (its status is not
+    # written by an update of the Node itself), and every other annotation
+    # keeps its value.
+    - expression: >-
+        !variables.isNodeUpdate || (
+          object.metadata.?labels.orValue({}) == oldObject.metadata.?labels.orValue({})
+          && object.metadata.?ownerReferences.orValue([]) == oldObject.metadata.?ownerReferences.orValue([])
+          && object.metadata.?finalizers.orValue([]) == oldObject.metadata.?finalizers.orValue([])
+          && object.?spec.orValue({}) == oldObject.?spec.orValue({})
+          && variables.newAnnotations.all(k, k.startsWith('host-service.gitlab-runner.flintlock.dev/')
+               || (k in variables.oldAnnotations && variables.oldAnnotations[k] == variables.newAnnotations[k]))
+          && variables.oldAnnotations.all(k, k.startsWith('host-service.gitlab-runner.flintlock.dev/')
+               || k in variables.newAnnotations))
+      reason: Forbidden
+      messageExpression: >-
+        'the Host Agent of ' + variables.host + ' may change only the
+        host-service.gitlab-runner.flintlock.dev/ annotations of its Node'
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: flintlock-host-services-own-host
+spec:
+  policyName: flintlock-host-services-own-host
+  validationActions: [Deny]
