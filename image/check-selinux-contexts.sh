@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# Checks the SELinux labels of the paths the Host Agent mounts (HI-065):
+# Checks the SELinux labels of the paths the Host Agent and the Exec Agent
+# mount (HI-065, HI-072):
 # that the boot scripts label what they write before it takes its name,
 # that tmpfiles.d and flr-cache restore the labels, that the module names
 # them and gives no container domain anything, and, where the policy with
@@ -20,6 +21,13 @@
 #/ Agent's containers can read them, and the Host Service cache directory so
 #/ that they can write it, under the base image's SELinux policy and without
 #/ changing the domain of any container or the label of any other path.
+#
+#= docs/requirements/11-host-image.md#kernel-and-kvm
+#= type=test
+#/ and SHALL label that directory and every file in
+#/ it so that the Exec Agent's containers can write them and `flintlockd` can
+#/ read them, under the base image's SELinux policy and without changing the
+#/ domain of any container.
 set -uo pipefail
 work=${1:-$(mktemp -d)}
 libexec=${2:-/usr/libexec/flr}
@@ -141,7 +149,9 @@ else
     /run/flr/not-ready.d=$ro /run/flr/not-ready.d/flr-kvm=$ro /run/flr/not-ready.d/.flr-kvm.Ab12Cd=$ro \
     /var/lib/flintlock-runner/cache=$rw /var/lib/flintlock-runner/cache/buildkit=$rw \
     /run/flr=$run_t /run/flr/dnsmasq.conf=$run_t /run/flr/guest-firewall.nft=$run_t /run/flr/kubelet.env=$run_t \
-    /run/flr/host.env.bak=$run_t /var/lib/flintlock-runner=system_u:object_r:var_lib_t:s0; do
+    /run/flr/host.env.bak=$run_t /var/lib/flintlock-runner=system_u:object_r:var_lib_t:s0 \
+    /etc/battery/flintlockd=$rw /etc/battery/flintlockd/tls.crt=$rw /etc/battery/flintlockd/tls.key=$rw \
+    /etc/battery/flintlockd/client-ca.crt=$rw /etc/battery/flintlockd/.tls.crt.123456=$rw /etc/battery=system_u:object_r:etc_t:s0; do
     p=${pl%%=*} want=${pl#*=}
     got=$(lookup "$p")
     if [ "$got" = "$want" ]; then ok "$p is labelled $want"; else fail "$p is labelled '$got', want $want"; fi

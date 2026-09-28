@@ -15,7 +15,7 @@ guest firewall at boot. Nothing is pushed to a Host after it boots.
 | `build/` | The build steps the Containerfile runs |
 | `rootfs/` | Copied to `/`: units, `/usr/libexec/flr` scripts, configuration |
 | `selinux/` | The policy module |
-| `check.sh`, `check-thin-pool.sh`, `check-flintlockd-access.sh`, `check-host-service-egress.sh`, `check-selinux-contexts.sh` | The check stage, run inside the built image; all but `check.sh` run in `make image-lint` too |
+| `check.sh`, `check-thin-pool.sh`, `check-flintlockd-access.sh`, `check-flintlockd-certs.sh`, `check-guest-isolation.sh`, `check-host-service-egress.sh`, `check-selinux-contexts.sh` | The check stage, run inside the built image; all but `check.sh` run in `make image-lint` too |
 | `check-labels.sh`, `lint.sh` | Checks that run outside the image |
 | `publish-ami.sh` | AMI publishing, on request only |
 
@@ -24,7 +24,7 @@ guest firewall at boot. Nothing is pushed to a Host after it boots.
 ```sh
 make image          # build for x86_64; the check stage is part of the build
 make image-check    # run the checks again in the built image, compare its labels
-make image-lint     # bash -n, shellcheck, digest pin, thin-pool, flintlockd access, Host Service egress and SELinux context cases; no build
+make image-lint     # bash -n, shellcheck, digest pin, thin-pool, flintlockd access and certificate, guest isolation, Host Service egress and SELinux context cases; no build
 ```
 
 `make image` uses podman when it is installed and docker otherwise
@@ -72,22 +72,25 @@ has it.
 | `flr-kvm` | refuses unless `/dev/kvm` opens for reading and writing | HI-011 |
 | `flr-thin-pool` | creates the thin pool once; leaves an existing one alone | HI-020 to HI-023 |
 | `flr-cache` | mounts the Host Service cache volume and labels it for the Host Agent | HI-024, HI-065 |
-| `flr-network` | bridge `flbr0`, forwarding, NAT, guest firewall, `flintlockd` for the Pod Provider's user id only, the Host Services' egress | HI-030, HI-032 to HI-037, HI-063, HI-064 |
+| `flr-network` | bridge `flbr0`, forwarding, NAT, guest firewall, `flintlockd`'s endpoint and who may connect to it, the Host Services' egress | HI-030, HI-032 to HI-037, HI-064, HI-067, HI-069, HI-070, HI-075 to HI-077 |
 | `flr-dnsmasq` | DHCP and DNS on the bridge | HI-031 |
+| `flr-flintlockd-certs` | makes `/etc/battery/flintlockd` for the Exec Agent, owned by its user id and labelled for its container | HI-072 |
 | `containerd` | one containerd for the kubelet and for `flintlockd` | HI-040 |
-| `flintlockd` | `Requires=` the KVM gate, the thin pool, the bridge and containerd | HI-040 to HI-044 |
-| `flr-kubelet-config` | writes the kubelet's labels and reservation | HI-060, HI-061 |
+| `flintlockd.path` | starts `flintlockd` once the Exec Agent has written its certificates | HI-071 |
+| `flintlockd` | `Requires=` the KVM gate, the thin pool, the bridge, the certificate directory and containerd; serves mutual TLS on the Host's internal address; a stop or restart leaves the MicroVMs running | HI-040, HI-041, HI-043, HI-067, HI-068, HI-073 |
+| `flr-flintlockd-restart.path` | restarts `flintlockd` when its serving certificate or client CA bundle changes | HI-071, HI-072 |
+| `flr-kubelet-config` | writes the kubelet's labels, battery-operator's Host label among them, and its reservation | HI-060, HI-061, HI-074 |
 | `kubelet` | started by `kubeadm join` from the bootstrap configuration | |
 
 `bootc-fetch-apply-updates.timer` and its service are masked (HI-062).
 
-`flintlockd` v0.15.1 can listen on TCP only, so its local endpoint is
-`127.0.0.1:9090`, without TLS or a token, with the exec API on and the HTTP
-gateway off. The Pod Provider reaches it there because the Host Agent runs in
-the Host's network namespace. A guest cannot: the guest firewall drops
-everything that arrives on the bridge except DHCP, DNS and the Host Service
-ports on the gateway. Of the Host's own processes, only the Pod Provider's
-user id can: see [The Pod Provider's user id](#the-pod-providers-user-id).
+`flintlockd` serves its whole API, the exec API included, on port 9090 of
+the Host's internal address with mutual TLS, for battery in the Operator's
+pod and for the Exec Agent on the Host; the HTTP gateway stays off. Both
+come from battery-operator: see [flintlockd's clients](#flintlockds-clients)
+and [flintlockd's certificates](#flintlockds-certificates). A guest cannot
+reach it: the guest firewall drops everything that arrives on the bridge
+except DHCP, DNS and the Host Service ports on the gateway.
 
 ## Host configuration file
 
@@ -103,14 +106,15 @@ reads a credential from it or from user-data.
 |-----|---------|---------|
 | `GUEST_SUBNET` | `172.31.0.0/16` | The bridge's IPv4 subnet, /29 or larger. The first address is the gateway. Keep it clear of the cluster's node, pod and service ranges |
 | `THIN_POOL_DEVICE` | empty | Block device for the thin pool. Empty means detect the unused instance-store disk |
-| `PROTECTED_CIDRS` | empty | Comma-separated IPv4 CIDRs no guest may reach: the node and pod CIDRs of the cluster, and anything else |
+| `PROTECTED_CIDRS` | empty | Comma-separated IPv4 CIDRs no guest may reach, by address or through a Service: the node, pod and Service CIDRs of the cluster, and anything else. Empty protects nothing off the Host, and `flr-network` logs a warning. See [Networking notes](#networking-notes) |
 | `HOST_RESERVE_VCPU` | `2` | CPUs the Host's own Node offers to pods |
 | `HOST_RESERVE_MEMORY_MB` | `4096` | Memory the Host's own Node offers to pods |
 | `HOST_SERVICE_PORTS` | `1234,3000,5000,3128` | TCP ports guests may reach on the gateway |
 | `HOST_CONTROL_PORTS` | `9090,8090,10248,10250,10255,10256,10260,10270,9252,1338` | The Host's own ports, dropped for guests by name as well as by the final drop |
 | `CACHE_VOLUME_PERCENT` | `15` | Share of the volume group for the cache volume, when first created |
-| `POD_PROVIDER_UID` | `10250` | The one user id that may connect to `flintlockd`; 1 to 4294967294, never 0. See below |
-| `HOST_SERVICE_UIDS` | `101,1000,10001,10002,100000-165535` | The user ids of the Host Services, ids and ranges `LOW-HIGH`, which may reach neither the metadata service nor the control ports; never 0 or the Pod Provider's, no overlaps. See below |
+| `EXEC_AGENT_UID` | `65532` | The one user id of the Host's own processes that may connect to `flintlockd`, and the owner of `/etc/battery/flintlockd`: battery-operator's Exec Agent's; 1 to 4294967294, never 0. See below |
+| `FLINTLOCKD_CLIENT_CIDRS` | empty | Comma-separated IPv4 CIDRs from off the Host that may connect to `flintlockd`: the Operator's pod network, where battery runs. Empty admits none, so battery cannot reach the Host. See below |
+| `HOST_SERVICE_UIDS` | `101,1000,10001,10002,100000-165535` | The user ids of the Host Services, ids and ranges `LOW-HIGH`, which may reach neither the metadata service nor the control ports; never 0 or the Exec Agent's, no overlaps. See below |
 
 No port may be both a Host Service port and a control port.
 
@@ -121,7 +125,8 @@ files:
     permissions: "0644"
     content: |
       GUEST_SUBNET=10.200.0.0/16
-      PROTECTED_CIDRS=10.0.0.0/16,192.168.0.0/16
+      PROTECTED_CIDRS=10.0.0.0/16,192.168.0.0/16,10.96.0.0/12
+      FLINTLOCKD_CLIENT_CIDRS=192.168.0.0/16
       HOST_RESERVE_VCPU=2
       HOST_RESERVE_MEMORY_MB=4096
 ```
@@ -147,60 +152,121 @@ volume (`CACHE_VOLUME_PERCENT`, ext4, mounted at
 `/var/lib/flintlock-runner/cache`) and 4% left free for the pool's
 autoextension.
 
-### The Pod Provider's user id
+### flintlockd's clients
 
-`flintlockd` has no authentication of its own, and a loopback port is open
-to every process in the Host's network namespace, which includes every pod
-with host networking. So the guest firewall (`flr-network`, table
-`inet flr`) has an output chain with one rule:
+battery creates and deletes MicroVMs through every Host's `flintlockd`, from
+the Operator's pod, and battery-operator's Exec Agent relays exec requests
+to its own Host's `flintlockd` (battery-operator ADR 0002). `flintlockd`
+therefore serves on the Host's internal address, and each client presents a
+certificate from the `flintlockd` client CA (HI-067, HI-068). Every contract
+here is battery-operator's, and the Host Image follows it exactly:
+
+| What | Value | Where battery-operator sets it |
+|------|-------|--------------------------------|
+| Endpoint | the Host's internal address, port 9090 | `config/exec-agent/daemonset.yaml`: `--flintlockd=$(HOST_IP):9090` |
+| Certificate directory | `/etc/battery/flintlockd` | the same: `--flintlockd-cert-dir`; `DefaultFlintlockdCertDir` in `internal/execagent/config.go` |
+| Files | `tls.crt`, `tls.key` (mode 0600), `client-ca.crt`; `tls.crt` written last | `FlintlockdCertFile`, `FlintlockdKeyFile`, `FlintlockdClientCAFile` in `internal/execagent/certificates.go` |
+| The Exec Agent's user id | 65532 | the Exec Agent image's user (`.dagger/main.go`); the DaemonSet sets no `runAsUser` |
+
+The internal address is the IPv4 address of the interface that carries the
+default route, which `flr-network` writes to `/run/flr/flintlockd.env` at
+boot. It is the address the kubelet reports as the Node's `InternalIP`, and
+so the Exec Agent's `$(HOST_IP)` and the address its serving certificate
+names, unless the kubelet is given another with `--node-ip`; a Host where
+the two differ has no `flintlockd` where the Exec Agent looks, and the
+agent reports it not ready.
+
+`flintlockd` admits any certificate its client CA signed, so the firewall
+(`flr-network`, table `inet flr`) narrows who may try to the two clients
+there are. The input chain's first rules, for connections from off the
+Host:
 
 ```
-oifname "lo" tcp dport 9090 meta skuid != <POD_PROVIDER_UID> counter reject with tcp reset
+iifname != { "lo", "flbr0" } tcp dport 9090 ip saddr @flintlockd_clients counter accept
+iifname != { "lo", "flbr0" } tcp dport 9090 counter drop
+```
+
+`flintlockd_clients` is `FLINTLOCKD_CLIENT_CIDRS`: the Operator's pod
+network, the cluster's pod CIDR or the part of it the Operator's pods are
+given. It is empty by default, which admits nothing from off the Host, and
+`flr-network` logs a warning. A CNI that masquerades pod traffic to other
+Nodes presents the source Node's address instead; list the node CIDR too on
+such a cluster. IPv6 connections to the port are dropped.
+
+The Exec Agent reaches `flintlockd` on the Host's internal address over
+loopback, which the input rules leave alone, so the output chain decides:
+
+```
+oifname "lo" tcp dport 9090 meta skuid != <EXEC_AGENT_UID> counter reject with tcp reset
 ```
 
 Every connection to port 9090 over loopback, to any address, from a socket
 owned by any other user id is reset before it is made: root's, a Host
-Service's, a DaemonSet's. `flintlockd`'s replies come from port 9090 and
-pass. The rule is loaded with the rest of the firewall before `flintlockd`
-starts (HI-063).
+Service's, another DaemonSet's. `flintlockd`'s replies come from port 9090
+and pass. Both rules are loaded with the rest of the firewall before
+`flintlockd` starts (HI-069, HI-070).
 
-This is the contract the Fleet Manifests follow (KF-135). On the design of
-battery's claim resources the process admitted is the Exec Agent, not the
-Pod Provider (KF-171): `deploy/` runs it as this user id, and the key keeps
-its name. The Exec Agent listens on port 10270, which is in
-`HOST_CONTROL_PORTS`, so guests and the Host Services cannot reach it
-either.
+- 65532 is also the user of many distroless images, so the rule admits any
+  process of the Host that runs as it, not the Exec Agent alone. Each still
+  has to present a certificate from the client CA, and the Host Services'
+  ids may not be 65532. A dedicated `runAsUser` on battery-operator's
+  DaemonSet, with `EXEC_AGENT_UID` set to match, would narrow it.
+- The Exec Agent runs in the Host's network namespace, which rules out a
+  user namespace for its pod, so the id in the pod is the id the Host's
+  kernel sees.
+- An operator who needs to talk to `flintlockd` on a Host by hand needs a
+  client certificate from the client CA and runs as that user id, for
+  example with `setpriv --reuid=65532 --regid=65532 --clear-groups`.
 
-- The Pod Provider's container runs with `runAsUser` equal to
-  `POD_PROVIDER_UID`, `10250` unless the Host configuration file says
-  otherwise, and with `runAsNonRoot: true`. A value changed in the
-  bootstrap configuration has to be changed in the manifests too; nothing
-  checks that the two agree except the Virtual Node, which stays not ready
-  because `flintlockd` refuses the provider.
-- No other container of the Host Agent, and nothing else scheduled onto a
-  Host, runs as that user id. The id is chosen to be outside the ranges base
-  images default to (`65532` for distroless, `65534` for nobody) and
-  outside systemd's dynamic users; keep it that way.
-- The Host Agent runs in the Host's network namespace (KF-071), which
-  rules out a user namespace for the pod, so the id in the pod is the id
-  the Host's kernel sees. A pod in a user namespace would present a
-  different id and be refused.
-- The container needs no capability to connect: port 9090 is not privileged
-  and the rule matches the socket's owner only. Files it reads, the kubelet
-  API's certificates and its ServiceAccount token, have to be readable by
-  that user id (`fsGroup` or `defaultMode`).
+The checks render both rules for the defaults and for configured values and
+refuse `0`, anything that is not a user id and anything that is not a list
+of IPv4 CIDRs. Where unprivileged user and network namespaces with nftables
+are available (not in the image build) they also load them: a connection
+from the configured user id is let through, on the internal address and on
+loopback, and one from root or any other id refused; a connection from a
+second network namespace with an address in `FLINTLOCKD_CLIENT_CIDRS` is let
+through, and one from outside it dropped. On a booted Host,
+`nft list chain inet flr input` and `... output` show the counters.
 
-An operator who needs to talk to `flintlockd` on a Host by hand does it as
-that user id, for example with `setpriv --reuid=10250 --regid=10250
---clear-groups`. The checks render the rule for the default and for a
-configured user id and refuse `0` and anything that is not a user id; where
-unprivileged user and network namespaces are available (not in the image
-build) they also load it and show a connection from the configured id let
-through and one from root or any other id refused. On a booted Host,
-`nft list chain inet flr output` shows the rule and its counter.
+### flintlockd's certificates
 
-A unix socket with file permissions would be the better boundary, and is the
-one to move to when `flintlockd` can listen on one.
+The Exec Agent obtains `flintlockd`'s serving certificate and the client CA
+bundle through certificate signing requests the Operator signs, generates
+the key on the Host, and writes all three to `/etc/battery/flintlockd`
+(battery-operator ADR 0003). The Host Image fetches nothing and holds no
+key. It:
+
+- makes the directory at boot (`flr-flintlockd-certs`), mode 0700, owned by
+  `EXEC_AGENT_UID`, before the kubelet starts the Exec Agent, whose
+  DaemonSet mounts it as a hostPath of type `Directory`;
+- starts `flintlockd` only once `tls.crt` exists (`flintlockd.path`), and
+  `flintlockd.service` checks all three files with `ConditionPathExists=`,
+  so `flintlockd` has no `[Install]` of its own and is not started at boot
+  without them. Until then the Exec Agent finds no `flintlockd` answering
+  and reports the Host not ready;
+- restarts `flintlockd` when `tls.crt` or `client-ca.crt` changes
+  (`flr-flintlockd-restart.path`), because `flintlockd` reads them only when
+  it starts (flintlock#1235). `/usr/libexec/flr/flintlockd-certs changed`
+  labels the files again, compares their checksums with the ones
+  `flintlockd` last started with, which `flintlockd.service`'s
+  `ExecStartPre` records in `/run/flr/flintlockd-certs.loaded`, and runs
+  `systemctl try-restart flintlockd` only when they differ, so the path
+  unit's own events, labelling among them, restart nothing.
+
+A restart leaves the MicroVMs running (HI-073), and cuts every exec stream open at
+the time, which the Exec Agent reports as a failure; the reasons, from
+flintlock's source, are under "flintlockd" in
+`docs/requirements/11-host-image.md`.
+
+A `flintlockd` stopped by hand is started again by `flintlockd.path` while
+`tls.crt` exists: stop `flintlockd.path` first. When a gate fails,
+`flintlockd.path` fails with it; after fixing the cause, restart
+`flintlockd.path`.
+
+`check-flintlockd-certs.sh` checks the units and runs `flintlockd-certs`
+against stand-ins for `systemctl`, `chown` and `restorecon`. That systemd
+watches the files and starts the units as described has not been seen on a
+booted Host.
 
 ### The Host Services' user ids
 
@@ -222,7 +288,7 @@ Provider, `flintlockd` and the metrics ports on all of them. Nothing else is
 taken from the Host Services: they still reach the internet, each other on
 the gateway's Host Service ports, and nginx still reaches Athens on
 `127.0.0.1:3999`. `flintlockd`'s port is added even when
-`HOST_CONTROL_PORTS` leaves it out, and the HI-063 rule refuses it to them
+`HOST_CONTROL_PORTS` leaves it out, and the HI-070 rule refuses it to them
 anyway.
 
 The default ids are the ones the Fleet Manifests run the Host Services as:
@@ -249,7 +315,7 @@ an internet address, let through. On a booted Host,
 `flr-kubelet-config` writes `/run/flr/kubelet.env`, and
 `kubelet.service.d/20-flr.conf` appends it after kubeadm's arguments:
 
-- `--node-labels=gitlab-runner.flintlock.dev/host=true,.../image=<id>,.../firecracker=<version>,.../cloud-hypervisor=<version>`,
+- `--node-labels=gitlab-runner.flintlock.dev/host=true,.../image=<id>,.../firecracker=<version>,.../cloud-hypervisor=<version>,battery.liquidmetal-x.dev/host=true`,
   where `<id>` is the first 32 hexadecimal digits of the booted image's
   digest from `bootc status`, or `unknown` when bootc reports none.
 - `--system-reserved=cpu=…,memory=…`: the machine's capacity minus the Host
@@ -260,6 +326,10 @@ Because the flag comes last it replaces a `--node-labels` given through
 `kubeletExtraArgs` in the kubeadm join configuration. Put other labels on
 the Node through the API instead. The Host taint of KF-002 belongs in the
 join configuration and is untouched.
+
+`battery.liquidmetal-x.dev/host=true` is battery-operator's Host label
+(HI-074). The DaemonSet of its Exec Agent selects it, so every Host runs an
+Exec Agent, which then checks the Host and reports it ready or not.
 
 ## Not-ready reasons
 
@@ -284,9 +354,11 @@ A unit that refuses to let `flintlockd` start says why in a file:
 | `flr-kvm` | `KVM is unavailable: ` | `/dev/kvm` is missing, not a character device, or cannot be opened (HI-011) |
 | `flr-thin-pool` | `no thin pool device is available: ` | none named and none detected, or the named one is missing, mounted, the root disk, or not blank (HI-022, HI-023) |
 | `flr-host-config` | `host configuration invalid: ` | the Host configuration file does not parse or validate |
+| `flr-flintlockd-certs` | `cannot label /etc/battery/flintlockd` | the Exec Agent's certificate directory cannot be labelled for its container (HI-072) |
 
-The units are oneshots and do not retry. After fixing the cause,
-`systemctl restart flr-thin-pool flintlockd` (or a reboot) clears it.
+The units are oneshots and do not retry, and `flintlockd.path` fails with
+them. After fixing the cause,
+`systemctl restart flr-thin-pool flintlockd.path` (or a reboot) clears it.
 
 ## SELinux
 
@@ -325,6 +397,24 @@ argument, never calls `setenforce` and makes no domain permissive.
 
   Everything else under `/run/flr` stays `flr_run_t`, and nothing else is
   relabelled.
+- **The Exec Agent's certificate directory** (HI-072). battery-operator's
+  Exec Agent runs as `container_t` too, at a level its pod is given, and
+  writes `/etc/battery/flintlockd` through a hostPath mount. The same file
+  contexts label the directory and everything in it
+  `container_file_t:s0`, which `container_t` may read and write; `flintlockd`
+  runs as `unconfined_service_t` and reads it whatever its label.
+  `/etc/battery` itself keeps the base policy's `etc_t`. A file the agent
+  creates there inherits the type from the directory but takes its pod's
+  level, and a later pod of the DaemonSet, at other categories, could
+  neither read it nor rename over it. So `flintlockd-certs` labels the
+  directory and every file in it again at boot and whenever `tls.crt` or
+  `client-ca.crt` changes, which returns them to `s0`. The same `s0`
+  tradeoff as below applies: the key is readable by any container given
+  the directory by a hostPath mount and running as `EXEC_AGENT_UID`, which
+  the file mode (0600) and the directory's (0700) still require. A fixed
+  `seLinuxOptions.level` on battery-operator's DaemonSet, as
+  `deploy/host-agent/daemonset.yaml` has for the Host Agent, would make the
+  relabelling unnecessary but not wrong.
 
 ### Why these labels
 
@@ -383,7 +473,8 @@ into.
 
 The module compiles against the base image's policy and installs with
 `semodule -n`, and `matchpathcon` in that policy gives each path above its
-label and leaves the rest of `/run/flr` `flr_run_t`. `sesearch` on that
+label and leaves the rest of `/run/flr` `flr_run_t`; the check stage also
+looks up `/etc/battery/flintlockd` and its files. `sesearch` on that
 policy shows `container_t` (a `svirt_sandbox_domain` and an
 `mcs_constrained_type`) may read `container_ro_file_t` and not write it, and
 may read and write `container_file_t`. None of it has been enforced on a
@@ -409,7 +500,7 @@ gets no label (`pkg/cri/sbserver/container_create.go`) and runs unconfined,
 as a privileged container is meant to. kube-proxy and most CNI agents are
 privileged; the Host Agent is not.
 
-The MicroVMs are not affected. `flintlockd` v0.15.1 talks to containerd's
+The MicroVMs are not affected. `flintlockd` v0.15.2 talks to containerd's
 own API for its content store, images, snapshots and leases only; it never
 creates a containerd container or task (`NewContainer` appears only in its
 client interface and mock), and it starts Firecracker and Cloud Hypervisor
@@ -436,13 +527,31 @@ see "Known gaps" in `deploy/README.md`.
 
 ## Networking notes
 
+- A guest reaches the outside and the Host Services, and nothing of the
+  cluster (HI-075 to HI-077). The forward chain lets a guest's traffic out
+  of the primary interface only, so a pod on the Host and the tunnels of an
+  overlay network are dropped whatever their address. It drops a protected
+  destination twice: by the address in the packet, and by the address the
+  guest asked for before kube-proxy's DNAT (`ct original ip daddr`). So list
+  the cluster's Service range in `PROTECTED_CIDRS` next to its node and pod
+  ranges: a Service is then dropped wherever its pods are. The input chain
+  accepts a guest only on the gateway, and on the broadcast address for
+  DHCP.
+- `image/check-guest-isolation.sh` checks the rules, and where it can make
+  unprivileged user and network namespaces with bridges, veth and nftables
+  (a developer machine, not the image build), it loads them into a stand-in
+  Host. A stand-in guest then reaches an outside address and a Host Service
+  port on the gateway, and does not reach the Host's primary address, a pod
+  behind its own interface on the Host, or a protected Service address that
+  a DNAT rule sends outside every protected range.
 - `br_netfilter` is loaded because kubeadm's preflight wants it. With it,
   bridged guest-to-guest frames traverse the forward chain, whose last rule
   drops traffic into the bridge that is not a reply, so guests cannot reach
   each other. That is intended.
-- kube-proxy may set `route_localnet`, so the loopback endpoint of
-  `flintlockd` is protected by the input chain's drop rather than by the
-  kernel's martian check alone.
+- `flintlockd` listens on the Host's internal address only, not on
+  loopback or the bridge gateway. A guest's traffic to any address of the
+  Host arrives on the bridge and is dropped there, so it cannot reach
+  `flintlockd` even if something (kube-proxy can) sets `route_localnet`.
 - The default guest subnet is this repository's
   `config.DefaultGuestSubnet`, which is also the CIDR of an AWS default VPC.
   Override it wherever the cluster lives in that range.

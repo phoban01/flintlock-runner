@@ -36,11 +36,15 @@ data:
   unhealthySeconds: "300"
   # KF-003: the Host configuration file of HI-050, written by cloud-init at
   # first boot. Keys and defaults: image/README.md, "Host configuration
-  # file". PROTECTED_CIDRS has to name the cluster's node and pod ranges;
-  # GUEST_SUBNET has to stay clear of them and of the service range.
+  # file". PROTECTED_CIDRS has to name the cluster's node, pod and Service
+  # ranges, so that a MicroVM reaches none of them (HI-035, HI-076);
+  # GUEST_SUBNET has to stay clear of them. FLINTLOCKD_CLIENT_CIDRS is the
+  # pod network of battery-operator's Operator, the only place off the Host
+  # that may reach flintlockd (HI-069); empty, battery cannot reach the Host.
   host.conf: |
     GUEST_SUBNET=10.200.0.0/16
     THIN_POOL_DEVICE=
-    PROTECTED_CIDRS=REPLACE-node-cidr,REPLACE-pod-cidr
+    PROTECTED_CIDRS=REPLACE-node-cidr,REPLACE-pod-cidr,REPLACE-service-cidr
+    FLINTLOCKD_CLIENT_CIDRS=REPLACE-operator-pod-cidr
     HOST_RESERVE_VCPU=2
     HOST_RESERVE_MEMORY_MB=4096

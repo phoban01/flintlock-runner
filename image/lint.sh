@@ -4,8 +4,9 @@
 # Lints the Host Image sources without building anything: `bash -n` and
 # the shellcheck tool over every script, with the settings internal/fleet/scripts
 # uses for the provisioning scripts; the digest pin and the versions file;
-# the thin-pool cases against stand-in tools; the flintlockd access cases
-# (HI-063); and `systemd-analyze verify`
+# the thin-pool cases against stand-in tools; the flintlockd access and
+# certificate cases (HI-067 to HI-072), the guest isolation cases (HI-075
+# to HI-077); and `systemd-analyze verify`
 # where it is installed. FLINTLOCK_RUNNER_REQUIRE_SHELLCHECK=1, which CI
 # sets, makes a missing shellcheck a failure instead of a skip.
 set -uo pipefail
@@ -17,7 +18,7 @@ fail() {
   failed=1
 }
 
-scripts=(image/check.sh image/check-thin-pool.sh image/check-flintlockd-access.sh image/check-host-service-egress.sh
+scripts=(image/check.sh image/check-thin-pool.sh image/check-flintlockd-access.sh image/check-flintlockd-certs.sh image/check-guest-isolation.sh image/check-host-service-egress.sh
   image/check-selinux-contexts.sh image/check-labels.sh image/lint.sh image/publish-ami.sh
   image/build/*.sh image/rootfs/usr/libexec/flr/*)
 for s in "${scripts[@]}"; do
@@ -84,18 +85,41 @@ fi
 
 #= docs/requirements/11-host-image.md#image-flintlockd
 #= type=test
-#/ The Host Image SHALL admit connections to the local
-#/ `flintlockd` endpoint only from the Pod Provider's user id, which it reads
-#/ from the Host configuration file with a default when none is set, and
-#/ SHALL refuse them from every other process on the Host.
+#/ The Host Image SHALL refuse connections to `flintlockd`'s port
+#/ from the Host's own processes unless they belong to the Exec Agent's user
+#/ id, which it reads from the Host configuration file with a default when
+#/ none is set.
+#
+#= docs/requirements/11-host-image.md#image-flintlockd
+#= type=test
+#/ The Host Image SHALL drop every connection to `flintlockd`'s
+#/ port that arrives from outside the Host unless its source address is in
+#/ the Operator's pod network, which it reads from the Host configuration
+#/ file.
 # The same cases the check stage runs in the image, here against the
-# sources, so that the rendered rule is checked without a build. Like the
-# check stage, this shows the rule and not the kernel enforcing it.
+# sources, so that the rendered rules are checked without a build. Where
+# this machine has nft and unprivileged user and network namespaces they
+# also load the output chain and show what the kernel refuses.
 if image/check-flintlockd-access.sh "$tmp" image/rootfs/usr/libexec/flr image/rootfs/usr/share/flr/host.conf.defaults \
   image/rootfs/usr/lib/systemd/system/flintlockd.service; then
   echo "ok    flintlockd access cases"
 else
   fail "flintlockd access cases"
+fi
+
+#= docs/requirements/11-host-image.md#image-flintlockd
+#= type=test
+#/ The Host Image SHALL start `flintlockd` only once the serving
+#/ certificate, its key and the client CA bundle exist in
+#/ `/etc/battery/flintlockd`, and SHALL restart `flintlockd` when the serving
+#/ certificate or the client CA bundle changes.
+# The path units and flintlockd-certs, against stand-ins for systemctl,
+# chown and restorecon.
+if image/check-flintlockd-certs.sh "$tmp" image/rootfs/usr/libexec/flr image/rootfs/usr/lib/systemd/system \
+  image/rootfs/usr/share/flr/host.conf.defaults; then
+  echo "ok    flintlockd certificate cases"
+else
+  fail "flintlockd certificate cases"
 fi
 
 #= docs/requirements/11-host-image.md#image-networking
@@ -111,6 +135,32 @@ if image/check-host-service-egress.sh "$tmp" image/rootfs/usr/libexec/flr image/
   echo "ok    Host Service egress cases"
 else
   fail "Host Service egress cases"
+fi
+
+#= docs/requirements/11-host-image.md#image-networking
+#= type=test
+#/ The Host Image SHALL forward traffic from the guest subnet only
+#/ out of the Host's primary interface, and SHALL drop traffic from the guest
+#/ subnet to every other interface of the Host.
+#
+#= docs/requirements/11-host-image.md#image-networking
+#= type=test
+#/ The Host Image SHALL drop traffic from the guest subnet whose
+#/ destination before any destination NAT on the Host is in a protected CIDR.
+#
+#= docs/requirements/11-host-image.md#image-networking
+#= type=test
+#/ The Host Image SHALL drop traffic from the guest subnet to every
+#/ address of the Host other than the bridge gateway address.
+# The check stage's cases against the sources. Where this machine has nft
+# and unprivileged user and network namespaces they also load the rules
+# into a stand-in Host and show a guest reach the outside and the gateway,
+# and not the Host's primary address, a pod on the Host or a protected
+# Service.
+if image/check-guest-isolation.sh "$tmp" image/rootfs/usr/libexec/flr image/rootfs/usr/share/flr/host.conf.defaults; then
+  echo "ok    guest isolation cases"
+else
+  fail "guest isolation cases"
 fi
 
 #= docs/requirements/11-host-image.md#kernel-and-kvm
@@ -161,7 +211,7 @@ fi
 if command -v systemd-analyze >/dev/null 2>&1; then
   # Outside the image the binaries and most dependencies are absent, so
   # only syntax problems are taken from the output.
-  out=$(systemd-analyze verify --man=no image/rootfs/usr/lib/systemd/system/*.service 2>&1 |
+  out=$(systemd-analyze verify --man=no image/rootfs/usr/lib/systemd/system/*.service image/rootfs/usr/lib/systemd/system/*.path 2>&1 |
     grep -E 'Unknown (key|section)|Failed to parse|Invalid|Missing|ignoring line' || true)
   if [ -z "$out" ]; then echo "ok    systemd-analyze verify finds no syntax problem"; else fail "systemd-analyze verify: $out"; fi
 else

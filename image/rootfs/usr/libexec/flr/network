@@ -14,25 +14,39 @@ mode=${1:-apply}
 out=${2:-$FLR_RUN}
 bridge=$FLR_BRIDGE
 
-# The primary interface carries the default route; guests are NATed out of it.
+# The primary interface carries the default route; guests are NATed out of
+# it. Its IPv4 address is the Host's internal address, the one the kubelet
+# reports as the Node's InternalIP unless told otherwise, and where
+# flintlockd serves (HI-067).
 if [ "$mode" = render ]; then
   primary=${FLR_PRIMARY_INTERFACE:-eth0}
+  address=${FLR_PRIMARY_ADDRESS:-192.0.2.10}
 else
   primary=$(ip -o -4 route show default | awk '{for (i = 1; i < NF; i++) if ($i == "dev") { print $(i + 1); exit }}')
   [ -n "$primary" ] || die "no IPv4 default route"
+  address=$(ip -o -4 addr show dev "$primary" scope global | awk '{ sub(/\/.*/, "", $4); print $4; exit }')
+  [ -n "$address" ] || die "no IPv4 address on $primary"
 fi
 
 # The guest firewall. The tables are replaced as a whole, so loading the
 # file again leaves exactly one copy of each rule.
 #
 #= docs/requirements/11-host-image.md#image-flintlockd
-#/ The Host Image SHALL admit connections to the local
-#/ `flintlockd` endpoint only from the Pod Provider's user id, which it reads
-#/ from the Host configuration file with a default when none is set, and
-#/ SHALL refuse them from every other process on the Host.
-# That is the output chain below, over loopback, with the user id that
-# flr-host-config read into FLR_POD_PROVIDER_UID. It lives in this table
-# because it is loaded with it, but it concerns the Host's own processes,
+#/ The Host Image SHALL drop every connection to `flintlockd`'s
+#/ port that arrives from outside the Host unless its source address is in
+#/ the Operator's pod network, which it reads from the Host configuration
+#/ file.
+# The first two rules of the input chain, with the CIDRs flr-host-config
+# read into FLR_FLINTLOCKD_CLIENT_CIDRS.
+#
+#= docs/requirements/11-host-image.md#image-flintlockd
+#/ The Host Image SHALL refuse connections to `flintlockd`'s port
+#/ from the Host's own processes unless they belong to the Exec Agent's user
+#/ id, which it reads from the Host configuration file with a default when
+#/ none is set.
+# The first rule of the output chain, over loopback, with the user id that
+# flr-host-config read into FLR_EXEC_AGENT_UID. Both live in this table
+# because they are loaded with it, but they concern flintlockd's clients,
 # not guests.
 #
 #= docs/requirements/11-host-image.md#image-networking
@@ -60,14 +74,33 @@ table inet flr {
 $([ -z "$FLR_PROTECTED_CIDRS" ] || echo "		elements = { ${FLR_PROTECTED_CIDRS//,/, } }")
 	}
 
-	# Traffic from guests to the Host itself.
+	# The Operator's pod network, from which battery reaches flintlockd.
+	set flintlockd_clients {
+		type ipv4_addr
+		flags interval
+		auto-merge
+$([ -z "$FLR_FLINTLOCKD_CLIENT_CIDRS" ] || echo "		elements = { ${FLR_FLINTLOCKD_CLIENT_CIDRS//,/, } }")
+	}
+
+	# Traffic from guests to the Host itself, and to flintlockd from off the
+	# Host.
 	chain input {
 		type filter hook input priority filter - 10; policy accept;
+		# HI-069. A connection to flintlockd's port that arrives on any
+		# interface but loopback and the bridge, from an address outside the
+		# Operator's pod network, IPv6 included, is dropped: battery reaches
+		# flintlockd from its pod and nothing else off the Host may. The
+		# Exec Agent's connections are the Host's own, over loopback, and the
+		# output chain decides those. Guests are dropped by the bridge's rules
+		# below whatever their address.
+		iifname != { "lo", "$bridge" } tcp dport $FLR_FLINTLOCKD_PORT ip saddr @flintlockd_clients counter accept
+		iifname != { "lo", "$bridge" } tcp dport $FLR_FLINTLOCKD_PORT counter drop
 		#= docs/requirements/11-host-image.md#image-networking
 		#/ The Host Image SHALL allow traffic from the guest subnet to the
 		#/ bridge gateway address only on the Host Service ports and the DHCP and DNS
 		#/ ports, and SHALL keep every other port on the gateway closed to guests.
-		iifname "$bridge" udp dport 67 accept
+		# DHCP arrives as a broadcast, and a renewal on the gateway.
+		iifname "$bridge" ip daddr { 255.255.255.255, $FLR_GATEWAY } udp dport 67 accept
 		iifname "$bridge" ip daddr $FLR_GATEWAY udp dport 53 accept
 		iifname "$bridge" ip daddr $FLR_GATEWAY tcp dport 53 accept
 $(if [ -n "$FLR_HOST_SERVICE_PORTS" ]; then
@@ -79,8 +112,12 @@ $(if [ -n "$FLR_HOST_SERVICE_PORTS" ]; then
 		#/ The Host Image SHALL drop traffic from the guest subnet to the
 		#/ Host's own kubelet, Pod Provider and metrics ports.
 		iifname "$bridge" tcp dport { ${FLR_HOST_CONTROL_PORTS//,/, } } drop
+		#= docs/requirements/11-host-image.md#image-networking
+		#/ The Host Image SHALL drop traffic from the guest subnet to every
+		#/ address of the Host other than the bridge gateway address.
 		# Every other port on the gateway, and every other address of the
-		# Host, is closed to guests.
+		# Host, the primary one included, is closed to guests. Each accept
+		# above names the gateway, or the broadcast address for DHCP.
 		iifname "$bridge" drop
 	}
 
@@ -96,7 +133,23 @@ $(if [ -n "$FLR_HOST_SERVICE_PORTS" ]; then
 		#/ The Host Image SHALL drop traffic from the guest subnet to every
 		#/ protected CIDR listed in the Host configuration file.
 		iifname "$bridge" ip daddr @protected drop
+		#= docs/requirements/11-host-image.md#image-networking
+		#/ The Host Image SHALL drop traffic from the guest subnet whose
+		#/ destination before any destination NAT on the Host is in a protected CIDR.
+		# kube-proxy rewrites a Service's address to one of its pods' in
+		# prerouting, before this chain. Conntrack keeps the address the
+		# guest asked for, so a protected Service range drops the Service
+		# whatever pod it lands on.
+		iifname "$bridge" ct original ip daddr @protected drop
+		#= docs/requirements/11-host-image.md#image-networking
+		#/ The Host Image SHALL forward traffic from the guest subnet only
+		#/ out of the Host's primary interface, and SHALL drop traffic from the guest
+		#/ subnet to every other interface of the Host.
+		# Pods on this Host, and the tunnels of an overlay network, are
+		# behind interfaces of their own, so the second rule drops them
+		# whatever their address.
 		iifname "$bridge" oifname "$primary" accept
+		iifname "$bridge" drop
 		iifname "$primary" oifname "$bridge" ct state established,related accept
 		oifname "$bridge" drop
 	}
@@ -104,13 +157,14 @@ $(if [ -n "$FLR_HOST_SERVICE_PORTS" ]; then
 	# Connections from the Host's own processes to flintlockd.
 	chain output {
 		type filter hook output priority filter - 10; policy accept;
-		# HI-063. Every packet a local socket sends to the flintlockd port over
-		# loopback, from any address to any address, is refused unless the
-		# socket belongs to the Pod Provider's user id: root included, and
-		# any pod in the Host's network namespace. The refusal is a reset,
-		# so a client fails at once rather than timing out. flintlockd's own
-		# replies go from that port, not to it, and pass.
-		oifname "lo" tcp dport $FLR_FLINTLOCKD_PORT meta skuid != $FLR_POD_PROVIDER_UID counter reject with tcp reset
+		# HI-070. Every packet a local socket sends to the flintlockd port over
+		# loopback, from any address to any address, the Host's internal
+		# address included, is refused unless the socket belongs to the Exec
+		# Agent's user id: root included, and any pod in the Host's network
+		# namespace. The refusal is a reset, so a client fails at once rather
+		# than timing out. flintlockd's own replies go from that port, not to
+		# it, and pass.
+		oifname "lo" tcp dport $FLR_FLINTLOCKD_PORT meta skuid != $FLR_EXEC_AGENT_UID counter reject with tcp reset
 		# HI-064. The Host Services run in the Host's network namespace,
 		# where the forward chain never sees them, and buildkitd runs every
 		# build step as one of these ids. Every address of the Host, the
@@ -157,10 +211,22 @@ render_dnsmasq() {
   fi
 }
 
+#= docs/requirements/11-host-image.md#image-flintlockd
+#/ The Host Image SHALL configure `flintlockd` to serve its gRPC
+#/ API only with TLS, on port 9090 of the Host's internal address
+# flintlockd.service reads its endpoint from this file: the address found
+# above, which is the one battery-operator's Exec Agent is given as
+# $(HOST_IP) and has the serving certificate name.
+render_flintlockd_env() {
+  echo "# Written by flr-network.service at every boot. Do not edit."
+  echo "FLR_FLINTLOCKD_ENDPOINT=$address:$FLR_FLINTLOCKD_PORT"
+}
+
 mkdir -p "$out"
 render_firewall >"$out/guest-firewall.nft"
 render_dnsmasq >"$out/dnsmasq.conf"
-chmod 0644 "$out/guest-firewall.nft" "$out/dnsmasq.conf"
+render_flintlockd_env >"$out/flintlockd.env"
+chmod 0644 "$out/guest-firewall.nft" "$out/dnsmasq.conf" "$out/flintlockd.env"
 [ "$mode" = render ] && exit 0
 
 #= docs/requirements/11-host-image.md#image-networking
@@ -183,3 +249,6 @@ fi
 ip link set "$bridge" up
 nft -f "$out/guest-firewall.nft"
 log "bridge $bridge at $FLR_GATEWAY/$FLR_PREFIX, guests NATed out of $primary"
+log "flintlockd serves $address:$FLR_FLINTLOCKD_PORT to user id $FLR_EXEC_AGENT_UID on the Host and to ${FLR_FLINTLOCKD_CLIENT_CIDRS:-no network}"
+[ -n "$FLR_FLINTLOCKD_CLIENT_CIDRS" ] || log "warning: FLINTLOCKD_CLIENT_CIDRS is empty, so battery cannot reach flintlockd on this Host"
+[ -n "$FLR_PROTECTED_CIDRS" ] || log "warning: PROTECTED_CIDRS is empty, so guests reach every address of the cluster off this Host"

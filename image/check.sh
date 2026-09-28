@@ -172,7 +172,11 @@ if [ -s /etc/machine-id ] && [ "$(cat /etc/machine-id)" != uninitialized ]; then
 else
   ok "/etc/machine-id is unset"
 fi
-refute "flintlockd is given no token and no key" grep -Eq -- '--(basic-auth-token|tls-key)' "$UNITS/flintlockd.service"
+refute "flintlockd is given no token" grep -Eq -- '--basic-auth-token' "$UNITS/flintlockd.service"
+# flintlockd's key is a file the Exec Agent writes on the Host, never one
+# the image carries.
+expect "flintlockd's key is the one the Exec Agent writes on the Host" has "$UNITS/flintlockd.service" '--tls-key /etc/battery/flintlockd/tls\.key '
+refute "the image carries nothing in /etc/battery/flintlockd" sh -c 'ls -A /etc/battery/flintlockd 2>/dev/null | grep -q .'
 refute "root has no password" sh -c "awk -F: '\$1 == \"root\" && \$2 !~ /^[!*]/ && \$2 != \"\" { found = 1 } END { exit !found }' /etc/shadow"
 
 #= docs/requirements/11-host-image.md#image-build
@@ -195,16 +199,22 @@ enabled() {
   esac
 }
 for u in flr-host-config flr-kvm flr-thin-pool flr-cache flr-network flr-dnsmasq flr-kubelet-config \
-  containerd flintlockd kubelet cloud-init-local cloud-config cloud-final; do
+  flr-flintlockd-certs containerd flintlockd kubelet cloud-init-local cloud-config cloud-final; do
   enabled "$u.service"
 done
+# flintlockd itself is started by its path unit once its certificates
+# exist (HI-071), so it is static and the path units are enabled.
+for u in flintlockd.path flr-flintlockd-restart.path; do
+  enabled "$u"
+done
+if [ "$(systemctl is-enabled flintlockd.service 2>/dev/null)" = static ]; then ok "flintlockd.service starts only when flintlockd.path starts it"; else fail "flintlockd.service is $(systemctl is-enabled flintlockd.service 2>/dev/null), want static"; fi
 if [ -e "$UNITS/cloud-init-network.service" ]; then enabled cloud-init-network.service; else enabled cloud-init.service; fi
 refute "the distribution's dnsmasq.service is not enabled" systemctl is-enabled dnsmasq.service
-for s in host-config kvm-gate thin-pool cache-volume network kubelet-config; do
+for s in host-config kvm-gate thin-pool cache-volume network kubelet-config flintlockd-certs; do
   expect "$LIBEXEC/$s is executable and parses" sh -c "test -x $LIBEXEC/$s && bash -n $LIBEXEC/$s"
 done
 if command -v systemd-analyze >/dev/null 2>&1; then
-  out=$(systemd-analyze verify --man=no "$UNITS"/flr-*.service "$UNITS/flintlockd.service" "$UNITS/containerd.service" 2>&1 |
+  out=$(systemd-analyze verify --man=no "$UNITS"/flr-*.service "$UNITS"/flr-*.path "$UNITS/flintlockd.service" "$UNITS/flintlockd.path" "$UNITS/containerd.service" 2>&1 |
     grep -E 'flr-|flintlockd|containerd|20-flr' || true)
   if [ -z "$out" ]; then ok "systemd-analyze verify has nothing to say about the image's units"; else fail "systemd-analyze verify: $out"; fi
 else
@@ -332,7 +342,7 @@ expect "host-config succeeds with no Host configuration file" host_config "$work
 for kv in FLR_GUEST_SUBNET=172.31.0.0/16 FLR_GATEWAY=172.31.0.1 FLR_PREFIX=16 FLR_NETMASK=255.255.0.0 \
   FLR_DHCP_START=172.31.0.10 FLR_DHCP_END=172.31.255.254 FLR_THIN_POOL_DEVICE= FLR_PROTECTED_CIDRS= \
   FLR_HOST_RESERVE_VCPU=2 FLR_HOST_RESERVE_MEMORY_MB=4096 FLR_HOST_SERVICE_PORTS=1234,3000,5000,3128 \
-  FLR_HOST_SERVICE_UIDS=101,1000,10001,10002,100000-165535; do
+  FLR_HOST_SERVICE_UIDS=101,1000,10001,10002,100000-165535 FLR_EXEC_AGENT_UID=65532 FLR_FLINTLOCKD_CLIENT_CIDRS=; do
   expect "default $kv" grep -qxF -- "$kv" "$FLR_HOST_ENV"
 done
 
@@ -509,13 +519,37 @@ expect "the drops come before guests are let out" test "${drop_line:-9999}" -lt 
 #/ The Host Image SHALL allow traffic from the guest subnet to the
 #/ bridge gateway address only on the Host Service ports and the DHCP and DNS
 #/ ports, and SHALL keep every other port on the gateway closed to guests.
-expect "DHCP is allowed" has "$nftf" 'iifname "flbr0" udp dport 67 accept'
+expect "DHCP is allowed, as a broadcast and on the gateway" has "$nftf" 'iifname "flbr0" ip daddr \{ 255\.255\.255\.255, 10\.200\.4\.1 \} udp dport 67 accept'
 expect "DNS is allowed on the gateway" has "$nftf" 'iifname "flbr0" ip daddr 10\.200\.4\.1 udp dport 53 accept'
 expect "the Host Service ports are allowed on the gateway" \
   has "$nftf" 'iifname "flbr0" ip daddr 10\.200\.4\.1 tcp dport \{ 1234, 3000, 5000, 3128 \} accept'
 expect "everything else from the bridge is dropped" has "$nftf" '^[[:space:]]*iifname "flbr0" drop$'
 last_input=$(awk '/chain input/ { on = 1 } on && /^\t}/ { exit } on && /(accept|drop)$/ { l = $0 } END { print l }' "$nftf")
 expect "the drop is the input chain's last rule" test "$(echo "$last_input" | xargs)" = 'iifname flbr0 drop'
+
+#= docs/requirements/11-host-image.md#image-networking
+#= type=test
+#/ The Host Image SHALL drop traffic from the guest subnet to every
+#/ address of the Host other than the bridge gateway address.
+#
+#= docs/requirements/11-host-image.md#image-networking
+#= type=test
+#/ The Host Image SHALL forward traffic from the guest subnet only
+#/ out of the Host's primary interface, and SHALL drop traffic from the guest
+#/ subnet to every other interface of the Host.
+#
+#= docs/requirements/11-host-image.md#image-networking
+#= type=test
+#/ The Host Image SHALL drop traffic from the guest subnet whose
+#/ destination before any destination NAT on the Host is in a protected CIDR.
+# The rules, rendered from the installed scripts. That the kernel enforces
+# them needs network namespaces, which a build container does not grant;
+# `make image-lint` shows it where they are available.
+if "$LIBEXEC/check-guest-isolation-cases" "$work"; then
+  ok "guest isolation cases (the Host's addresses, other interfaces, Services)"
+else
+  fail "guest isolation cases"
+fi
 # nft -c needs a netlink socket, which a build container may not grant.
 nft_out=$(nft -c -f "$nftf" 2>&1)
 case "$?:$nft_out" in
@@ -532,7 +566,7 @@ esac
 #/ to the Host's own kubelet, Pod Provider, `flintlockd` and metrics ports.
 # The rules, rendered from the installed scripts for the default ids, a
 # configured list and values that are no list of ids. That the kernel
-# enforces them cannot be shown here, as for HI-063.
+# enforces them cannot be shown here, as for HI-070.
 if "$LIBEXEC/check-host-service-egress-cases" "$work"; then
   ok "Host Service egress cases (default ids, configured ids, refused values)"
 else
@@ -569,8 +603,20 @@ grep -v "^[[:space:]]*#" "$fl" >"$flx"
 expect "flintlockd is a systemd service of the image" test -f "$fl"
 expect "containerd is a systemd service of the image" test -f "$UNITS/containerd.service"
 refute "flintlockd is put in no slice of the kubelet's" grep -Eq '^Slice=.*kubepods' "$fl"
-expect "a flintlockd restart leaves its hypervisor processes alone" has "$fl" '^KillMode=process$'
 refute "no static pod or manifest runs flintlockd" grep -rqs flintlockd /etc/kubernetes/manifests
+
+#= docs/requirements/11-host-image.md#image-flintlockd
+#= type=test
+#/ When the Host Image stops or restarts `flintlockd`, it SHALL
+#/ stop the `flintlockd` process alone and SHALL leave every hypervisor
+#/ process that `flintlockd` started running.
+# KillMode=process makes systemd signal flintlockd's main process alone, on
+# a stop and on the stop half of a restart. The hypervisor processes stay
+# in the unit's cgroup, and flintlockd finds them again when it starts.
+expect "a flintlockd stop or restart signals flintlockd alone" has "$fl" '^KillMode=process$'
+refute "nothing else stops the hypervisor processes with flintlockd" grep -Eq '^(ExecStop|ExecStopPost)=' "$flx"
+expect "a certificate change restarts flintlockd, which keeps KillMode" has "$LIBEXEC/flintlockd-certs" 'try-restart flintlockd\.service'
+refute "no drop-in changes how flintlockd is stopped" sh -c "grep -rqsE '^(KillMode|ExecStop)' /usr/lib/systemd/system/flintlockd.service.d /etc/systemd/system/flintlockd.service.d"
 
 #= docs/requirements/11-host-image.md#image-flintlockd
 #= type=test
@@ -583,40 +629,87 @@ done
 
 #= docs/requirements/11-host-image.md#image-flintlockd
 #= type=test
-#/ The Host Image SHALL configure `flintlockd` to listen only on a
-#/ local endpoint, a unix socket or a loopback address, that the Pod Provider
-#/ of `12-cluster-fleet.md` can reach and a guest cannot.
-expect "flintlockd listens on loopback" has "$fl" '--grpc-endpoint 127\.0\.0\.1:9090 '
+#/ The Host Image SHALL configure `flintlockd` to serve its gRPC
+#/ API only with TLS, on port 9090 of the Host's internal address, with the
+#/ serving certificate and key that the Exec Agent writes to
+#/ `/etc/battery/flintlockd`.
+# The endpoint is the one flr-network rendered above for the primary
+# interface's address, and the only one: no loopback, no HTTP gateway, no
+# debug endpoint, no plaintext.
+expect "flintlockd takes its endpoint from flr-network" has "$fl" '^EnvironmentFile=/run/flr/flintlockd\.env$'
+expect "flintlockd listens on FLR_FLINTLOCKD_ENDPOINT" has "$fl" '--grpc-endpoint \$\{FLR_FLINTLOCKD_ENDPOINT\} '
+expect "flr-network renders the primary interface's address and port 9090 as the endpoint" \
+  grep -qx 'FLR_FLINTLOCKD_ENDPOINT=192\.0\.2\.10:9090' "$work/net/flintlockd.env"
+endpoints=$(grep -Eo -- '--(grpc|http|debug)-endpoint [^ ]+' "$flx" | awk '{print $2}' | xargs)
+if [ "$endpoints" = '${FLR_FLINTLOCKD_ENDPOINT}' ]; then ok "flintlockd has one endpoint, the Host's internal address"; else fail "flintlockd's endpoints are: $endpoints"; fi
+refute "flintlockd does not run without TLS" grep -q -- "--insecure" "$flx"
+refute "the HTTP gateway stays off" grep -q -- "--enable-http" "$flx"
+refute "no flintlockd configuration file overrides the unit" test -e /etc/opt/flintlockd/config.yaml
+expect "flintlockd serves the Exec Agent's certificate" has "$fl" '--tls-cert /etc/battery/flintlockd/tls\.crt '
+expect "flintlockd serves the Exec Agent's key" has "$fl" '--tls-key /etc/battery/flintlockd/tls\.key '
 expect "guests are refused the flintlockd port" has "$nftf" 'tcp dport \{ 9090,'
 
 #= docs/requirements/11-host-image.md#image-flintlockd
 #= type=test
-#/ The Host Image SHALL NOT expose `flintlockd` on any address
-#/ reachable from outside the Host.
-endpoints=$(grep -Eo -- '--(grpc|http|debug)-endpoint [^ ]+' "$fl" | awk '{print $2}')
-outside=$(printf '%s\n' "$endpoints" | grep -Ev '^(127\.[0-9.]+|localhost|\[::1\]):[0-9]+$' || true)
-if [ -n "$endpoints" ] && [ -z "$outside" ]; then ok "every flintlockd endpoint is loopback: $(echo "$endpoints" | xargs)"; else fail "flintlockd endpoints outside loopback: $outside"; fi
-refute "the HTTP gateway stays off" grep -q -- "--enable-http" "$flx"
-refute "no flintlockd configuration file overrides the unit" test -e /etc/opt/flintlockd/config.yaml
+#/ The Host Image SHALL configure `flintlockd` to require a client
+#/ certificate on every connection and to verify it against the `flintlockd`
+#/ client CA bundle that the Exec Agent writes to `/etc/battery/flintlockd`.
+# --tls-client-validate is what makes flintlockd require a certificate
+# (tls.RequireAndVerifyClientCert); --tls-client-ca alone only names a pool.
+expect "flintlockd requires a client certificate" has "$fl" '--tls-client-validate '
+expect "flintlockd verifies it against the Exec Agent's client CA bundle" has "$fl" '--tls-client-ca /etc/battery/flintlockd/client-ca\.crt '
+refute "flintlockd is given no token instead" grep -q -- "--basic-auth-token" "$flx"
 
 #= docs/requirements/11-host-image.md#image-flintlockd
 #= type=test
-#/ The Host Image SHALL admit connections to the local
-#/ `flintlockd` endpoint only from the Pod Provider's user id, which it reads
-#/ from the Host configuration file with a default when none is set, and
-#/ SHALL refuse them from every other process on the Host.
-# The rule the firewall loads, rendered from the installed scripts for the
-# default user id, a configured one and values that are no user id. That
-# the kernel enforces it cannot be shown here: a build container has no
-# netlink for nft to load it with, let alone a second user to connect as.
+#/ The Host Image SHALL drop every connection to `flintlockd`'s
+#/ port that arrives from outside the Host unless its source address is in
+#/ the Operator's pod network, which it reads from the Host configuration
+#/ file.
+#
+#= docs/requirements/11-host-image.md#image-flintlockd
+#= type=test
+#/ The Host Image SHALL refuse connections to `flintlockd`'s port
+#/ from the Host's own processes unless they belong to the Exec Agent's user
+#/ id, which it reads from the Host configuration file with a default when
+#/ none is set.
+# The rules the firewall loads, rendered from the installed scripts for the
+# defaults, configured values and values that are neither. That the kernel
+# enforces them cannot be shown here: a build container has no netlink for
+# nft to load them with, let alone a second user to connect as.
 if "$LIBEXEC/check-flintlockd-access-cases" "$work"; then
-  ok "flintlockd access cases (default user id, configured user id, refused values)"
+  ok "flintlockd access cases (Exec Agent user id, Operator's pod network, refused values)"
 else
   fail "flintlockd access cases"
 fi
-expect "the rendered firewall admits only the Pod Provider's user id to flintlockd" \
-  has "$nftf" '^[[:space:]]*oifname "lo" tcp dport 9090 meta skuid != 10250 counter reject with tcp reset$'
-expect "flr-network loads the rule before flintlockd starts" has "$UNITS/flr-network.service" '^Before=flintlockd\.service'
+expect "the rendered firewall admits only the Exec Agent's user id to flintlockd from the Host" \
+  has "$nftf" '^[[:space:]]*oifname "lo" tcp dport 9090 meta skuid != 65532 counter reject with tcp reset$'
+expect "the rendered firewall drops flintlockd's port from off the Host outside the Operator's pod network" \
+  has "$nftf" '^[[:space:]]*iifname != \{ "lo", "flbr0" \} tcp dport 9090 counter drop$'
+expect "flr-network loads the rules before flintlockd starts" has "$UNITS/flr-network.service" '^Before=flintlockd\.service'
+
+#= docs/requirements/11-host-image.md#image-flintlockd
+#= type=test
+#/ The Host Image SHALL start `flintlockd` only once the serving
+#/ certificate, its key and the client CA bundle exist in
+#/ `/etc/battery/flintlockd`, and SHALL restart `flintlockd` when the serving
+#/ certificate or the client CA bundle changes.
+#
+#= docs/requirements/11-host-image.md#kernel-and-kvm
+#= type=test
+#/ The Host Image SHALL create `/etc/battery/flintlockd` owned by
+#/ the Exec Agent's user id, and SHALL label that directory and every file in
+#/ it so that the Exec Agent's containers can write them and `flintlockd` can
+#/ read them
+# The units that wait for and follow the files, and flintlockd-certs run
+# against stand-ins for systemctl and restorecon. That systemd watches the
+# files, and that the labels are enforced, is for a booted Host; the labels
+# themselves are looked up in the policy by the SELinux context cases.
+if "$LIBEXEC/check-flintlockd-certs-cases" "$work"; then
+  ok "flintlockd certificate cases (path units, restart only on change, directory owner and labels)"
+else
+  fail "flintlockd certificate cases"
+fi
 
 #= docs/requirements/11-host-image.md#image-flintlockd
 #= type=test
@@ -646,6 +739,13 @@ expect "label host=true" has "$kenv" "--node-labels=[^ ]*$p/host=true"
 expect "label image from the digest" has "$kenv" "--node-labels=[^ ]*$p/image=0123456789abcdef0123456789abcdef(,| )"
 expect "label firecracker version" has "$kenv" "--node-labels=[^ ]*$p/firecracker=${FIRECRACKER_VERSION//./\\.}(,| )"
 expect "label cloud-hypervisor version" has "$kenv" "--node-labels=[^ ]*$p/cloud-hypervisor=${CLOUD_HYPERVISOR_VERSION//./\\.}(,| )"
+
+#= docs/requirements/11-host-image.md#kubernetes-node
+#= type=test
+#/ The Host Image SHALL register its kubelet with the label
+#/ `battery.liquidmetal-x.dev/host` set to `true`.
+expect "label battery.liquidmetal-x.dev/host=true, for battery-operator's Exec Agent" \
+  has "$kenv" "--node-labels=([^ ]*,)?battery\\.liquidmetal-x\\.dev/host=true(,| )"
 expect "the kubelet is started with the labels" has "$UNITS/kubelet.service.d/20-flr.conf" '^ExecStart=/usr/bin/kubelet .*\$FLR_KUBELET_ARGS$'
 expect "kubeadm's drop-in is the one 20-flr.conf extends" test -f "$UNITS/kubelet.service.d/10-kubeadm.conf"
 expect "kubeadm's drop-in still starts the kubelet the way 20-flr.conf repeats" \

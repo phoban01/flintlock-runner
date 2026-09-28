@@ -638,8 +638,8 @@ checks:
   #= docs/requirements/12-cluster-fleet.md#cluster-least-privilege
   #= type=test
   #/ The Host Agent SHALL hold only the privileges it needs to bind
-  #/ to the bridge gateway, to write the cache directory and to reach the
-  #/ local `flintlockd` endpoint.
+  #/ to the bridge gateway in the Host's network namespace and to write the
+  #/ cache directory.
   - name: the Host Agent holds only the privileges it needs
     run: |
       spec=$(obj "$fleet" DaemonSet flintlock-host-agent | "$YQ" '.spec.template.spec')
@@ -704,14 +704,14 @@ checks:
       s=$(obj "$fleet" ClusterRoleBinding flintlock-host-services | "$YQ" '.subjects[] | "system:serviceaccount:" + .namespace + ":" + .name')
       [ "$s" = "$sa" ] || fail "ClusterRoleBinding/flintlock-host-services binds $s"
       # No container of the Host Agent reaches flintlockd: none runs as the
-      # user id the Host Image admits to it (HI-063), by default or in any
+      # user id the Host Image admits to it (HI-070), by default or in any
       # pool, and every container names its own user id.
       spec=$(echo "$ds" | "$YQ" '.spec.template.spec')
       defaults=$root/image/rootfs/usr/share/flr/host.conf.defaults
-      admitted=$(sed -n 's/^POD_PROVIDER_UID=\([0-9][0-9]*\)$/\1/p' "$defaults" | tail -n 1)
+      admitted=$(sed -n 's/^EXEC_AGENT_UID=\([0-9][0-9]*\)$/\1/p' "$defaults" | tail -n 1)
       for md in $(q "$capi" 'select(.kind == "MachineDeployment") | .metadata.name'); do
         ref=$(obj "$capi" MachineDeployment "$md" | "$YQ" '.spec.template.spec.bootstrap.configRef.name')
-        pool=$(obj "$capi" KubeadmConfigTemplate "$ref" | "$YQ" '.spec.template.spec.files[] | select(.path == "/etc/flintlock-runner/host.conf") | .content' | sed -n 's/^POD_PROVIDER_UID=\([0-9]*\)$/\1/p' | tail -n 1)
+        pool=$(obj "$capi" KubeadmConfigTemplate "$ref" | "$YQ" '.spec.template.spec.files[] | select(.path == "/etc/flintlock-runner/host.conf") | .content' | sed -n 's/^EXEC_AGENT_UID=\([0-9]*\)$/\1/p' | tail -n 1)
         admitted="$admitted $pool"
       done
       [ "$(echo "$spec" | "$YQ" '.securityContext.runAsUser // "unset"')" = unset ] || fail "the pod sets a user id for every container"

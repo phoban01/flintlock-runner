@@ -1,0 +1,31 @@
+#= docs/requirements/11-host-image.md#image-flintlockd
+#/ The Host Image SHALL start `flintlockd` only once the serving
+#/ certificate, its key and the client CA bundle exist in
+#/ `/etc/battery/flintlockd`
+# The Exec Agent writes client-ca.crt, then tls.key, then tls.crt, so
+# tls.crt is the one to wait for (battery-operator internal/execagent,
+# certificates.go). flintlockd.service has no [Install] section: this unit
+# is what starts it, at boot when the files are there from before, and when
+# the Exec Agent first writes them. flintlockd.service checks all three
+# again with ConditionPathExists=.
+#
+# The gates are this unit's dependencies as well as flintlockd's, so that a
+# Host without KVM or a thin pool does not retrigger a start that cannot
+# succeed. After fixing the cause, restart flintlockd.path.
+[Unit]
+Description=Start flintlockd once its certificates exist
+Documentation=https://github.com/phoban01/flintlock-runner/blob/main/image/README.md
+# Ordered after services, so without the default dependencies: those put a
+# path unit before paths.target, which every service is ordered after.
+DefaultDependencies=no
+Conflicts=shutdown.target
+Requires=flr-kvm.service flr-thin-pool.service flr-network.service flr-flintlockd-certs.service containerd.service
+After=flr-kvm.service flr-thin-pool.service flr-network.service flr-flintlockd-certs.service containerd.service
+Before=shutdown.target
+
+[Path]
+PathExists=/etc/battery/flintlockd/tls.crt
+Unit=flintlockd.service
+
+[Install]
+WantedBy=multi-user.target

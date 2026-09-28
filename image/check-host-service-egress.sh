@@ -103,11 +103,11 @@ else
   fail "host-config refuses HOST_SERVICE_UIDS=2000,3000-3010"
 fi
 
-# Root, the Pod Provider's id and anything that is not a list of ids stop
+# Root, the Exec Agent's id and anything that is not a list of ids stop
 # the Host rather than dropping the wrong traffic or none. The command
 # substitution is a literal value: the file is parsed, never sourced.
 # shellcheck disable=SC2016
-for bad in 0 0-100 root -5 5-3 4294967295 1000,900-1100 1000,1000 10250 10000-20000 '1000;reboot' '$(id -u)' '' '1000,'; do
+for bad in 0 0-100 root -5 5-3 4294967295 1000,900-1100 1000,1000 65532 60000-70000 '1000;reboot' '$(id -u)' '' '1000,'; do
   printf 'HOST_SERVICE_UIDS=%s\n' "$bad" >"$C.conf"
   if render "$C.conf"; then
     fail "host-config accepts HOST_SERVICE_UIDS='$bad'"

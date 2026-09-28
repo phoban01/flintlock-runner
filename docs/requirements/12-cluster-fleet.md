@@ -357,8 +357,8 @@ would need credentials for it.
 - **KF-112** The Fleet Manifests SHALL NOT grant any workload an AWS
   permission.
 - **KF-113** The Host Agent SHALL hold only the privileges it needs to bind
-  to the bridge gateway, to write the cache directory and to reach the
-  local `flintlockd` endpoint.
+  to the bridge gateway in the Host's network namespace and to write the
+  cache directory.
 - **KF-196** The Fleet Manifests SHALL grant the Runner only the
   permissions to manage `MicroVMClaim` and `Pool` resources and to create
   Secrets in its own namespace, to request tokens of the Holder alone, to
@@ -397,7 +397,7 @@ token with a TokenReview, which asks nothing of the Holder.
   `flintlockd` any more: battery-operator's Exec Agent does, from a
   DaemonSet of its own and over mutual TLS (battery-operator EA-001,
   EA-004). The Fleet Manifests still run no container as the user id that
-  HI-063 admits. It was never cited.
+  HI-070 admits. It was never cited.
 - **KF-138** (withdrawn) Node Leases belong to the Virtual Nodes, which the
   cluster fleet no longer uses after the change to battery's claim resources
   of 2026-09-22; it was never implemented.
@@ -431,12 +431,18 @@ still confined, with no access to the Host's files beyond those labelled for
 containers. Naming it for `buildkitd` alone keeps every other Host Service
 in the ordinary domain.
 
-KF-135 and HI-063 close the last way round KF-031: `flintlockd` has no
-authentication of its own, and a loopback listener is reachable by every
-process in the Host's network namespace, including any pod with host
-networking that a DaemonSet puts there. Admitting one user id keeps out
-unprivileged host-network pods; a privileged pod can already do anything on
-the Host, so it is not the threat this addresses.
+KF-113 keeps the Host Agent in the Host's network namespace for one reason:
+the Host Services bind to the bridge gateway, and the bridge exists only
+there. The Host Agent no longer reaches `flintlockd`. battery-operator's
+Exec Agent does, from a DaemonSet of its own, over mutual TLS.
+
+Every process in the Host's network namespace, any pod with host networking
+included, can open a connection to the Host's own addresses. `flintlockd`
+admits any certificate from its client CA, so HI-070 admits one user id,
+the Exec Agent's, to its port from the Host, and the Fleet Manifests run no
+container of the Host Agent as that user id. This keeps out unprivileged
+host-network pods. A privileged pod can already do anything on the Host, so
+it is not the threat this addresses.
 
 ## Test doubles {#cluster-test-doubles}
 

@@ -1,0 +1,15 @@
+#= docs/requirements/11-host-image.md#image-flintlockd
+#/ The Host Image SHALL start `flintlockd` only once the serving
+#/ certificate, its key and the client CA bundle exist in
+#/ `/etc/battery/flintlockd`, and SHALL restart `flintlockd` when the serving
+#/ certificate or the client CA bundle changes.
+# Started by flr-flintlockd-restart.path. It labels the files again for the
+# Exec Agent and restarts flintlockd when they are not the ones it loaded;
+# a restart leaves the MicroVMs running (docs/requirements/11-host-image.md).
+[Unit]
+Description=Restart flintlockd for its new certificates
+Documentation=https://github.com/phoban01/flintlock-runner/blob/main/image/README.md
+
+[Service]
+Type=oneshot
+ExecStart=/usr/libexec/flr/flintlockd-certs changed
