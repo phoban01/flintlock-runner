@@ -4,40 +4,46 @@
 # token comes from the Secret flintlock-runner-gitlab-token through
 # FLINTLOCK_RUNNER_GITLAB_TOKEN (deploy/runner/deployment.yaml).
 #
-# NOT YET DEPLOYABLE. On a cluster fleet the Runner claims MicroVMs from
-# battery with MicroVMClaims (12-cluster-fleet.md#battery-claims) and runs
-# each Stage through the Exec Agent of the claim's Host over the agent-exec
-# Guest Transport. Neither is in this file, because the Runner's
-# configuration cannot express them yet: the claim backend is not built
-# (work package claim-backend, waiting on battery's resource shapes), and
-# agent-exec is not a transport kind a Profile can name. Until they are,
-# this file has no pool_manager section, and `flr config show` refuses it
-# for want of one: with no backend named it falls back to the push fleet's
-# battery backend, and asks for battery's endpoint and a Host inventory. It
-# refuses it for nothing else, which `make manifests-check` asserts, and
-# deploy/kustomization.yaml leaves the Runner out; see The Runner in
-# deploy/README.md.
+# The Runner of a cluster fleet claims each MicroVM from battery-operator
+# with a MicroVMClaim (12-cluster-fleet.md#battery-claims), and runs each
+# Stage through the Exec Agent of the claim's Host over the agent-exec
+# Guest Transport (#agent-exec-transport). battery-operator v0.1.0's
+# Manifests provide the resources, battery and the Exec Agents
+# (deploy/README.md).
 #
-# Replace what says REPLACE. The one value in double quotes is written by
-# kustomize from deploy/runner/job-timeout.yaml; do not add other double
-# quotes to this file, because the replacement counts them.
+# Replace what says REPLACE. A release's flintlock-runner-fleet.yaml has the
+# guest image digests of that release in place of REPLACE already
+# (hack/release/render-manifests.sh). The one value in double quotes is
+# written by kustomize from deploy/runner/job-timeout.yaml; do not add
+# other double quotes to this file, because the replacement counts them.
 gitlab:
   url: https://gitlab.example.com # REPLACE with your GitLab instance
   name: flintlock-runner
   concurrent: 8
   shutdown_timeout: "10800s"
 
-# PENDING claim-backend: the pool backend. What goes here, a backend that
-# creates MicroVMClaims in this namespace with the Runner's own in-cluster
-# identity, and its settings, is defined by that work package, not here; no
-# value written now would load. Nothing in this comment is read.
-#
-# pool_manager:
-#   backend: <the claim backend, once it exists>
+# The claim backend (KF-150 to KF-156), with the Runner's own in-cluster
+# identity: no kubeconfig, and the claims, their Secrets and the Pools in
+# the namespace of the Runner's pod, flintlock-system.
+pool_manager:
+  backend: claim
+  claim:
+    # Every claim names the Holder, and each claim token is a token of it
+    # (deploy/runner/holder.yaml).
+    holder_service_account: flintlock-runner-holder
+    # The ConfigMap battery-operator writes its serving CA to, which every
+    # Exec Agent is verified against (KF-186). These are battery-operator
+    # v0.1.0's names, and the defaults; deploy/runner/rbac.yaml lets the
+    # Runner read this one ConfigMap.
+    serving_ca:
+      namespace: battery-operator-system
+      name: flintlockd-ca
+      key: serving-ca.crt
 
 # The Profiles (KF-080). Each names what battery's Pool of that Profile boots.
-# The Guest Transport is left to its default until agent-exec can be named
-# here (KF-185).
+# Neither names a Guest Transport: under the claim backend the Executor
+# runs every Profile over agent-exec (KF-185), and a Profile that names ssh
+# is refused (KF-195).
 #
 # Both boot the Guest Image of guest/ (docs/requirements/13-guest-image.md):
 # Firecracker's CI 6.1 kernel at boot/vmlinux, and Ubuntu 24.04 with the
@@ -47,15 +53,15 @@ gitlab:
 # and the builds and cache directories are left to their defaults, which
 # are what the image has.
 #
-# Pin the images by digest (CF-027). Nothing is published until the first
-# release after the guest images were added, so the tags below are
-# placeholders. Each release lists the digests it pushed in its images.txt
-# asset (docs/RELEASING.md), one line per image: the tag, then the same
-# image by digest. The images are guest-kernel and guest-rootfs, in the
-# repositories of ghcr.io/phoban01/flintlock-runner.
-# Replace each :REPLACE below with the @sha256:<digest> of one release. A
-# tag loads too, with a warning at startup that names the Profile and the
-# image (CF-027), but the tag names whatever was pushed last under it.
+# Pin the images by digest (CF-027). Each release lists the digests it
+# pushed in its images.txt asset (docs/RELEASING.md), one line per image:
+# the tag, then the same image by digest. The images are guest-kernel and
+# guest-rootfs, in the repositories of ghcr.io/phoban01/flintlock-runner.
+# A release writes them into its flintlock-runner-fleet.yaml in place of
+# :REPLACE below. To apply this directory from source, replace each
+# :REPLACE with the @sha256:<digest> of one release. A tag loads too, with a
+# warning at startup that names the Profile and the image (CF-027), but the
+# tag names whatever was pushed last under it.
 profiles:
   - name: default
     default: true

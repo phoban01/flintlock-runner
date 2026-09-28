@@ -6,28 +6,64 @@ resources: battery schedules MicroVMs and owns the Pools, the Runner claims
 a MicroVM with a `MicroVMClaim`, and the Exec Agent on each Host relays
 every Stage to that Host's `flintlockd`. The resources and the Exec Agent
 come from [battery-operator v0.1.0](https://github.com/phoban01/battery-operator/releases/tag/v0.1.0);
-see [The Exec Agent](#the-exec-agent). Two kustomize roots here, and the
-Runner on its own:
+see [The Exec Agent](#the-exec-agent). Two kustomize roots here:
 
 | Root | Applied to | What |
 |------|------------|------|
-| `deploy/` | the workload cluster | namespace `flintlock-system`, the Host Agent with the Host Services |
+| `deploy/` | the workload cluster | namespace `flintlock-system`, the Host Agent with the Host Services, and the Runner on the claim backend with its Holder and permissions (`deploy/runner/`) |
 | `deploy/capi/` | the management cluster | one MachineDeployment, KubeadmConfigTemplate, AWSMachineTemplate and MachineHealthCheck per Host pool |
-| `deploy/runner/` | not yet | the Runner; see [The Runner](#the-runner) |
 
 ```sh
 make manifests                 # render deploy/ and deploy/capi
-make manifests-check           # render all three, kubeconform, deploy/tests/checks.yaml
+make manifests-check           # render deploy/, deploy/capi and deploy/runner, kubeconform, deploy/tests/checks.yaml
 ```
 
 Nothing here names a real account, cluster or AMI. Neither root applies
 until the operator has replaced what says `REPLACE` and supplied what is
-listed below.
+listed below. A release's `flintlock-runner-fleet.yaml` has this project's
+images by digest already, the Guest Image in the Runner's Profiles
+included (`docs/RELEASING.md`).
 
-**The fleet cannot run a Job end to end yet.** The Runner's pool backend on
-a cluster fleet, the claim backend (`12-cluster-fleet.md#battery-claims`),
-is not wired into `flr` yet. Until it is, these manifests bring up Hosts
-with their Host Services, and no Runner.
+The fleet's own Hosts cannot run a Stage through battery-operator's Exec
+Agent yet: the Host Image has to change first (#73). See
+[Known gaps](#known-gaps).
+
+## Order of application
+
+battery-operator's Manifests go first, then these. Each step needs what
+the one before it made.
+
+1. **cert-manager**, which battery-operator's Manifests need for the
+   Operator's own certificates.
+2. **battery-operator v0.1.0**, `config/default` and `config/exec-agent`,
+   with the images of that release
+   (`ghcr.io/phoban01/battery-operator:v0.1.0` and
+   `ghcr.io/phoban01/battery-operator/exec-agent:v0.1.0`). They make the
+   namespace `battery-operator-system` and serve the `Pool` and
+   `MicroVMClaim` resources (`battery.liquidmetal-x.dev/v1alpha1`). They
+   run the Operator with battery as its sidecar, the Inventory Controller,
+   and the Exec Agent on every Node labelled
+   `battery.liquidmetal-x.dev/host=true`. The Operator writes its serving
+   CA to the ConfigMap `flintlockd-ca` in its namespace.
+3. **`deploy/`**, or a release's `flintlock-runner-fleet.yaml`, to the
+   same cluster. It makes the namespace `flintlock-system`, the Host Agent
+   with the Host Services on every Host, and the Runner. The Runner's Role
+   to read `flintlockd-ca` goes into `battery-operator-system`, which has
+   to exist, and the Runner's claims and Pools need battery-operator's
+   resources.
+4. **The GitLab runner token**, as the Secret
+   `flintlock-runner-gitlab-token` in `flintlock-system`
+   ([The Runner](#the-runner)). The Runner's pod does not start without it.
+5. **`deploy/capi/`**, or a release's `flintlock-runner-capi.yaml`, to the
+   management cluster, for the Hosts.
+
+What each side provides:
+
+| From | What |
+|------|------|
+| battery-operator | the `Pool` and `MicroVMClaim` resources, battery, the Exec Agent on every Host, the Inventory Controller that gives battery its Hosts, and the serving CA |
+| `deploy/` | the Host Agent and its Host Services, and their addresses on each Host's Node (KF-194); the Runner, its Holder and its permissions |
+| `deploy/capi/` | the Hosts, as Cluster API Machines of the Host Image |
 
 ## Layout
 
@@ -39,7 +75,9 @@ with their Host Services, and no Runner.
 | `host-agent/config/` | `render.sh`, `prepare-cache.sh`, `prewarm.sh`, and `host-services.yaml.tmpl`, the configuration of `flr host-services` |
 | `host-agent/services/<service>/` | one kustomize Component per Host Service: containers, configuration templates, settings |
 | `host-agent/rbac.yaml`, `host-agent/admission-policy.yaml` | the Pod Provider's, from the Virtual Node design; not deployed, kept for `internal/kubelet`'s tests until that design is withdrawn |
-| `runner/` | Deployment, ServiceAccount and the configuration file `config.yaml`; not in `kustomization.yaml` yet |
+| `runner/` | the Runner's Deployment, ServiceAccount and configuration file `config.yaml` |
+| `runner/rbac.yaml` | what the Runner may do (KF-196). cmd/flr's end-to-end test of the claim backend applies it unchanged |
+| `runner/holder.yaml` | the Holder, the ServiceAccount every claim names; bound to nothing |
 | `runner/job-timeout.yaml` | the one place the job timeout is set (KF-081) |
 | `runner/role.yaml` | the Virtual Node design's Runner Role; not deployed, kept for `internal/poolmgr/kube`'s tests |
 | `capi/host-pool/` | the objects of one Host pool, with placeholders |
@@ -53,7 +91,9 @@ In the workload cluster:
 - **battery-operator v0.1.0**: its Manifests, `config/default` and
   `config/exec-agent`, which run the Operator, battery, the Exec Agent on
   every Host and the Inventory Controller, and serve the `Pool` and
-  `MicroVMClaim` resources. See [The Exec Agent](#the-exec-agent).
+  `MicroVMClaim` resources. See [Order of application](#order-of-application).
+- **The GitLab runner token**, in the Secret
+  `flintlock-runner-gitlab-token`, key `token`.
 - The Host Service credentials, if an upstream needs them. The Components
   generate both Secrets empty; replace them from an overlay:
 
@@ -81,18 +121,17 @@ In the manifests:
 - `capi/pools/default/host-pool.yaml`: the cluster, the AMI, the instance
   type, and the node and pod CIDRs in `host.conf`.
 - `capi/kustomization.yaml`: the namespace of the workload cluster's Cluster.
-- `runner/config.yaml`, once the Runner can be deployed: the GitLab URL and
-  the Profiles.
+- `runner/config.yaml`: the GitLab URL and the Profiles. Applied from
+  source, the Profiles' Guest Image says `:REPLACE`; pin it by the digests
+  of a release's `images.txt`. A release's fleet asset has them already.
 
 ## The Exec Agent
 
 The Exec Agent comes from battery-operator's Manifests, not from
 `deploy/`. `flr agent`, this repository's Exec Agent, is gone (KF-170 to
 KF-182 are withdrawn). Apply battery-operator v0.1.0's Manifests,
-`config/default` and `config/exec-agent`, to the same cluster as
-`deploy/`, with the images of that release
-(`ghcr.io/phoban01/battery-operator:v0.1.0` and
-`ghcr.io/phoban01/battery-operator/exec-agent:v0.1.0`).
+`config/default` and `config/exec-agent`, to the same cluster before
+`deploy/` ([Order of application](#order-of-application)).
 battery-operator's documentation says what they need: cert-manager for the
 Operator's own certificates, and the Host prerequisites of its Exec Agent.
 
@@ -147,25 +186,46 @@ Node, so a cluster runs one or the other, never both.
 
 ## The Runner
 
-`deploy/runner` holds the Runner's Deployment, ServiceAccount and
-configuration, and `deploy/kustomization.yaml` leaves it out. It is built
-and checked on its own (`kustomize build deploy/runner`), and it is not
-meant to be applied yet: its configuration names no pool backend, because
-the only backends `flr` has are battery's gRPC one of the push fleet and
-the Virtual Node design's Kubernetes backend, and neither is this design's.
-`flr config show` refuses the file for want of a backend and for nothing
-else, which `make manifests-check` asserts, so a Runner started from it
-exits at once. The Profiles carry no Guest Transport, because `agent-exec`
-is not yet a transport a Profile can name.
+`deploy/runner` holds the Runner, and `deploy/kustomization.yaml` lists
+it. The Runner runs as a Deployment of one pod in `flintlock-system`, off
+the Hosts (KF-082). It reads its configuration from a ConfigMap and the
+GitLab runner token from the Secret `flintlock-runner-gitlab-token`, key
+`token` (KF-080), which the operator creates:
 
-The work package that builds the claim backend adds the backend to
-`runner/config.yaml`, the Runner's permissions on the claim resource and
-read access to Nodes (KF-189) to `runner/`, and `- runner` to the resources
-of `deploy/kustomization.yaml`. What stays as it is: the configuration
-from a ConfigMap and the token from the Secret
-`flintlock-runner-gitlab-token`, key `token` (KF-080); the grace period
-from `runner/job-timeout.yaml`, which also sets `gitlab.shutdown_timeout`
-(KF-081); and the node affinity that keeps the Runner off Hosts (KF-082).
+```sh
+kubectl -n flintlock-system create secret generic \
+  flintlock-runner-gitlab-token --from-literal=token=glrt-...
+```
+
+Its pool backend is the claim backend (`12-cluster-fleet.md#battery-claims`),
+with the pod's own identity:
+
+- **Claims.** For each Job the Runner creates a `MicroVMClaim` in
+  `flintlock-system` for the Pool of the Job's Profile, and waits until it
+  is `Bound`. It renews the claim while the Job runs and deletes it when
+  the Job ends. It declares one `Pool` per Profile from
+  `runner/config.yaml`.
+- **The Holder.** Every claim names the ServiceAccount
+  `flintlock-runner-holder` (`runner/holder.yaml`). battery-operator's
+  Client Library requests a claim token of the Holder for each claim,
+  bound to the claim's Secret `<claim name>-exec`. No pod runs as the
+  Holder, and it has no permission of its own.
+- **Stages.** The Executor runs every Stage over `agent-exec`: it dials the
+  Exec Agent at the address in the claim's status, verifies it against the
+  serving CA in `battery-operator-system/flintlockd-ca`, and sends the claim
+  token (KF-185, KF-186). A Profile that names `ssh` is refused, because
+  the Exec Agent relays exec only (KF-195).
+- **Host Services.** The Executor reads them from the annotations of the
+  Node of the claim's Host (KF-189).
+
+`runner/rbac.yaml` grants exactly that and no more (KF-196): in
+`flintlock-system`, `microvmclaims` (create, get, list, watch, patch,
+delete), `pools` (create, get, list, watch, update, patch), `secrets`
+(create) and `serviceaccounts/token` (create) on the Holder alone; `get`
+on Nodes; and `get` on the ConfigMap `flintlockd-ca` in
+`battery-operator-system`. The grace period comes from
+`runner/job-timeout.yaml`, which also sets `gitlab.shutdown_timeout`
+(KF-081).
 
 ## Requirements on the workload cluster
 
@@ -237,7 +297,13 @@ Agent's port, in the list.
   (its EA-001, EA-064). The Host Image serves `flintlockd` on the loopback
   port 9090 without TLS (HI-042, HI-063), and does not label the Node
   `battery.liquidmetal-x.dev/host=true`. The Host Image has to change
-  before battery-operator's Exec Agent can run a Stage on it.
+  before battery-operator's Exec Agent can run a Stage on it, and so
+  before the fleet's own Hosts can run a Job: it has to serve `flintlockd`
+  over mutual TLS on the Host's address, and label the Node as a Host for
+  battery-operator. Issue #73 tracks both. Until then the Runner, the
+  claims and the Pools work, but no Stage reaches a MicroVM on these Hosts.
+  A Host set up as battery-operator's own documentation says, such as its
+  real hosts trial, can run Jobs now.
 - **SELinux.** The Host Image enforces SELinux and labels the host paths
   the Host Agent mounts for `container_t` (HI-065): `host.env` read-only,
   the cache directory writable, both at `s0`. The

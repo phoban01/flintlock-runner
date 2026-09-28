@@ -1,14 +1,10 @@
-# The Runner: its Deployment, configuration and identity.
+# The Runner: its Deployment, configuration, identity and permissions, and
+# the Holder its claims name. deploy/kustomization.yaml lists this
+# directory, so `kustomize build deploy` renders it with the Host Agent.
 #
-# NOT IN deploy/kustomization.yaml until the claim backend exists: the
-# Runner's configuration names no pool backend yet (config.yaml), and a
-# Runner started from it exits. It renders on its own,
-#
-#   kustomize build deploy/runner
-#
-# which is how `make manifests-check` checks it. The work package that adds
-# the claim backend adds the backend to config.yaml, the Runner's RBAC for
-# the claim resource here, and `- runner` back to deploy/kustomization.yaml.
+# It needs battery-operator v0.1.0's Manifests in the cluster first: the
+# Pool and MicroVMClaim resources, and the namespace battery-operator-system,
+# where rbac.yaml lets the Runner read the serving CA (deploy/README.md).
 #
 # role.yaml in this directory is the Virtual Node design's Role for the
 # Kubernetes pool backend, still on main for internal/poolmgr/kube's tests
@@ -18,6 +14,8 @@ kind: Kustomization
 
 resources:
   - serviceaccount.yaml
+  - holder.yaml
+  - rbac.yaml
   - deployment.yaml
   - job-timeout.yaml
 

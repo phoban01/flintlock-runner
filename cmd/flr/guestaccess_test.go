@@ -110,7 +110,10 @@ func TestGuestAccessOfTheKubernetesBackend(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer func() { _ = client.Close() }()
-	access := newGuestAccess(cfg, client, newInventoryView(nil), log)
+	access, err := newGuestAccess(cfg, client, newInventoryView(nil), log)
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	if len(access.endpoints) != 0 {
 		t.Errorf("host registry endpoints = %v, want none", access.endpoints)
@@ -155,12 +158,75 @@ func TestGuestAccessOfTheKubernetesBackend(t *testing.T) {
 	}
 	defer func() { _ = bc.Close() }()
 	inv := newInventoryView(battery.Inventory.Hosts)
-	access = newGuestAccess(battery, bc, inv, log)
+	access, err = newGuestAccess(battery, bc, inv, log)
+	if err != nil {
+		t.Fatal(err)
+	}
 	if _, refusing := access.dialer.(noHostDialer); refusing || len(access.endpoints) != 1 || len(access.options) != 0 {
 		t.Errorf("battery access = dialer %T, %d endpoints, %d options; want the gRPC dialer over the inventory and no override",
 			access.dialer, len(access.endpoints), len(access.options))
 	}
 	if access.inventory != executor.InventoryLookup(inv) {
 		t.Error("battery's host services do not come from the inventory")
+	}
+}
+
+// TestGuestAccessOfTheClaimBackend checks what `run` wires for the claim
+// backend. The Executor is told to run every Profile over agent-exec, whose
+// clients dial through the claims the backend holds, and a lease it does
+// not hold dials nothing. The Host Service lookup reads the Host's Node
+// from the claim backend's API server, with its credentials; and the Host
+// Registry has no endpoints and a dialer that refuses.
+func TestGuestAccessOfTheClaimBackend(t *testing.T) {
+	t.Parallel()
+	api := &apiRecorder{}
+	server := httptest.NewTLSServer(api)
+	t.Cleanup(server.Close)
+	kubeconfig := strings.ReplaceAll(testKubeconfig, "server: https://127.0.0.1:1",
+		"server: "+server.URL+"\n      insecure-skip-tls-verify: true")
+	path := filepath.Join(t.TempDir(), "kubeconfig")
+	if err := os.WriteFile(path, []byte(kubeconfig), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	log := slog.New(slog.NewTextHandler(io.Discard, nil))
+	cfg := &config.Config{
+		GitLab: config.GitLab{Name: "runner-a"},
+		PoolManager: config.PoolManager{
+			Backend: config.PoolBackendClaim,
+			Claim:   &config.ClaimPools{Kubeconfig: path, Context: "fleet", Namespace: "runners", HolderServiceAccount: "holder"},
+		},
+		Scheduler: config.Scheduler{Namespace: "ci"},
+	}
+	client, err := newPoolClient(cfg, log)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = client.Close() }()
+	access, err := newGuestAccess(cfg, client, newInventoryView(nil), log)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer access.close()
+
+	if len(access.endpoints) != 0 {
+		t.Errorf("host registry endpoints = %v, want none", access.endpoints)
+	}
+	if _, err := access.dialer.Dial(context.Background(), flintlock.Endpoint{Name: "host-a", Address: "10.0.1.10:9090"}); err == nil {
+		t.Error("the claim design's host dialer dialled a host")
+	}
+	if len(access.options) != 1 || access.agents == nil {
+		t.Fatalf("executor options = %d, agents %v; want the one that runs every profile over agent-exec", len(access.options), access.agents)
+	}
+	_, _, err = access.agents.Lease(context.Background(), transport.AgentClaim{LeaseID: "job-1", VMUID: "vm-1", Host: "host-7", Address: "10.0.0.7:10270"})
+	if err == nil || !strings.Contains(err.Error(), "no claim is held under lease job-1") {
+		t.Errorf("Lease for a claim the backend does not hold = %v, want a refusal from the claim backend", err)
+	}
+
+	entry, ok := access.inventory.Host("host-7")
+	if !ok || entry.Services.Buildkit != "tcp://10.200.0.1:1234" {
+		t.Errorf("the host's node lookup = %+v, %t; want buildkit from the annotation", entry, ok)
+	}
+	if got := api.seen("GET /api/v1/nodes/host-7 Bearer not-a-real-token"); got == "" {
+		t.Errorf("the host's node was not read from the claim backend's API server; requests: %v", api.all())
 	}
 }

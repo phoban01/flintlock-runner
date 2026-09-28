@@ -1,16 +1,19 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"log/slog"
 	"os"
 	"strings"
 
+	"google.golang.org/grpc"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/clientcmd"
 
 	"github.com/phoban01/flintlock-runner/internal/config"
+	"github.com/phoban01/flintlock-runner/internal/executor"
 	"github.com/phoban01/flintlock-runner/internal/poolmgr"
 	"github.com/phoban01/flintlock-runner/internal/poolmgr/claim"
 	"github.com/phoban01/flintlock-runner/internal/poolmgr/kube"
@@ -31,6 +34,31 @@ type poolClient struct {
 	// lookup share it, so that the Runner talks to one API server as one
 	// identity (KF-128).
 	kube *kubeAccess
+	// claim is what the claim pool backend gives the agent-exec Guest
+	// Transport and the Host Service lookup, nil for the other backends.
+	claim *claimAccess
+}
+
+// claimAccess is what the Runner of the claim design reaches its guests
+// with: the claims the claim pool backend holds, each of which dials its
+// own Exec Agent, and the Nodes of the same API server, read as the same
+// identity (KF-189).
+type claimAccess struct {
+	backend *claim.Backend
+	nodes   executor.NodeGetter
+}
+
+// dialAgent dials the Exec Agent of the claim that the backend holds under
+// leaseID, with that claim's own connection. battery-operator's Client
+// Library makes it: it verifies the agent against the Operator's serving
+// CA and sends the claim's current token with every call (KF-186). A
+// lease that the backend does not hold has no connection.
+func (c *claimAccess) dialAgent(ctx context.Context, leaseID string, opts ...grpc.DialOption) (*grpc.ClientConn, error) {
+	held, ok := c.backend.Held(leaseID)
+	if !ok {
+		return nil, fmt.Errorf("claim pool backend: no claim is held under lease %s", leaseID)
+	}
+	return held.Dial(ctx, opts...)
 }
 
 // kubeAccess is how the Runner of a cluster fleet reaches the Kubernetes
@@ -112,6 +140,10 @@ func newClaimClient(cfg *config.Config, log *slog.Logger) (*poolClient, error) {
 	if err != nil {
 		return nil, fmt.Errorf("claim pool backend: %w", err)
 	}
+	clientset, err := kubernetes.NewForConfig(restConfig)
+	if err != nil {
+		return nil, fmt.Errorf("claim pool backend: %w", err)
+	}
 	backend, err := claim.New(claim.Options{
 		Config:          restConfig,
 		Namespace:       kubeNamespace(c.Namespace, cfg.Scheduler.Namespace, os.ReadFile),
@@ -126,7 +158,11 @@ func newClaimClient(cfg *config.Config, log *slog.Logger) (*poolClient, error) {
 	if err != nil {
 		return nil, fmt.Errorf("claim pool backend: %w", err)
 	}
-	return &poolClient{Client: backend, setProfiles: backend.SetProfiles}, nil
+	return &poolClient{
+		Client:      backend,
+		setProfiles: backend.SetProfiles,
+		claim:       &claimAccess{backend: backend, nodes: clientset.CoreV1().Nodes()},
+	}, nil
 }
 
 // kubeRESTConfig is the client configuration: the named kubeconfig file and

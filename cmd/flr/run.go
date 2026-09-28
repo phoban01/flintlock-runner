@@ -193,6 +193,7 @@ type runner struct {
 	sched     scheduler.Scheduler
 	provider  executor.Provider
 	inventory *inventoryView
+	access    guestAccess
 }
 
 // newRunner builds the Pool Manager client and the policy units the
@@ -231,10 +232,15 @@ func newRunner(ctx context.Context, cfg *config.Config, log *slog.Logger, onInit
 	}
 
 	inv := newInventoryView(cfg.Inventory.Hosts)
-	access := newGuestAccess(cfg, client, inv, log)
+	access, err := newGuestAccess(cfg, client, inv, log)
+	if err != nil {
+		_ = client.Close()
+		return nil, err
+	}
 	hosts, err := flintlock.NewRegistry(ctx, access.dialer, access.endpoints,
 		flintlock.WithRegistryLogger(log))
 	if err != nil {
+		access.close()
 		_ = client.Close()
 		return nil, fmt.Errorf("host registry: %w", err)
 	}
@@ -267,6 +273,7 @@ func newRunner(ctx context.Context, cfg *config.Config, log *slog.Logger, onInit
 	})
 	if err != nil {
 		_ = hosts.Close()
+		access.close()
 		_ = client.Close()
 		return nil, err
 	}
@@ -299,16 +306,18 @@ func newRunner(ctx context.Context, cfg *config.Config, log *slog.Logger, onInit
 	)
 	if err != nil {
 		_ = hosts.Close()
+		access.close()
 		_ = client.Close()
 		return nil, err
 	}
-	return &runner{client: client, hosts: hosts, sched: sched, provider: provider, inventory: inv}, nil
+	return &runner{client: client, hosts: hosts, access: access, sched: sched, provider: provider, inventory: inv}, nil
 }
 
 // close releases the connections. The Scheduler has stopped by then: the
 // run loop's shutdown stopped it through the provider.
 func (r *runner) close() {
 	_ = r.hosts.Close()
+	r.access.close()
 	_ = r.client.Close()
 }
 

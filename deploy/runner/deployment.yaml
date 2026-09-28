@@ -14,8 +14,6 @@
 #     flintlock-runner-gitlab-token --from-literal=token=glrt-...
 #
 # The pod does not start without it.
-#
-# Not yet part of the default render: see deploy/runner/kustomization.yaml.
 apiVersion: apps/v1
 kind: Deployment
 metadata:

@@ -359,6 +359,22 @@ would need credentials for it.
 - **KF-113** The Host Agent SHALL hold only the privileges it needs to bind
   to the bridge gateway, to write the cache directory and to reach the
   local `flintlockd` endpoint.
+- **KF-196** The Fleet Manifests SHALL grant the Runner only the
+  permissions to manage `MicroVMClaim` and `Pool` resources and to create
+  Secrets in its own namespace, to request tokens of the Holder alone, to
+  read Nodes and to read the serving CA ConfigMap in battery-operator's
+  namespace, and SHALL grant the Holder no permission.
+
+KF-196 is the claim design's successor to KF-110. Each permission has one
+user. The claim backend creates, renews, watches and deletes its claims,
+and creates the Secret of each claim (KF-150 to KF-155). It declares and
+updates the Pools of its Profiles, and watches them for the available
+count. It requests each claim token for the Holder, with `TokenRequest` on
+`serviceaccounts/token` (KF-186). The Executor reads the Host Services
+from the Node of the Job's Host (KF-189). The claim backend reads the
+serving CA from the ConfigMap that battery-operator writes in its own
+namespace. The Holder needs no permission: the Exec Agent checks a claim
+token with a TokenReview, which asks nothing of the Holder.
 
 ## Hardening {#cluster-hardening}
 
@@ -604,6 +620,15 @@ a network route the operator has to allow from wherever the Runner runs.
 - **KF-189** The Executor SHALL read the Host Service addresses for a Job
   from the annotations of KF-194 that the Host Agent publishes on the Node
   of the Job's Host.
+- **KF-195** Where the claim backend is configured, the Runner SHALL
+  reject a configuration in which a Profile names the `ssh` Guest
+  Transport.
+
+battery-operator's Exec Agent relays flintlock's `MicroVMExec` service
+and nothing else; it has no SSH proxy. So under the claim backend a Profile
+names `exec` or no Guest Transport, and the Executor runs it over
+`agent-exec` (KF-185). An `ssh` Profile is refused when the configuration
+loads, not when its first Job fails.
 
 A claim token is the token that battery-operator's Client Library requests
 for a claim (battery-operator CC-002, CC-011, CC-020). It is a
