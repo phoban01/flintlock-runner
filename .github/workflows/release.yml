@@ -2,7 +2,8 @@ name: release
 
 # A tag vX.Y.Z-rc.N publishes a release candidate as a GitHub pre-release; a
 # tag vX.Y.Z publishes a release. Either publishes the flr image, the Host
-# Image and the two manifests assets as well as the archives.
+# Image, the Guest Image and the two manifests assets as well as the
+# archives.
 # docs/RELEASING.md is the procedure. The same workflow dry-runs all of the
 # packaging, pushing nothing, on any pull request that changes it.
 on:
@@ -14,6 +15,7 @@ on:
       - .github/workflows/release.yml
       - hack/release/**
       - deploy/**
+      - guest/build.sh
   workflow_dispatch:
 
 permissions:
@@ -30,6 +32,9 @@ env:
   KUSTOMIZE_VERSION: v5.8.1
   FLR_REPOSITORY: ghcr.io/phoban01/flintlock-runner/flr
   HOST_REPOSITORY: ghcr.io/phoban01/flintlock-runner/host
+  # The Guest Image goes to GUEST_PREFIX/guest-kernel and
+  # GUEST_PREFIX/guest-rootfs.
+  GUEST_PREFIX: ghcr.io/phoban01/flintlock-runner
 
 jobs:
   # Decide what the tag is, and refuse anything that is not a clean candidate
@@ -154,7 +159,8 @@ jobs:
         run: printf '%s' "$GITHUB_TOKEN" | podman login ghcr.io --username "$GITHUB_ACTOR" --password-stdin
       # Nothing of this version may exist yet, the flr image included, so a
       # re-run of a half-published release fails here instead of moving a
-      # tag (KF-145). Cut the next candidate instead.
+      # tag (KF-145). Cut the next candidate instead. The guest images job
+      # checks its own tags, since it pushes at the same time as this one.
       - name: no tag of this version exists yet
         if: startsWith(github.ref, 'refs/tags/')
         env:
@@ -183,13 +189,86 @@ jobs:
           REGISTRY_TLS_VERIFY: ${{ steps.target.outputs.tls_verify }}
         run: hack/release/check-tags.sh published --version "$VERSION" --host "$(cat host.ref)"
 
+  # The Guest Image (GI-040): the kernel and root filesystem images a Profile
+  # names, each built for linux/amd64 and linux/arm64 with its check stage,
+  # as CI's guest job builds them, and pushed as one index per image. On a
+  # tag they go to ghcr.io, tagged VERSION. On a pull request they go to a
+  # registry that lives only inside this job, so that the push and its
+  # checks run too, and nothing leaves the runner. The builder is on the
+  # runner's network to reach that registry. The platform that is not the
+  # runner's runs its check stage under QEMU.
+  guest-images:
+    name: guest images
+    needs: [tag, verify]
+    if: >-
+      !cancelled() &&
+      (!startsWith(github.ref, 'refs/tags/') || needs.verify.result == 'success')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    services:
+      registry:
+        image: docker.io/library/registry:3.0.0@sha256:6c5666b861f3505b116bb9aa9b25175e71210414bd010d92035ff64018f9457e
+        ports: ["5000:5000"]
+    outputs:
+      kernel: ${{ steps.push.outputs.kernel }}
+      rootfs: ${{ steps.push.outputs.rootfs }}
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+      - name: where the images go
+        id: target
+        run: |
+          if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
+            {
+              echo "prefix=$GUEST_PREFIX"
+              echo "version=${GITHUB_REF_NAME#v}"
+              echo "tls_verify=true"
+            } >>"$GITHUB_OUTPUT"
+          else
+            {
+              echo "prefix=localhost:5000/flintlock-runner"
+              echo "version=0.0.0-rc.${GITHUB_RUN_NUMBER}"
+              echo "tls_verify=false"
+            } >>"$GITHUB_OUTPUT"
+          fi
+      - name: a builder for both platforms, on the runner's network
+        run: bash hack/release/setup-buildx.sh --host-network
+      - name: log in to ghcr.io
+        if: startsWith(github.ref, 'refs/tags/')
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: printf '%s' "$GITHUB_TOKEN" | docker login ghcr.io --username "$GITHUB_ACTOR" --password-stdin
+      # guest/build.sh refuses to push when either tag exists already, so a
+      # re-run never moves a tag (KF-145).
+      - name: build, check and push both images
+        id: push
+        env:
+          PREFIX: ${{ steps.target.outputs.prefix }}
+          VERSION: ${{ steps.target.outputs.version }}
+          REGISTRY_TLS_VERIFY: ${{ steps.target.outputs.tls_verify }}
+        run: |
+          guest/build.sh --platforms linux/amd64,linux/arm64 --push "$PREFIX" --version "$VERSION" --refs guest.refs
+          cat guest.refs
+          {
+            echo "kernel=$(grep '/guest-kernel@' guest.refs)"
+            echo "rootfs=$(grep '/guest-rootfs@' guest.refs)"
+          } >>"$GITHUB_OUTPUT"
+      - name: one index for both platforms, tagged with the version only
+        env:
+          VERSION: ${{ steps.target.outputs.version }}
+          REGISTRY_TLS_VERIFY: ${{ steps.target.outputs.tls_verify }}
+        run: |
+          mapfile -t refs <guest.refs
+          hack/release/check-guest-images.sh --version "$VERSION" "${refs[@]}"
+
   # Publish a tag: the archives and the flr image with goreleaser, then the
   # manifests assets, rendered against the digests just pushed. goreleaser
   # leaves the GitHub release a draft (.goreleaser.yaml), and the last step
   # publishes it, so a release is never visible without its manifests.
   release:
     name: publish
-    needs: [tag, verify, host-image]
+    needs: [tag, verify, host-image, guest-images]
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -241,11 +320,13 @@ jobs:
       - name: the published images by digest
         env:
           HOST_DIGEST: ${{ needs.host-image.outputs.digest }}
+          GUEST_KERNEL_REF: ${{ needs.guest-images.outputs.kernel }}
+          GUEST_ROOTFS_REF: ${{ needs.guest-images.outputs.rootfs }}
         run: |
           version=${GITHUB_REF_NAME#v}
           flr_digest=$(jq -r --arg name "$FLR_REPOSITORY:$version" \
             '[.[] | select(.type == "Docker Image" and .name == $name) | .extra.Digest] | unique | .[]' dist/artifacts.json)
-          for d in "$flr_digest" "$HOST_DIGEST"; do
+          for d in "$flr_digest" "$HOST_DIGEST" "${GUEST_KERNEL_REF#*@}" "${GUEST_ROOTFS_REF#*@}"; do
             if ! [[ $d =~ ^sha256:[0-9a-f]{64}$ ]]; then
               echo "::error::not one digest: \"$d\""
               exit 1
@@ -255,11 +336,15 @@ jobs:
             echo "VERSION=$version"
             echo "FLR_REF=$FLR_REPOSITORY@$flr_digest"
             echo "HOST_REF=$HOST_REPOSITORY@$HOST_DIGEST"
+            echo "GUEST_KERNEL_REF=$GUEST_KERNEL_REF"
+            echo "GUEST_ROOTFS_REF=$GUEST_ROOTFS_REF"
           } >>"$GITHUB_ENV"
       - name: the flr image as published
         run: hack/release/check-flr-image.sh --version "$VERSION" --platforms linux/amd64,linux/arm64 --pull "$FLR_REF"
       - name: only this version's tags, on the pushed digests
         run: hack/release/check-tags.sh published --version "$VERSION" --flr "$FLR_REF" --host "$HOST_REF"
+      - name: the Guest Image as published
+        run: hack/release/check-guest-images.sh --version "$VERSION" "$GUEST_KERNEL_REF" "$GUEST_ROOTFS_REF"
       - name: render the manifests assets
         run: hack/release/render-manifests.sh --flr "$FLR_REF" --host "$HOST_REF" --out dist/manifests
       - name: attach the manifests and publish the release
@@ -271,6 +356,8 @@ jobs:
             echo "$FLR_REPOSITORY:$VERSION $FLR_REF"
             echo "$HOST_REPOSITORY:$VERSION $HOST_REF"
             echo "$HOST_REPOSITORY:$VERSION-k8s-$k8s $HOST_REF"
+            echo "$GUEST_PREFIX/guest-kernel:$VERSION $GUEST_KERNEL_REF"
+            echo "$GUEST_PREFIX/guest-rootfs:$VERSION $GUEST_ROOTFS_REF"
           } >dist/manifests/images.txt
           (cd dist/manifests && sha256sum flintlock-runner-fleet.yaml flintlock-runner-capi.yaml images.txt) >>dist/checksums.txt
           gh release upload "$GITHUB_REF_NAME" --clobber \

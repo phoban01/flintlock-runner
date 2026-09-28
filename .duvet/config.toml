@@ -66,6 +66,25 @@ comment-style = { meta = "#=", content = "#/" }
 pattern = "deploy/**/*.yaml"
 comment-style = { meta = "#=", content = "#/" }
 
+# The Guest Image (13-guest-image.md): its Containerfiles, scripts and
+# systemd-networkd files, all with `#` comments. By file, not by directory,
+# for the reason above.
+[[source]]
+pattern = "guest/*.sh"
+comment-style = { meta = "#=", content = "#/" }
+
+[[source]]
+pattern = "guest/*/Containerfile"
+comment-style = { meta = "#=", content = "#/" }
+
+[[source]]
+pattern = "guest/*/*.sh"
+comment-style = { meta = "#=", content = "#/" }
+
+[[source]]
+pattern = "guest/rootfs/network/*.network"
+comment-style = { meta = "#=", content = "#/" }
+
 # The Release (12-cluster-fleet.md#cluster-release): the goreleaser
 # configuration and the release scripts beside the flr image's Containerfile.
 # Only the scripts and the Containerfile, not the testdata.
@@ -127,6 +146,10 @@ format = "markdown"
 
 [[specification]]
 source = "docs/requirements/12-cluster-fleet.md"
+format = "markdown"
+
+[[specification]]
+source = "docs/requirements/13-guest-image.md"
 format = "markdown"
 
 [report.html]

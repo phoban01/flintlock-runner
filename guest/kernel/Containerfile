@@ -1,0 +1,75 @@
+# The Guest Image's kernel (docs/requirements/13-guest-image.md): an OCI
+# image with the kernel at the path a Profile's kernel.filename names,
+# boot/vmlinux. flintlockd pulls it and hands the file to Firecracker.
+#
+# Build it with guest/build.sh, which builds it for linux/amd64 and
+# linux/arm64. The build context is guest/kernel.
+#
+# Firecracker's CI kernel, 6.1, as battery-operator's real hosts trial uses
+# it: aarch64 or x86_64 for the image's platform. It has virtio-vsock,
+# virtio-blk, ext4 and devtmpfs built in, so the guest agent is reachable and
+# systemd boots without an initrd. On aarch64 it is the uncompressed Image
+# that Firecracker loads, whatever its name; on x86_64 an ELF vmlinux.
+# Firecracker's bucket publishes no checksum, so the sha256s here are
+# computed from the downloads.
+#
+# Every stage runs on the build machine's own architecture: nothing here
+# runs the kernel, so no platform is emulated. alpine:3.22 is pinned by the
+# digest of its multi-platform index; resolve a new one with
+# `docker buildx imagetools inspect alpine:3.22`.
+
+# The versions, for the fetch stage and for the published image's labels.
+ARG FIRECRACKER_CI_VERSION=v1.12
+ARG KERNEL_VERSION=6.1.128
+
+#= docs/requirements/13-guest-image.md#guest-build
+#/ The Guest Image build SHALL complete on a machine that has
+#/ neither `/dev/kvm` nor a Host.
+FROM --platform=$BUILDPLATFORM docker.io/library/alpine:3.22@sha256:5291449c3df73caf6ed85e649dec1b9e818b39a5d8c871e97afc13e9cd5e8fa8 AS fetch
+ARG TARGETARCH
+ARG FIRECRACKER_CI_VERSION
+ARG KERNEL_VERSION
+ARG KERNEL_SHA256_ARM64=cb1291c66bca75bc11cb9c8357fcef9965bb1786dffcb42a60923c3e0e49f319
+ARG KERNEL_SHA256_AMD64=27a8310b9a727517e9eb02044524b6ceb77de5728e3491b6974d5c846227ecc8
+#= docs/requirements/13-guest-image.md#guest-kernel
+#/ The Guest Image's kernel image SHALL contain Firecracker's CI
+#/ kernel of the 6.1 series for its architecture at `boot/vmlinux`
+#
+#= docs/requirements/13-guest-image.md#guest-build
+#/ The Guest Image build SHALL verify the checksum of every file
+#/ it downloads against a checksum recorded in the Guest Image's sources and
+#/ SHALL fail when one does not match.
+RUN apk add --no-cache curl && \
+    case "${TARGETARCH}" in \
+      arm64) uarch=aarch64; sum="${KERNEL_SHA256_ARM64}" ;; \
+      amd64) uarch=x86_64; sum="${KERNEL_SHA256_AMD64}" ;; \
+      *) echo "no kernel for ${TARGETARCH}" >&2; exit 1 ;; \
+    esac && \
+    curl -fsSL -o /vmlinux "https://s3.amazonaws.com/spec.ccfc.min/firecracker-ci/${FIRECRACKER_CI_VERSION}/${uarch}/vmlinux-${KERNEL_VERSION}" && \
+    echo "${sum}  /vmlinux" | sha256sum -c - && \
+    mkdir -p /out/boot && mv /vmlinux /out/boot/vmlinux && chmod 0644 /out/boot/vmlinux
+
+# ---------------------------------------------------------------------------
+# check: the kernel is where a Profile looks for it, and of the image's
+# architecture. The published image takes the kernel from this stage, so no
+# builder can skip it: a kernel that fails its check is never published.
+FROM --platform=$BUILDPLATFORM docker.io/library/alpine:3.22@sha256:5291449c3df73caf6ed85e649dec1b9e818b39a5d8c871e97afc13e9cd5e8fa8 AS check
+ARG TARGETARCH
+COPY --from=fetch /out/ /out/
+COPY check.sh /check.sh
+#= docs/requirements/13-guest-image.md#guest-build
+#/ The Guest Image build SHALL check the contents of each image it
+#/ builds in a check stage that fails unless the image carries everything
+#/ this document requires of it.
+RUN sh /check.sh /out "${TARGETARCH}"
+
+# ---------------------------------------------------------------------------
+# The published image: the kernel and nothing else.
+FROM scratch
+ARG FIRECRACKER_CI_VERSION
+ARG KERNEL_VERSION
+COPY --from=check /out/boot/vmlinux /boot/vmlinux
+LABEL org.opencontainers.image.title="flintlock-runner guest kernel" \
+      org.opencontainers.image.source="https://github.com/phoban01/flintlock-runner" \
+      dev.flintlock.gitlab-runner.version.kernel="${KERNEL_VERSION}" \
+      dev.flintlock.gitlab-runner.version.firecracker-ci="${FIRECRACKER_CI_VERSION}"

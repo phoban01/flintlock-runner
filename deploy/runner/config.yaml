@@ -35,19 +35,55 @@ gitlab:
 # pool_manager:
 #   backend: <the claim backend, once it exists>
 
-# The Profiles (KF-080). Each names what battery's Pool of that Profile boots;
-# pin the images by digest (CF-027). The Guest Transport is left to its
-# default until agent-exec can be named here (KF-185).
+# The Profiles (KF-080). Each names what battery's Pool of that Profile boots.
+# The Guest Transport is left to its default until agent-exec can be named
+# here (KF-185).
+#
+# Both boot the Guest Image of guest/ (docs/requirements/13-guest-image.md):
+# Firecracker's CI 6.1 kernel at boot/vmlinux, and Ubuntu 24.04 with the
+# guest agent, bash, git, curl, the CA certificates and gitlab-runner-helper
+# at the default helper path. Each image is one index for amd64 and arm64,
+# so the two Profiles name the same references. The shell, the helper path
+# and the builds and cache directories are left to their defaults, which
+# are what the image has.
+#
+# Pin the images by digest (CF-027). Nothing is published until the first
+# release after the guest images were added, so the tags below are
+# placeholders. Each release lists the digests it pushed in its images.txt
+# asset (docs/RELEASING.md), one line per image: the tag, then the same
+# image by digest. The images are guest-kernel and guest-rootfs, in the
+# repositories of ghcr.io/phoban01/flintlock-runner.
+# Replace each :REPLACE below with the @sha256:<digest> of one release. A
+# tag loads too, with a warning at startup that names the Profile and the
+# image (CF-027), but the tag names whatever was pushed last under it.
 profiles:
   - name: default
+    default: true
     arch: amd64
     vcpu: 2
     memory_mb: 4096
     kernel:
-      image: registry.example.com/REPLACE/kernel:REPLACE
-    rootfs: registry.example.com/REPLACE/ubuntu-ci:REPLACE
+      image: ghcr.io/phoban01/flintlock-runner/guest-kernel:REPLACE
+      filename: boot/vmlinux
+    rootfs: ghcr.io/phoban01/flintlock-runner/guest-rootfs:REPLACE
     pool:
       size: 2
+  # An arm64 Host on Lima, as battery-operator's real hosts trial runs one
+  # (4 vCPUs and 6 GiB): one MicroVM at a time, for the first run on a real
+  # Host (#79). A Job asks for it with `image: flr-arm64`. On a fleet with
+  # only this Host, mark this Profile as the default instead, or remove the
+  # amd64 one, whose Pool no Host could fill.
+  - name: lima-arm64
+    arch: arm64
+    vcpu: 2
+    memory_mb: 2048
+    images: [flr-arm64]
+    kernel:
+      image: ghcr.io/phoban01/flintlock-runner/guest-kernel:REPLACE
+      filename: boot/vmlinux
+    rootfs: ghcr.io/phoban01/flintlock-runner/guest-rootfs:REPLACE
+    pool:
+      size: 1
 
 # What Jobs are told about the Host Services. The addresses come from the
 # annotations the Host Agent keeps on the Host's Node (KF-194, KF-189);
