@@ -22,8 +22,11 @@ func (s *impl) ResolvePlacement(ctx context.Context, p *Profile, claim *poolmgr.
 		return cached, nil
 	}
 	if claim.Host.Name != "" {
-		if s.set.PoolManager.IsKubernetes() {
+		switch {
+		case s.set.PoolManager.IsKubernetes():
 			return s.placementFromVirtualNode(claim), nil
+		case s.set.PoolManager.IsClaim():
+			return s.placementFromClaimStatus(claim), nil
 		}
 		return s.placementFromClaim(p, claim)
 	}
@@ -41,6 +44,18 @@ func (s *impl) ResolvePlacement(ctx context.Context, p *Profile, claim *poolmgr.
 // and finds the Host Services on the Virtual Node (KF-062), so the name is
 // all a Job needs and there is no endpoint to compare it with.
 func (s *impl) placementFromVirtualNode(claim *poolmgr.Claim) Placement {
+	return Placement{Host: claim.Host.Name, Source: PlacementFromClaim, ResolvedAt: s.clk.Now()}
+}
+
+//= docs/requirements/12-cluster-fleet.md#battery-claims
+//# and from nothing else.
+
+// placementFromClaimStatus records the Host a Bound MicroVMClaim names as
+// the Placement. The claim backend takes the Host from the claim's status
+// and from nothing else, so the Runner has no Inventory to check it against
+// and SC-034 does not apply: the Executor reaches the guest through the
+// Exec Agent at the address the claim names, not through a Host endpoint.
+func (s *impl) placementFromClaimStatus(claim *poolmgr.Claim) Placement {
 	return Placement{Host: claim.Host.Name, Source: PlacementFromClaim, ResolvedAt: s.clk.Now()}
 }
 
