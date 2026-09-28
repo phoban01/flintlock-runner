@@ -164,12 +164,13 @@ Service's, a DaemonSet's. `flintlockd`'s replies come from port 9090 and
 pass. The rule is loaded with the rest of the firewall before `flintlockd`
 starts (HI-063).
 
-This is the contract the Fleet Manifests follow (KF-135). On the design of
-battery's claim resources the process admitted is the Exec Agent, not the
-Pod Provider (KF-171): `deploy/` runs it as this user id, and the key keeps
-its name. The Exec Agent listens on port 10270, which is in
-`HOST_CONTROL_PORTS`, so guests and the Host Services cannot reach it
-either.
+This is the contract the Pod Provider's manifests follow. On the design of
+battery's claim resources `deploy/` runs no container as this user id:
+battery-operator's Exec Agent reaches `flintlockd` over mutual TLS on the
+Host's address instead (battery-operator EA-001), which this rule does not
+cover and the Host Image does not serve yet. The Exec Agent listens on port
+10270, which is in `HOST_CONTROL_PORTS`, so guests and the Host Services
+cannot reach it either.
 
 - The Pod Provider's container runs with `runAsUser` equal to
   `POD_PROVIDER_UID`, `10250` unless the Host configuration file says

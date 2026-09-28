@@ -47,9 +47,8 @@ CACHE_VOLUME_PERCENT=15
 #/ `flintlockd` endpoint only from the Pod Provider's user id, which it reads
 #/ from the Host configuration file with a default when none is set
 # The user id the Pod Provider's container runs as, the only one that may
-# connect to flintlockd's local endpoint. Never 0. The Fleet Manifests run
-# the Pod Provider as this id and nothing else of the Host Agent as it
-# (KF-135); change both together.
+# connect to flintlockd's local endpoint. Never 0. The Fleet Manifests of
+# the claim design run no container of the Host Agent as this id.
 POD_PROVIDER_UID=10250
 
 #= docs/requirements/11-host-image.md#image-networking
