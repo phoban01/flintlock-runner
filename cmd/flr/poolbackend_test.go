@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/phoban01/flintlock-runner/internal/config"
+	"github.com/phoban01/flintlock-runner/internal/poolmgr/claim"
 	"github.com/phoban01/flintlock-runner/internal/poolmgr/kube"
 )
 
@@ -34,7 +35,8 @@ users:
 // configuration that names none, and that pool_manager.backend: kubernetes
 // builds the Kubernetes pool backend from the named kubeconfig, without
 // needing the API server to be up, as the battery client needs no battery;
-// and that the claim backend, not built yet, is refused.
+// and that pool_manager.backend: claim builds the claim pool backend the
+// same way, never battery in its place.
 func TestPoolBackendSelection(t *testing.T) {
 	t.Parallel()
 	log := slog.New(slog.NewTextHandler(io.Discard, nil))
@@ -74,17 +76,23 @@ func TestPoolBackendSelection(t *testing.T) {
 		t.Error("a missing kubeconfig was accepted")
 	}
 
-	// The claim backend is not built yet (#77): it is refused, never
-	// served by battery in its place.
 	cfg.PoolManager = config.PoolManager{
 		Backend:  config.PoolBackendClaim,
 		Endpoint: "127.0.0.1:1",
 		TLS:      config.ClientTLS{Insecure: true},
-		Claim:    &config.ClaimPools{HolderServiceAccount: "runner"},
+		Claim:    &config.ClaimPools{Kubeconfig: path, Context: "fleet", HolderServiceAccount: "runner"},
 	}
-	if client, err := newPoolClient(cfg, log); err == nil {
-		_ = client.Close()
-		t.Error("the claim backend was built, want it refused until it exists")
+	claims, err := newPoolClient(cfg, log)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = claims.Close() }()
+	if _, isClaim := claims.Client.(*claim.Backend); !isClaim || claims.setProfiles == nil {
+		t.Errorf("backend claim built %T, want the claim pool backend with a profile setter", claims.Client)
+	}
+	cfg.PoolManager.Claim.Kubeconfig = filepath.Join(t.TempDir(), "missing")
+	if _, err := newPoolClient(cfg, log); err == nil {
+		t.Error("a missing kubeconfig was accepted for the claim backend")
 	}
 }
 
@@ -94,13 +102,13 @@ func TestKubeNamespace(t *testing.T) {
 	inCluster := func(string) ([]byte, error) { return []byte("runner-pod-ns\n"), nil }
 	outside := func(string) ([]byte, error) { return nil, errors.New("no such file") }
 
-	if got := kubeNamespace(config.KubernetesPools{Namespace: "configured"}, "ci", inCluster); got != "configured" {
+	if got := kubeNamespace("configured", "ci", inCluster); got != "configured" {
 		t.Errorf("namespace = %q, want the configured one", got)
 	}
-	if got := kubeNamespace(config.KubernetesPools{}, "ci", inCluster); got != "runner-pod-ns" {
+	if got := kubeNamespace("", "ci", inCluster); got != "runner-pod-ns" {
 		t.Errorf("namespace = %q, want the pod's own", got)
 	}
-	if got := kubeNamespace(config.KubernetesPools{}, "ci", outside); got != "ci" {
+	if got := kubeNamespace("", "ci", outside); got != "ci" {
 		t.Errorf("namespace = %q, want the runner namespace", got)
 	}
 }

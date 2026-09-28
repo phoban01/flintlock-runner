@@ -1,0 +1,499 @@
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  annotations:
+    controller-gen.kubebuilder.io/version: v0.21.0
+  name: pools.battery.liquidmetal-x.dev
+spec:
+  group: battery.liquidmetal-x.dev
+  names:
+    kind: Pool
+    listKind: PoolList
+    plural: pools
+    singular: pool
+  scope: Namespaced
+  versions:
+  - additionalPrinterColumns:
+    - jsonPath: .spec.size
+      name: Size
+      type: integer
+    - jsonPath: .status.available
+      name: Available
+      type: integer
+    - jsonPath: .status.leased
+      name: Leased
+      type: integer
+    - jsonPath: .status.conditions[?(@.type=="Ready")].status
+      name: Ready
+      type: string
+    - jsonPath: .metadata.creationTimestamp
+      name: Age
+      type: date
+    name: v1alpha1
+    schema:
+      openAPIV3Schema:
+        description: |-
+          Pool is a warm pool of flintlock MicroVMs that battery keeps and leases
+          out. PoolSpec says how it maps to battery's own PoolSpec.
+        properties:
+          apiVersion:
+            description: |-
+              APIVersion defines the versioned schema of this representation of an object.
+              Servers should convert recognized schemas to the latest internal value, and
+              may reject unrecognized values.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+            type: string
+          kind:
+            description: |-
+              Kind is a string value representing the REST resource this object represents.
+              Servers may infer this from the endpoint the client submits requests to.
+              Cannot be updated.
+              In CamelCase.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+            type: string
+          metadata:
+            type: object
+          spec:
+            description: spec defines the desired state of Pool
+            properties:
+              hooks:
+                default: {}
+                description: |-
+                  hooks are the commands run in each MicroVM, and what happens when they
+                  fail.
+                properties:
+                  create:
+                    description: |-
+                      create runs once in each MicroVM, after it boots and its guest agent
+                      is ready (PoolSpec.create_commands).
+                    items:
+                      type: string
+                    type: array
+                    x-kubernetes-list-type: atomic
+                  failurePolicy:
+                    default: DeleteAndReplace
+                    description: |-
+                      failurePolicy decides what happens to a MicroVM whose hook fails
+                      (PoolSpec.hook_failure_policy).
+                    enum:
+                    - DeleteAndReplace
+                    - Quarantine
+                    type: string
+                  preLease:
+                    description: |-
+                      preLease runs in a MicroVM just before it is handed to a Holder
+                      (PoolSpec.pre_lease_commands).
+                    items:
+                      type: string
+                    type: array
+                    x-kubernetes-list-type: atomic
+                type: object
+              lease:
+                default: {}
+                description: |-
+                  lease sets how often a Holder renews its Lease, and how long a Lease
+                  lives without a renewal.
+                properties:
+                  expiryThreshold:
+                    default: 30s
+                    description: |-
+                      expiryThreshold is how long a Lease lives without a renewal
+                      (PoolSpec.heartbeat_expiry_threshold).
+                    type: string
+                    x-kubernetes-validations:
+                    - message: expiryThreshold must be positive
+                      rule: duration(self) > duration('0s')
+                  heartbeatInterval:
+                    default: 10s
+                    description: |-
+                      heartbeatInterval is how often a Holder is expected to renew its Lease
+                      (PoolSpec.heartbeat_interval).
+                    type: string
+                    x-kubernetes-validations:
+                    - message: heartbeatInterval must be positive
+                      rule: duration(self) > duration('0s')
+                type: object
+              placement:
+                description: placement says which Hosts the Pool's MicroVMs may run
+                  on.
+                properties:
+                  nodeSelector:
+                    additionalProperties:
+                      type: string
+                    description: |-
+                      nodeSelector selects, by label, the Nodes whose Hosts may run the
+                      Pool's MicroVMs, as a Pod's nodeSelector does. It replaces
+                      PoolSpec.flintlock_hosts. Empty selects every Host.
+                    type: object
+                type: object
+              replenishment:
+                default: {}
+                description: |-
+                  replenishment is how the Pool tops itself up
+                  (PoolSpec.replenishment_strategy).
+                properties:
+                  minSize:
+                    description: |-
+                      minSize is the available count below which a MinSizeThreshold Pool
+                      tops itself up. battery reads it only for MinSizeThreshold.
+                    format: int32
+                    minimum: 1
+                    type: integer
+                  type:
+                    default: ImmediateOnLease
+                    description: type is the strategy.
+                    enum:
+                    - ImmediateOnLease
+                    - MinSizeThreshold
+                    - ReplaceOnDelete
+                    type: string
+                type: object
+                x-kubernetes-validations:
+                - message: minSize is required when type is MinSizeThreshold
+                  rule: '!has(self.type) || self.type != ''MinSizeThreshold'' || has(self.minSize)'
+              size:
+                description: size is the number of MicroVMs the Pool keeps (PoolSpec.size).
+                format: int32
+                minimum: 0
+                type: integer
+              template:
+                description: |-
+                  template is the flintlock MicroVM spec every MicroVM in the Pool is
+                  created from (PoolSpec.microvm_template).
+                properties:
+                  additionalVolumes:
+                    description: additionalVolumes are attached after the root volume.
+                    items:
+                      description: Volume is flintlock's Volume, with its VolumeSource
+                        inlined.
+                      properties:
+                        containerSource:
+                          description: containerSource is a container image to take
+                            the volume from.
+                          type: string
+                        id:
+                          description: id identifies the volume.
+                          type: string
+                        mountPoint:
+                          description: mountPoint is where cloud-init mounts an additional
+                            volume.
+                          type: string
+                        partitionId:
+                          description: partitionId is the uuid of the boot partition.
+                          type: string
+                        readOnly:
+                          description: readOnly mounts the volume read-only (flintlock's
+                            is_read_only).
+                          type: boolean
+                        sizeInMb:
+                          description: sizeInMb resizes the volume.
+                          format: int32
+                          minimum: 1
+                          type: integer
+                        virtiofsSource:
+                          description: virtiofsSource is a Host path to pass through
+                            with virtiofs.
+                          type: string
+                      type: object
+                      x-kubernetes-validations:
+                      - message: exactly one of containerSource and virtiofsSource
+                          is required
+                        rule: has(self.containerSource) != has(self.virtiofsSource)
+                    type: array
+                    x-kubernetes-list-type: atomic
+                  cpuConfig:
+                    description: cpuConfig sets the CPU features presented to the
+                      guest.
+                    properties:
+                      featuresToEnable:
+                        description: |-
+                          featuresToEnable are CPU features to enable. Their names depend on the
+                          provider.
+                        items:
+                          type: string
+                        type: array
+                        x-kubernetes-list-type: atomic
+                      kvmCapabilitiesToDisable:
+                        description: |-
+                          kvmCapabilitiesToDisable are KVM capability ids to disable, where the
+                          provider supports it.
+                        items:
+                          type: string
+                        type: array
+                        x-kubernetes-list-type: atomic
+                    type: object
+                  initrd:
+                    description: initrd is the initial ramdisk, if any.
+                    properties:
+                      filename:
+                        description: filename is the ramdisk's path in the image.
+                        type: string
+                      image:
+                        description: image is the container image holding the initial
+                          ramdisk.
+                        minLength: 1
+                        type: string
+                    required:
+                    - image
+                    type: object
+                  interfaces:
+                    description: |-
+                      interfaces are the network interfaces, which appear in the guest as
+                      eth1, eth2 and so on, in order. flintlock v0.15.2 requires at least
+                      one.
+                    items:
+                      description: NetworkInterface is flintlock's NetworkInterface.
+                      properties:
+                        address:
+                          description: address is a static address. Empty uses DHCP.
+                          properties:
+                            address:
+                              description: address is an IPv4 or IPv6 address in CIDR
+                                notation.
+                              minLength: 1
+                              type: string
+                            gateway:
+                              description: gateway is the default gateway.
+                              type: string
+                            nameservers:
+                              description: nameservers are the interface's nameservers.
+                              items:
+                                type: string
+                              type: array
+                              x-kubernetes-list-type: atomic
+                          required:
+                          - address
+                          type: object
+                        deviceId:
+                          description: |-
+                            deviceId names the interface. Without guestMac it is also the
+                            interface's name in the guest. flintlock reserves eth0.
+                          minLength: 1
+                          type: string
+                        guestMac:
+                          description: guestMac is the interface's MAC address. Empty
+                            generates one.
+                          type: string
+                        overrides:
+                          description: overrides override flintlock's network settings
+                            for this interface.
+                          properties:
+                            bridgeName:
+                              description: bridgeName is the Linux bridge to attach
+                                a tap interface to.
+                              type: string
+                          type: object
+                        type:
+                          default: Macvtap
+                          description: |-
+                            type is the kind of interface. It defaults to Macvtap, flintlock's
+                            zero value.
+                          enum:
+                          - Macvtap
+                          - Tap
+                          type: string
+                      required:
+                      - deviceId
+                      type: object
+                    minItems: 1
+                    type: array
+                    x-kubernetes-list-type: atomic
+                  kernel:
+                    description: kernel is the kernel to boot.
+                    properties:
+                      addNetworkConfig:
+                        description: addNetworkConfig generates the network-config
+                          kernel argument.
+                        type: boolean
+                      cmdline:
+                        additionalProperties:
+                          type: string
+                        description: cmdline adds kernel command line arguments to
+                          the provider's own.
+                        type: object
+                      filename:
+                        description: filename is the kernel's path in the image.
+                        type: string
+                      image:
+                        description: image is the container image holding the kernel.
+                        minLength: 1
+                        type: string
+                    required:
+                    - image
+                    type: object
+                  labels:
+                    additionalProperties:
+                      type: string
+                    description: labels are flintlock's labels on each MicroVM.
+                    type: object
+                  memoryInMb:
+                    description: |-
+                      memoryInMb is the memory, in megabytes, from 1024 to 32768 (flintlock
+                      v0.15.2).
+                    format: int32
+                    maximum: 32768
+                    minimum: 1024
+                    type: integer
+                  metadata:
+                    additionalProperties:
+                      type: string
+                    description: |-
+                      metadata is served by the metadata service, for cloud-init. Each
+                      value is base64 encoded.
+                    type: object
+                  provider:
+                    description: |-
+                      provider names the flintlock MicroVM provider. Empty uses flintlock's
+                      default.
+                    type: string
+                  rootVolume:
+                    description: rootVolume is the MicroVM's root volume.
+                    properties:
+                      containerSource:
+                        description: containerSource is a container image to take
+                          the volume from.
+                        type: string
+                      id:
+                        description: id identifies the volume.
+                        type: string
+                      mountPoint:
+                        description: mountPoint is where cloud-init mounts an additional
+                          volume.
+                        type: string
+                      partitionId:
+                        description: partitionId is the uuid of the boot partition.
+                        type: string
+                      readOnly:
+                        description: readOnly mounts the volume read-only (flintlock's
+                          is_read_only).
+                        type: boolean
+                      sizeInMb:
+                        description: sizeInMb resizes the volume.
+                        format: int32
+                        minimum: 1
+                        type: integer
+                      virtiofsSource:
+                        description: virtiofsSource is a Host path to pass through
+                          with virtiofs.
+                        type: string
+                    type: object
+                    x-kubernetes-validations:
+                    - message: exactly one of containerSource and virtiofsSource is
+                        required
+                      rule: has(self.containerSource) != has(self.virtiofsSource)
+                  vcpu:
+                    description: vcpu is the number of virtual CPUs, from 1 to 64
+                      (flintlock v0.15.2).
+                    format: int32
+                    maximum: 64
+                    minimum: 1
+                    type: integer
+                required:
+                - interfaces
+                - kernel
+                - memoryInMb
+                - rootVolume
+                - vcpu
+                type: object
+            required:
+            - size
+            - template
+            type: object
+          status:
+            description: status defines the observed state of Pool
+            properties:
+              available:
+                description: |-
+                  available is the number of MicroVMs ready to claim
+                  (PoolStatus.available_count).
+                format: int32
+                type: integer
+              conditions:
+                description: conditions are Ready and Exhausted.
+                items:
+                  description: Condition contains details for one aspect of the current
+                    state of this API Resource.
+                  properties:
+                    lastTransitionTime:
+                      description: |-
+                        lastTransitionTime is the last time the condition transitioned from one status to another.
+                        This should be when the underlying condition changed.  If that is not known, then using the time when the API field changed is acceptable.
+                      format: date-time
+                      type: string
+                    message:
+                      description: |-
+                        message is a human readable message indicating details about the transition.
+                        This may be an empty string.
+                      maxLength: 32768
+                      type: string
+                    observedGeneration:
+                      description: |-
+                        observedGeneration represents the .metadata.generation that the condition was set based upon.
+                        For instance, if .metadata.generation is currently 12, but the .status.conditions[x].observedGeneration is 9, the condition is out of date
+                        with respect to the current state of the instance.
+                      format: int64
+                      minimum: 0
+                      type: integer
+                    reason:
+                      description: |-
+                        reason contains a programmatic identifier indicating the reason for the condition's last transition.
+                        Producers of specific condition types may define expected values and meanings for this field,
+                        and whether the values are considered a guaranteed API.
+                        The value should be a CamelCase string.
+                        This field may not be empty.
+                      maxLength: 1024
+                      minLength: 1
+                      pattern: ^[A-Za-z]([A-Za-z0-9_,:]*[A-Za-z0-9_])?$
+                      type: string
+                    status:
+                      description: status of the condition, one of True, False, Unknown.
+                      enum:
+                      - "True"
+                      - "False"
+                      - Unknown
+                      type: string
+                    type:
+                      description: type of condition in CamelCase or in foo.example.com/CamelCase.
+                      maxLength: 316
+                      pattern: ^([a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*/)?(([A-Za-z0-9][-A-Za-z0-9_.]*)?[A-Za-z0-9])$
+                      type: string
+                  required:
+                  - lastTransitionTime
+                  - message
+                  - reason
+                  - status
+                  - type
+                  type: object
+                type: array
+                x-kubernetes-list-map-keys:
+                - type
+                x-kubernetes-list-type: map
+              leased:
+                description: leased is the number of claimed MicroVMs (PoolStatus.leased_count).
+                format: int32
+                type: integer
+              observedGeneration:
+                description: observedGeneration is the generation battery last accepted.
+                format: int64
+                type: integer
+              provisioning:
+                description: |-
+                  provisioning is the number of MicroVMs being created
+                  (PoolStatus.provisioning_count).
+                format: int32
+                type: integer
+              quarantined:
+                description: |-
+                  quarantined is the number of MicroVMs kept after a hook failed
+                  (PoolStatus.quarantined_count).
+                format: int32
+                type: integer
+            type: object
+        required:
+        - spec
+        type: object
+    served: true
+    storage: true
+    subresources:
+      status: {}
