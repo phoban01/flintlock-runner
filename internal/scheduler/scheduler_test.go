@@ -169,7 +169,7 @@ func TestUndeclaredPoolCountsAsEmptyAndIsRetried(t *testing.T) {
 
 	// The declaration is retried at the configured interval.
 	e.declarer.setErr(nil)
-	waitFor(t, ctx, func() bool { return e.clk.Timers() > 0 })
+	e.awaitTimer(ctx, 30*time.Second)
 	e.clk.Advance(31 * time.Second)
 	waitFor(t, ctx, func() bool { return len(e.declarer.declared()) >= 2 })
 	waitFor(t, ctx, func() bool { return e.sched.poolDeclared(e.poolOf("default")) })
@@ -233,7 +233,9 @@ func TestShutdownTimeoutAbortsTheJobsThatAreLeft(t *testing.T) {
 
 	e.cancel()
 	waitFor(t, ctx, func() bool { return e.sched.runningState() == stateStopping })
-	waitFor(t, ctx, func() bool { return e.clk.Timers() > 0 })
+	// Run's loops have their timers armed already. Advancing before the
+	// shutdown timer exists would fire only theirs.
+	e.awaitTimer(ctx, time.Minute)
 	e.clk.Advance(2 * time.Minute)
 
 	select {

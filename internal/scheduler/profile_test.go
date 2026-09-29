@@ -182,8 +182,10 @@ func TestUnknownImageConsumesNoWarmMicroVM(t *testing.T) {
 	e.startBare(ctx)
 	e.sched.declareAll(ctx)
 
+	// Wait for the whole Pool to be warm, so that a MicroVM that finishes
+	// booting between the two counts below cannot change them.
 	pool := e.poolOf("golang")
-	waitForClaimable(t, ctx, client, pool)
+	waitForWarm(t, ctx, client, pool, int32(e.profile("golang").Pool.Size))
 	before := poolAvailable(t, ctx, client, pool)
 	if before == 0 {
 		t.Fatal("the pool has no warm microvm to consume")
