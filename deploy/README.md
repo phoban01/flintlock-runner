@@ -323,9 +323,9 @@ What it costs:
   container, but not a rollout of the DaemonSet or an eviction, and so not
   the replacement of a Host.
 - **It is on the root disk, not the instance-store disk.** The thin pool
-  takes the whole instance-store disk. battery-operator's templates give
-  every Host a root volume of 100 GiB, and a pool's settings do not change
-  it. The cache shares that volume with the operating system and the
+  takes the whole instance-store disk. A pool sets the size of each Host's
+  root volume with `rootVolumeGiB` in battery-operator's templates, 100 GiB
+  in the example. The cache shares that volume with the operating system and the
   kubelet, and counts against the Node's ephemeral storage, so a full disk
   makes the kubelet evict pods. buildkitd keeps its
   use under its garbage collection limit (`buildkitd.toml.tmpl`), and the
