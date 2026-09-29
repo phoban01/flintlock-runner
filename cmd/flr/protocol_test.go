@@ -45,6 +45,9 @@ func (stubScheduler) Allocate(context.Context, *scheduler.Reservation, scheduler
 }
 func (stubScheduler) Release(scheduler.Handle) {}
 func (stubScheduler) Retain(scheduler.Handle)  {}
+func (stubScheduler) CheckLease(context.Context, scheduler.Handle) error {
+	return nil
+}
 
 // stubProvider is the flintlock provider over stubs.
 func stubProvider(t *testing.T) executor.Provider {

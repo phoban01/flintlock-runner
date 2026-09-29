@@ -11,12 +11,6 @@ import (
 	"github.com/phoban01/flintlock-runner/internal/poolmgr"
 )
 
-// The Executor finds CheckLease by a type assertion on its Scheduler, so
-// losing the method would silently turn the check off.
-var _ interface {
-	CheckLease(ctx context.Context, h Handle) error
-} = (*impl)(nil)
-
 //= docs/requirements/03-scheduler.md#lease-keep-alive
 //= type=test
 //# If a heartbeat reports that the Lease no longer exists, then the
