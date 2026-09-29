@@ -110,7 +110,7 @@ $(if [ -n "$FLR_HOST_SERVICE_PORTS" ]; then
   fi)
 		#= docs/requirements/11-host-image.md#image-networking
 		#/ The Host Image SHALL drop traffic from the guest subnet to the
-		#/ Host's own kubelet, Exec Agent, `flintlockd` and metrics ports.
+		#/ Host's own kubelet, Exec Agent and metrics ports.
 		iifname "$bridge" tcp dport { ${FLR_HOST_CONTROL_PORTS//,/, } } drop
 		#= docs/requirements/11-host-image.md#image-networking
 		#/ The Host Image SHALL drop traffic from the guest subnet to every

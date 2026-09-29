@@ -500,7 +500,7 @@ expect "the IPv6 metadata service is dropped" has "$nftf" 'iifname "flbr0" ip6 d
 #= docs/requirements/11-host-image.md#image-networking
 #= type=test
 #/ The Host Image SHALL drop traffic from the guest subnet to the
-#/ Host's own kubelet, Exec Agent, `flintlockd` and metrics ports.
+#/ Host's own kubelet, Exec Agent and metrics ports.
 expect "the kubelet, Exec Agent, flintlockd and metrics ports are dropped" \
   has "$nftf" 'iifname "flbr0" tcp dport \{ 9090, 8090, 10248, 10250, 10255, 10256, 10260, 10270, 9252, 1338 \} drop'
 

@@ -143,7 +143,7 @@ cold. HI-023 restates the fix of pull request #43 as a requirement.
 - **HI-033** The Host Image SHALL drop traffic from the guest subnet to the
   EC2 instance metadata service address.
 - **HI-034** The Host Image SHALL drop traffic from the guest subnet to the
-  Host's own kubelet, Exec Agent, `flintlockd` and metrics ports.
+  Host's own kubelet, Exec Agent and metrics ports.
 - **HI-035** The Host Image SHALL drop traffic from the guest subnet to every
   protected CIDR listed in the Host configuration file.
 - **HI-036** The Host Image SHALL allow traffic from the guest subnet to the
