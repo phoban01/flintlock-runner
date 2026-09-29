@@ -25,14 +25,24 @@ import (
 // without anybody dialling a second connection. The Host that comes back
 // reports a different version, so the answer proves the call reached the
 // new process rather than a cached one.
+//
+// The Client dials a relay whose listener the test holds from start to end,
+// and the relay forwards to whichever Host is up. A Host that stopped and
+// bound its port again would race every other test for that port, and lose
+// now and then with "address already in use" (#90).
 func TestConnectionOutlivesTheHostAndReconnects(t *testing.T) {
 	t.Parallel()
-	addr := freeAddr(t)
+	relay := startHostRelay(t)
 
-	host := fake.New(flintlock.FakeHostConfig{Name: "h1", Listen: addr, Version: "v1", SandboxRoot: t.TempDir()})
+	host := fake.New(flintlock.FakeHostConfig{Name: "h1", Version: "v1", SandboxRoot: t.TempDir()})
 	t.Cleanup(func() { _ = host.Close() })
 	stopFirst := serve(t, host)
-	client := dial(t, host, flintlock.WithCallDeadline(time.Second),
+	relay.forwardTo(host.Addr())
+	client := dialEndpoint(t, flintlock.Endpoint{
+		Name:    "h1",
+		Address: relay.addr(),
+		TLS:     flintlock.TLSOptions{Insecure: true},
+	}, flintlock.WithCallDeadline(time.Second),
 		flintlock.WithReconnectBackoff(50*time.Millisecond, 200*time.Millisecond))
 
 	ctx, cancel := context.WithTimeout(context.Background(), testTimeout)
@@ -45,16 +55,18 @@ func TestConnectionOutlivesTheHostAndReconnects(t *testing.T) {
 		t.Fatalf("ServerInfo reported version %q, want v1", info.Version)
 	}
 
-	// The Host goes away. Its listener is closed, so calls fail.
+	// The Host goes away. Until a new one is up, the relay closes every
+	// connection it accepts, as a port with nothing listening does, so
+	// calls fail.
+	relay.forwardTo("")
 	stopFirst()
 	if _, err := client.ServerInfo(ctx); err == nil {
 		t.Fatal("ServerInfo succeeded against a host that has stopped")
 	}
 
 	// A new process comes up at the same address.
-	second := flintlock.FakeHostConfig{Name: "h1", Listen: addr, Version: "v2", SandboxRoot: t.TempDir()}
-	replacement := startHost(t, second)
-	_ = replacement
+	replacement := startHost(t, flintlock.FakeHostConfig{Name: "h1", Version: "v2", SandboxRoot: t.TempDir()})
+	relay.forwardTo(replacement.Addr())
 
 	deadline := time.Now().Add(10 * time.Second)
 	for {
@@ -228,19 +240,87 @@ func isKeepalivePing(payload []byte) bool {
 	return true
 }
 
-// freeAddr returns a loopback address nothing is listening on, for a Host
-// that has to be restarted at the same address.
-func freeAddr(t *testing.T) string {
+// hostRelay is a Host address that outlives the Hosts behind it. It holds
+// one loopback listener for the whole test and forwards each connection it
+// accepts to the Host it points at. With no Host, it closes the connection
+// at once, as a port with nothing listening refuses it.
+type hostRelay struct {
+	lis net.Listener
+
+	mu     sync.Mutex
+	target string
+}
+
+// startHostRelay listens on a free loopback port and relays connections
+// until the test ends.
+func startHostRelay(t *testing.T) *hostRelay {
 	t.Helper()
 	lis, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatalf("listen: %v", err)
 	}
-	addr := lis.Addr().String()
-	if err := lis.Close(); err != nil {
-		t.Fatalf("closing the probe listener: %v", err)
-	}
-	return addr
+	r := &hostRelay{lis: lis}
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		for {
+			conn, err := lis.Accept()
+			if err != nil {
+				return
+			}
+			target := r.current()
+			if target == "" {
+				_ = conn.Close()
+				continue
+			}
+			upstream, err := net.Dial("tcp", target)
+			if err != nil {
+				_ = conn.Close()
+				continue
+			}
+			// Either direction ending closes both connections, so a Host
+			// that stops ends the client's connection too.
+			closeBoth := func() {
+				_ = conn.Close()
+				_ = upstream.Close()
+			}
+			wg.Add(2)
+			go func() {
+				defer wg.Done()
+				defer closeBoth()
+				_, _ = io.Copy(upstream, conn)
+			}()
+			go func() {
+				defer wg.Done()
+				defer closeBoth()
+				_, _ = io.Copy(conn, upstream)
+			}()
+		}
+	}()
+	t.Cleanup(func() {
+		_ = lis.Close()
+		wg.Wait()
+	})
+	return r
+}
+
+// addr is the address the relay listens on.
+func (r *hostRelay) addr() string { return r.lis.Addr().String() }
+
+// forwardTo sends new connections to addr, or refuses them when addr is
+// empty. Connections already relayed stay with the Host they reached.
+func (r *hostRelay) forwardTo(addr string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.target = addr
+}
+
+// current is the address new connections go to.
+func (r *hostRelay) current() string {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.target
 }
 
 // pingRelay is a TCP relay that forwards a connection to a Host and counts

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"slices"
 	"sort"
 	"sync"
 	"sync/atomic"
@@ -1032,6 +1033,18 @@ func (e *env) advance(ctx context.Context, n int, d time.Duration) {
 	e.clk.Advance(d)
 }
 
+// awaitTimer blocks until a timer is armed to fire d from the fake clock's
+// present time. Run's loops keep their own timers armed, so a count of
+// timers is already met before the timer a test is about exists; a test
+// that advanced then would fire the loops' timers and not that one.
+func (e *env) awaitTimer(ctx context.Context, d time.Duration) {
+	e.t.Helper()
+	waitFor(e.t, ctx, func() bool {
+		want := e.clk.Now().Add(d)
+		return slices.ContainsFunc(e.clk.Deadlines(), want.Equal)
+	})
+}
+
 // waitFor blocks until cond is true or the test's context ends. It is how a
 // test waits for a background goroutine to have made a change that has no
 // channel of its own; the timing is bounded by the context, not by a sleep.
@@ -1168,6 +1181,33 @@ func beatsFor(clk *clock.Fake, d time.Duration) func(context.Context, string) (t
 // waitForClaimable blocks until the Pool has an available warm MicroVM.
 func waitForClaimable(t *testing.T, ctx context.Context, client poolmgr.Client, ref poolmgr.PoolRef) {
 	t.Helper()
+	waitForPool(t, ctx, client, ref, "an available microvm", func(s poolmgr.PoolStatus) bool {
+		return s.Available > 0
+	})
+}
+
+// waitForWarm blocks until the Pool has n available MicroVMs and provisions
+// no more. After that its counts change only when somebody claims, so a test
+// can compare them. The Pool Manager provisions each MicroVM on its own, so
+// one MicroVM can be available while the next is still on its way.
+func waitForWarm(t *testing.T, ctx context.Context, client poolmgr.Client, ref poolmgr.PoolRef, n int32) {
+	t.Helper()
+	waitForPool(t, ctx, client, ref, fmt.Sprintf("%d warm microvms", n), func(s poolmgr.PoolStatus) bool {
+		return s.Available == n && s.Provisioning == 0
+	})
+}
+
+// waitForPool blocks until the Pool's status satisfies done, checking again
+// on each event the Pool Manager sends for the Pool.
+func waitForPool(
+	t *testing.T,
+	ctx context.Context,
+	client poolmgr.Client,
+	ref poolmgr.PoolRef,
+	what string,
+	done func(poolmgr.PoolStatus) bool,
+) {
+	t.Helper()
 	events, err := client.Subscribe(ctx, poolmgr.EventFilter{Pool: &ref})
 	if err != nil {
 		t.Fatalf("Subscribe: %v", err)
@@ -1175,11 +1215,11 @@ func waitForClaimable(t *testing.T, ctx context.Context, client poolmgr.Client, 
 	defer func() { _ = events.Close() }()
 	for {
 		pool, err := client.GetPool(ctx, ref)
-		if err == nil && pool.Status.Available > 0 {
+		if err == nil && done(pool.Status) {
 			return
 		}
 		if _, err := events.Recv(ctx); err != nil {
-			t.Fatalf("waiting for an available microvm in %s: %v", ref, err)
+			t.Fatalf("waiting for %s in %s: %v", what, ref, err)
 		}
 	}
 }

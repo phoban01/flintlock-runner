@@ -8,6 +8,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"syscall"
 	"testing"
 	"time"
 
@@ -323,12 +324,7 @@ func TestProvisionChecksFlintlockdReachability(t *testing.T) {
 	}
 
 	// A closed port: the Host fails with the rule it needs.
-	closed, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatal(err)
-	}
-	addr := closed.Addr().(*net.TCPAddr)
-	_ = closed.Close()
+	addr := refusingAddr(t)
 	p = newTestProvisioner(t, r, func(o *Options) {
 		o.Dial = nil
 		o.DialTimeout = 2 * time.Second
@@ -679,4 +675,29 @@ func (s *syncWriter) Write(b []byte) (int, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.w.Write(b)
+}
+
+// refusingAddr returns a loopback address that refuses connections for the
+// rest of the test. It binds a socket and never listens on it, so a connect
+// is refused and no other test can take the port. A listener that is closed
+// straight away would free the port for any other test to bind.
+func refusingAddr(t *testing.T) *net.TCPAddr {
+	t.Helper()
+	fd, err := syscall.Socket(syscall.AF_INET, syscall.SOCK_STREAM, 0)
+	if err != nil {
+		t.Fatalf("socket: %v", err)
+	}
+	t.Cleanup(func() { _ = syscall.Close(fd) })
+	if err := syscall.Bind(fd, &syscall.SockaddrInet4{Addr: [4]byte{127, 0, 0, 1}}); err != nil {
+		t.Fatalf("bind: %v", err)
+	}
+	sa, err := syscall.Getsockname(fd)
+	if err != nil {
+		t.Fatalf("getsockname: %v", err)
+	}
+	in4, ok := sa.(*syscall.SockaddrInet4)
+	if !ok {
+		t.Fatalf("getsockname returned a %T, want an IPv4 address", sa)
+	}
+	return &net.TCPAddr{IP: net.IPv4(127, 0, 0, 1), Port: in4.Port}
 }

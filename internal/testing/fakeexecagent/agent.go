@@ -28,6 +28,7 @@ import (
 	"net"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	mvmv1 "github.com/liquidmetal-dev/flintlock/api/services/microvm/v1alpha1"
@@ -98,6 +99,10 @@ type Agent struct {
 	cert tls.Certificate
 	// addr is where the Agent serves. Restart serves there again.
 	addr string
+	// lis is the Agent's socket, bound from Start to Close. Restart hands
+	// it to the next server rather than binding addr again, so no other
+	// process can take the port while the Agent restarts.
+	lis *net.TCPListener
 
 	// srvMu guards srv and done, which Restart replaces.
 	srvMu sync.Mutex
@@ -131,14 +136,28 @@ func Start(cfg Config) (*Agent, error) {
 	if err != nil {
 		return nil, fmt.Errorf("fakeexecagent: listening: %w", err)
 	}
-	a := &Agent{cfg: cfg, cert: cert, addr: lis.Addr().String()}
-	a.serve(lis)
+	tcp, ok := lis.(*net.TCPListener)
+	if !ok {
+		_ = lis.Close()
+		return nil, fmt.Errorf("fakeexecagent: listening on %s gave a %T, want a TCP listener", cfg.Listen, lis)
+	}
+	a := &Agent{cfg: cfg, cert: cert, addr: lis.Addr().String(), lis: tcp}
+	if err := a.serve(); err != nil {
+		_ = lis.Close()
+		return nil, err
+	}
 	return a, nil
 }
 
-// serve starts a gRPC server on lis and makes it the Agent's. The caller
-// holds srvMu, or has not shared the Agent yet.
-func (a *Agent) serve(lis net.Listener) {
+// serve starts a gRPC server on the Agent's socket and makes it the
+// Agent's. The caller holds srvMu, or has not shared the Agent yet.
+func (a *Agent) serve() error {
+	// The server before this one, if any, left a deadline in the past to
+	// stop its Accept.
+	if err := a.lis.SetDeadline(time.Time{}); err != nil {
+		return fmt.Errorf("fakeexecagent: clearing the listener's deadline: %w", err)
+	}
+	lis := &keptListener{TCPListener: a.lis}
 	srv := grpc.NewServer(
 		grpc.Creds(credentials.NewTLS(&tls.Config{Certificates: []tls.Certificate{a.cert}, MinVersion: tls.VersionTLS12})),
 		// The Runner keeps its connections alive with pings (HO-002).
@@ -152,6 +171,37 @@ func (a *Agent) serve(lis net.Listener) {
 		_ = srv.Serve(lis)
 	}()
 	a.srv, a.done = srv, done
+	return nil
+}
+
+// keptListener is one gRPC server's use of the Agent's socket. Closing it
+// ends that server's Accept and leaves the socket bound, so Restart can hand
+// the socket to the next server. A connection that arrives in between waits
+// in the socket's backlog for the next server.
+type keptListener struct {
+	*net.TCPListener
+	closed atomic.Bool
+}
+
+// Accept implements net.Listener. After Close it returns net.ErrClosed, and
+// closes a connection it accepted too late, which the next server does not
+// see.
+func (l *keptListener) Accept() (net.Conn, error) {
+	conn, err := l.TCPListener.Accept()
+	if l.closed.Load() {
+		if conn != nil {
+			_ = conn.Close()
+		}
+		return nil, net.ErrClosed
+	}
+	return conn, err
+}
+
+// Close implements net.Listener. It sets a deadline in the past, which wakes
+// a blocked Accept, and does not close the socket.
+func (l *keptListener) Close() error {
+	l.closed.Store(true)
+	return l.SetDeadline(time.Now())
 }
 
 // Addr is the `address:port` the Agent serves on, which a claim's status
@@ -175,6 +225,9 @@ func (a *Agent) Close() error {
 	defer a.srvMu.Unlock()
 	a.srv.Stop()
 	<-a.done
+	if err := a.lis.Close(); err != nil && !errors.Is(err, net.ErrClosed) {
+		return fmt.Errorf("fakeexecagent: closing the listener: %w", err)
+	}
 	return nil
 }
 
@@ -187,17 +240,15 @@ func (a *Agent) Close() error {
 // the same configuration, as a real Exec Agent does when its pod restarts on
 // the Host. The record of calls is kept. It is the fault of the harness's
 // scenario in which the Exec Agent restarts while a Stage runs (KF-193).
+//
+// The socket stays bound across the restart. Closing it and binding the
+// address again would let another test take the port in between.
 func (a *Agent) Restart() error {
 	a.srvMu.Lock()
 	defer a.srvMu.Unlock()
 	a.srv.Stop()
 	<-a.done
-	lis, err := net.Listen("tcp", a.addr)
-	if err != nil {
-		return fmt.Errorf("fakeexecagent: listening again on %s: %w", a.addr, err)
-	}
-	a.serve(lis)
-	return nil
+	return a.serve()
 }
 
 // admit authorizes one call and records it. It returns a status error.
