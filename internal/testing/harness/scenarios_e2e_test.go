@@ -189,23 +189,35 @@ var scenarios = []scenario{
 	},
 	{
 		// The flintlockd of the Host running the Job stops answering. The
-		// battery stack's Runner probes its Hosts (SC-041, SC-043) and fails
-		// the Job as a system failure well before its own timeout. The
-		// claim stack's Runner reaches no Host: it has no Inventory to
-		// probe, and battery-operator's Exec Agent relays the stalled stream.
-		// So nothing fails the Job before its own timeout, which is short
-		// here. On both stacks the Job fails, does not finish, and leaves
-		// nothing behind once the Host answers again.
+		// battery stack's Runner probes its Hosts (SC-041, SC-043). The
+		// claim stack's Runner has no Inventory to probe; it probes the
+		// Exec Agent of the Job's claim instead, which relays GetMicroVM to
+		// the stalled flintlockd (KF-200, KF-201). Either way the Job fails
+		// as a system failure well before its own timeout, does not finish,
+		// and leaves nothing behind once the Host answers again.
+		//
+		// The Guest Transport's own watch (EX-051) also fails a Stage whose
+		// Host stops answering, within the transport deadline, and the Job
+		// then fails once its cleanup Stage has waited out the deadline as
+		// well. Here the probes are short and the transport deadline long,
+		// so KF-202's bound ends before the watch first asks after the Host,
+		// at half the deadline. On the claim stack the claim's probe is what
+		// fails the Job: its failure names the Exec Agent, and it comes
+		// within the bound, plus the graceful kill timeout the Executor may
+		// wait for the stalled Stage (EX-024) and a few seconds to report it.
 		name:          "host becomes unhealthy during a job",
 		fakeHostsOnly: true,
-		run: func(t *testing.T, s *Stack) {
-			timeout := jobTimeout
-			if s.Claim != nil {
-				timeout = 20 * time.Second
+		opts: func(o *Options) {
+			o.Configure = func(cfg *config.Config) {
+				cfg.Scheduler.HostHealthInterval = time.Second
+				cfg.Scheduler.HostCallDeadline = 2 * time.Second
+				cfg.Executor.TransportDeadline = 30 * time.Second
 			}
+		},
+		run: func(t *testing.T, s *Stack) {
 			gate := s.NewGate("host")
 			id, err := s.Enqueue(Job{
-				Name: "stranded", Timeout: timeout,
+				Name: "stranded", Timeout: jobTimeout,
 				Script: []string{`echo "job started"`, gate.Wait(), `echo "job finished"`},
 			})
 			if err != nil {
@@ -218,14 +230,20 @@ var scenarios = []scenario{
 			defer host.SetFaults(flintlock.HostFaults{})
 			defer func() { _ = gate.Open() }()
 			rec := wait(t, s, id)
-			if s.Claim != nil {
-				wantStatus(t, rec, fakegitlab.StatusFailed, "job_execution_timeout")
-			} else {
-				wantStatus(t, rec, fakegitlab.StatusFailed, "runner_system_failure")
-			}
+			took := time.Since(started)
+			wantStatus(t, rec, fakegitlab.StatusFailed, "runner_system_failure")
 			wantNotInTrace(t, rec, "job finished")
-			if d := time.Since(started); d > 90*time.Second {
-				t.Errorf("the job took %s to fail after its host stopped answering", d)
+			limit := 90 * time.Second
+			if s.Claim != nil {
+				bound := agentProbeBound(s.Config)
+				if bound >= s.Config.Executor.TransportDeadline/2 {
+					t.Fatalf("KF-202's bound %s does not end before the transport watch's first probe, at half of %s", bound, s.Config.Executor.TransportDeadline)
+				}
+				wantTrace(t, rec, "Job failed (system failure): scheduler: host of microvm became unhealthy: the exec agent of claim")
+				limit = bound + s.Config.Executor.GracefulKillTimeout + reportSlack
+			}
+			if took > limit {
+				t.Errorf("the job took %s to fail after its host stopped answering, want within %s", took, limit)
 			}
 		},
 	},
@@ -550,4 +568,23 @@ func leaseHost(t *testing.T, s *Stack) flintlock.HostFaultInjector {
 		t.Fatalf("the lease is on %q, which is not a fake host of the stack", hosts[0])
 	}
 	return h
+}
+
+// reportSlack is how long the Runner may take to report a Job it has
+// already failed: the run loop's cleanup and the trace and status updates
+// to the fake GitLab.
+const reportSlack = 5 * time.Second
+
+//= docs/requirements/12-cluster-fleet.md#claim-host-faults
+//= type=test
+//# The Scheduler SHALL abort a Job under KF-201 no later than the
+//# Host unhealthy threshold times the sum of the Host health interval and
+//# the Host call deadline after the claim's Exec Agent stops answering.
+
+// agentProbeBound is KF-202's bound for the Runner's configuration: the
+// Host unhealthy threshold times the sum of the Host health interval and
+// the Host call deadline.
+func agentProbeBound(cfg *config.Config) time.Duration {
+	sc := cfg.Scheduler
+	return time.Duration(sc.HostUnhealthyThreshold) * (sc.HostHealthInterval + sc.HostCallDeadline)
 }

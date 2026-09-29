@@ -9,6 +9,7 @@ import (
 	"github.com/phoban01/flintlock-runner/internal/executor"
 	"github.com/phoban01/flintlock-runner/internal/flintlock"
 	"github.com/phoban01/flintlock-runner/internal/flintlock/inventory"
+	"github.com/phoban01/flintlock-runner/internal/scheduler"
 	"github.com/phoban01/flintlock-runner/internal/transport"
 )
 
@@ -25,6 +26,9 @@ type guestAccess struct {
 	// agents are the Exec Agent clients of the claim design, nil for the
 	// other backends. The Runner closes them on the way out.
 	agents *transport.AgentHosts
+	// probe is the Scheduler's probe of each claim's Exec Agent (KF-200),
+	// nil for the other backends.
+	probe scheduler.AgentProber
 }
 
 // close closes what the guest access holds of its own: the Exec Agent
@@ -82,7 +86,23 @@ func newClaimGuestAccess(cfg *config.Config, c *claimAccess, log *slog.Logger) (
 		inventory:  executor.NewHostNodeInventory(c.nodes, cfg.HostServices.HTTPCache.Upstreams, log),
 		options:    []executor.Option{executor.WithAgentExec(agents)},
 		agents:     agents,
+		probe:      claimAgentProbe{agents: agents},
 	}, nil
+}
+
+// claimAgentProbe probes the Exec Agent of an Allocation's claim through
+// the clients the agent-exec Guest Transport uses, so a probe carries the
+// claim's own token and verifies the agent as a Stage does (KF-200).
+type claimAgentProbe struct{ agents *transport.AgentHosts }
+
+// ProbeAgent implements scheduler.AgentProber.
+func (p claimAgentProbe) ProbeAgent(ctx context.Context, a scheduler.Allocation) error {
+	return p.agents.Probe(ctx, transport.AgentClaim{
+		LeaseID: a.Lease.ID,
+		VMUID:   a.VMUID,
+		Host:    a.Host.Name,
+		Address: a.Host.Address,
+	})
 }
 
 // noHostDialer is the Host dialer of a cluster fleet's Runner. The
