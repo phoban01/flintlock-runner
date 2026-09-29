@@ -5,9 +5,8 @@
 // claims (docs/requirements/12-cluster-fleet.md#claim-test-doubles). The
 // package is imported by tests only.
 //
-// The CRDs under crds/ are battery-operator v0.1.0's config/crd/bases, as
-// they are in the module go.mod requires. Copy them again when that
-// version changes.
+// The CRDs under crds/ are battery-operator's config/crd/bases at the
+// version go.mod requires. Copy them again when that version changes.
 package claimtest
 
 import (

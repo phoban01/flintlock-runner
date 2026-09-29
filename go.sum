@@ -386,8 +386,8 @@ github.com/pb33f/ordered-map/v2 v2.3.1 h1:5319HDO0aw4DA4gzi+zv4FXU9UlSs3xGZ40wcP
 github.com/pb33f/ordered-map/v2 v2.3.1/go.mod h1:qxFQgd0PkVUtOMCkTapqotNgzRhMPL7VvaHKbd1HnmQ=
 github.com/philhofer/fwd v1.2.0 h1:e6DnBTl7vGY+Gz322/ASL4Gyp1FspeMvx1RNDoToZuM=
 github.com/philhofer/fwd v1.2.0/go.mod h1:RqIHx9QI14HlwKwm98g9Re5prTQ6LdeRQn+gXJFxsJM=
-github.com/phoban01/battery-operator v0.1.0 h1:OlLQyUCz8yaZh7/74gyJTeeClftV3fnaYfivjkZ/QF4=
-github.com/phoban01/battery-operator v0.1.0/go.mod h1:9nIv3EHYRVpld/CnLYVNLSiWJnRg2djg7Rwm85AXhh0=
+github.com/phoban01/battery-operator v0.1.1-0.20260929144144-8ee1299c41d3 h1:8H57B0g3Cw9J6UhajEomr/RmZzP/GBUiwnDKc6tRFg0=
+github.com/phoban01/battery-operator v0.1.1-0.20260929144144-8ee1299c41d3/go.mod h1:9nIv3EHYRVpld/CnLYVNLSiWJnRg2djg7Rwm85AXhh0=
 github.com/pingcap/errors v0.11.4 h1:lFuQV/oaUMGcD2tqt+01ROSmJs75VG1ToEOkZIZ4nE4=
 github.com/pingcap/errors v0.11.4/go.mod h1:Oi8TUi2kEtXXLMJk9l1cGmz20kV3TaQ0usTwv5KuLY8=
 github.com/pjbgf/sha1cd v0.6.0 h1:3WJ8Wz8gvDz29quX1OcEmkAlUg9diU4GxJHqs0/XiwU=

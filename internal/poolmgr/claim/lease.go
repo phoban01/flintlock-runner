@@ -7,6 +7,7 @@ import (
 	"time"
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
@@ -166,7 +167,8 @@ func claimOf(cl *claimclient.Claim) (*poolmgr.Claim, error) {
 // and returns the lease expiry in its status, which is battery's own
 // expiry. It returns poolmgr.ErrNotFound, which the Scheduler takes as a
 // lost Lease (SC-061), when the Client Library has seen the Lease lost, and
-// when the claim is Expired, being deleted, replaced or gone. Such a claim
+// when the claim is Expired, being deleted, replaced or gone. It returns it
+// as well when the claim's Host is not ready (hostNotReady). Such a claim
 // is let go of: its renewal stops and it is deleted, since the Scheduler
 // makes no release call for a lost Lease.
 func (b *Backend) Heartbeat(ctx context.Context, leaseID string) (time.Time, error) {
@@ -177,6 +179,9 @@ func (b *Backend) Heartbeat(ctx context.Context, leaseID string) (time.Time, err
 	if err := cl.Err(); err != nil {
 		b.lose(leaseID, cl, err.Error())
 		return time.Time{}, fmt.Errorf("claim: heartbeat: %w: %w", poolmgr.ErrNotFound, err)
+	}
+	if err := cl.HostErr(); err != nil {
+		return time.Time{}, b.hostNotReady(leaseID, cl, err)
 	}
 
 	ctx, cancel := b.call(ctx)
@@ -192,6 +197,9 @@ func (b *Backend) Heartbeat(ctx context.Context, leaseID string) (time.Time, err
 	if why := lost(obj, cl); why != "" {
 		b.lose(leaseID, cl, why)
 		return time.Time{}, fmt.Errorf("claim: heartbeat: %w: claim %s %s", poolmgr.ErrNotFound, leaseID, why)
+	}
+	if err := hostErr(obj); err != nil {
+		return time.Time{}, b.hostNotReady(leaseID, cl, err)
 	}
 	if obj.Status.LeaseExpiresAt == nil {
 		return time.Time{}, fmt.Errorf("claim: heartbeat: %w: claim %s has no lease expiry yet", poolmgr.ErrUnavailable, leaseID)
@@ -214,8 +222,56 @@ func lost(obj *batteryv1alpha1.MicroVMClaim, cl *claimclient.Claim) string {
 	}
 }
 
+//= docs/requirements/12-cluster-fleet.md#claim-host-faults
+//# The Scheduler SHALL abort a Job under KF-203 no later than the
+//# heartbeat interval of the claim's Pool plus the Pool Manager call
+//# deadline after the claim's condition `HostReady` becomes false.
+
+// hostErr is the claim's HostReady condition as an error when it is false,
+// and nil otherwise, as the Client Library reports it (its CC-013). A claim
+// with no HostReady condition, from a battery-operator older than it, is
+// never reported. Heartbeat reads it from the claim it reads itself, and
+// does not wait for the Client Library's next renewal to see it: a Job is
+// then aborted at the first heartbeat after the condition changes, which
+// the Scheduler sends at most one heartbeat interval apart (KF-205).
+func hostErr(obj *batteryv1alpha1.MicroVMClaim) error {
+	cond := meta.FindStatusCondition(obj.Status.Conditions, batteryv1alpha1.ConditionHostReady)
+	if cond == nil || cond.Status != metav1.ConditionFalse {
+		return nil
+	}
+	return fmt.Errorf("%w: claim %s: %s: %s", claimclient.ErrHostNotReady, obj.Name, cond.Reason, cond.Message)
+}
+
+//= docs/requirements/12-cluster-fleet.md#claim-host-faults
+//# If a claim that a Job holds has the condition `HostReady`
+//# false, then the Scheduler SHALL abort the Job with the failure reason
+//# `runner_system_failure` and delete the claim.
+
+//= docs/requirements/12-cluster-fleet.md#claim-host-faults
+//# When the Scheduler aborts a Job under KF-203, the Scheduler
+//# SHALL name the reason and the message of the claim's `HostReady`
+//# condition in the Job's failure.
+
+// hostNotReady lets go of a claim whose Host is not ready and returns the
+// error Heartbeat answers with. It wraps poolmgr.ErrNotFound, so the
+// Scheduler ends the Job as it does for a lost Lease (SC-061), with the
+// failure reason runner_system_failure, and quotes the answer in the Job's
+// failure (KF-204). hostErr names the condition's reason and message. The
+// Scheduler makes no release call for a lost Lease, so the claim is
+// deleted here, as KF-201 deletes the claim of an Exec Agent that stopped
+// answering.
+func (b *Backend) hostNotReady(leaseID string, cl *claimclient.Claim, err error) error {
+	b.forget(leaseID, cl, "host of claim not ready", err.Error())
+	return fmt.Errorf("claim: heartbeat: %w: %w", poolmgr.ErrNotFound, err)
+}
+
 // lose forgets a claim whose Lease is lost and lets it go.
 func (b *Backend) lose(leaseID string, cl *claimclient.Claim, why string) {
+	b.forget(leaseID, cl, "lease lost", why)
+}
+
+// forget stops holding a claim, logs msg and lets the claim go.
+func (b *Backend) forget(leaseID string, cl *claimclient.Claim, msg, why string) {
 	b.mu.Lock()
 	if b.held[leaseID] != cl {
 		b.mu.Unlock()
@@ -223,7 +279,7 @@ func (b *Backend) lose(leaseID string, cl *claimclient.Claim, why string) {
 	}
 	delete(b.held, leaseID)
 	b.mu.Unlock()
-	b.log.Warn("lease lost", "claim", leaseID, "reason", why)
+	b.log.Warn(msg, "claim", leaseID, "reason", why)
 	b.letGo(cl, why)
 }
 

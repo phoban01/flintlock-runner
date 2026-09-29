@@ -16,7 +16,7 @@
 //   - Heartbeat does not renew anything: the Client Library renews the claim
 //     at the Pool's heartbeat interval (KF-152). Heartbeat reads the claim and
 //     returns its lease expiry, or poolmgr.ErrNotFound once the claim is
-//     Expired or gone (KF-154, SC-061).
+//     Expired or gone (KF-154, SC-061), or its Host is not ready (KF-203).
 //   - ReleaseVM deletes the claim, and a claim that is gone already counts
 //     as released (KF-153).
 //

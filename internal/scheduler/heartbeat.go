@@ -109,7 +109,7 @@ func (s *impl) heartbeatLoop(ctx context.Context, h *handle) {
 			lease.LastHeartbeatAt = s.clk.Now()
 			h.setLease(lease)
 		case errors.Is(err, poolmgr.ErrNotFound):
-			s.leaseLost(h, log, fmt.Errorf("%w: the pool manager no longer has lease %s", ErrLeaseLost, lease.ID))
+			s.leaseLost(h, log, leaseGone(lease.ID, err))
 			return
 		default:
 			attempt++
@@ -244,7 +244,7 @@ func (s *impl) CheckLease(ctx context.Context, h Handle) error {
 		hh.setLease(lease)
 		return nil
 	case errors.Is(err, poolmgr.ErrNotFound):
-		cause = fmt.Errorf("%w: the pool manager no longer has lease %s", ErrLeaseLost, lease.ID)
+		cause = leaseGone(lease.ID, err)
 	case !s.clk.Now().Before(lease.ExpiresAt):
 		cause = fmt.Errorf("%w: lease %s expired at %s without a successful heartbeat",
 			ErrLeaseLost, lease.ID, lease.ExpiresAt.Format(time.RFC3339))
@@ -268,4 +268,19 @@ func (s *impl) holds(h *handle) bool {
 	defer s.mu.Unlock()
 	_, ok := s.allocations[h.id]
 	return ok
+}
+
+//= docs/requirements/12-cluster-fleet.md#claim-host-faults
+//# When the Scheduler aborts a Job under KF-203, the Scheduler
+//# SHALL name the reason and the message of the claim's `HostReady`
+//# condition in the Job's failure.
+
+// leaseGone is the cause of a Lease that a heartbeat says no longer exists.
+// It quotes the heartbeat's answer, which says why: with the claim backend
+// that may be a claim that is Expired or gone, or a claim whose Host is not
+// ready, with the reason and message of its HostReady condition (KF-204).
+// The answer is quoted, not wrapped, so the Job's failure is ErrLeaseLost
+// and nothing else the answer happens to wrap.
+func leaseGone(leaseID string, answer error) error {
+	return fmt.Errorf("%w: the pool manager no longer has lease %s: %s", ErrLeaseLost, leaseID, answer.Error())
 }

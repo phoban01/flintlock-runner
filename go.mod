@@ -10,7 +10,7 @@ require (
 	github.com/aws/aws-sdk-go-v2/service/ssm v1.78.0
 	github.com/liquidmetal-dev/battery v0.3.3
 	github.com/liquidmetal-dev/flintlock/api v0.0.0-20260922072746-f69bffbac45c
-	github.com/phoban01/battery-operator v0.1.0
+	github.com/phoban01/battery-operator v0.1.1-0.20260929144144-8ee1299c41d3
 	github.com/prometheus/client_golang v1.24.1
 	github.com/sirupsen/logrus v1.10.0
 	github.com/urfave/cli v1.22.17
