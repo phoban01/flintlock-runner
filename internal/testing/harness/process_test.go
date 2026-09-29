@@ -69,13 +69,22 @@ func TestARunnerIgnoringSIGTERMIsKilled(t *testing.T) {
 	t.Cleanup(func() { runnerStopMargin = old })
 
 	// A child in the same group checks that the whole group goes.
-	bin := fakeRunner(t, `trap '' TERM; sleep 300 & wait`)
+	bin := fakeRunner(t, `trap '' TERM; echo "runner: ignoring TERM"; sleep 300 & wait`)
 	s := start(t, Options{Hosts: 1, RunnerBinary: bin, Configure: shortShutdown})
 	if err := s.StartRunner(context.Background()); err != nil {
 		t.Fatal(err)
 	}
 	pid := s.runner.cmd.Process.Pid
-	time.Sleep(200 * time.Millisecond) // let the script install its trap
+	// Wait for the script to say that its trap is in place. A fixed sleep
+	// can be too short on a loaded machine, and then SIGTERM stops the
+	// script before the script ignores the signal.
+	deadline := time.Now().Add(10 * time.Second)
+	for !strings.Contains(s.RunnerLogTail(5), "runner: ignoring TERM") {
+		if time.Now().After(deadline) {
+			t.Fatalf("the stand-in Runner never installed its trap; log: %q", s.RunnerLogTail(5))
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
 
 	err := s.Shutdown(context.Background())
 	if err == nil || !strings.Contains(err.Error(), "was killed") {
