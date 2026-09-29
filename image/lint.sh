@@ -127,7 +127,7 @@ fi
 #/ The Host Image SHALL drop traffic from the user ids that run the
 #/ Host Services, which it reads from the Host configuration file with
 #/ defaults when none are set, to the instance metadata service address and
-#/ to the Host's own kubelet, Pod Provider, `flintlockd` and metrics ports.
+#/ to the Host's own kubelet, Exec Agent, `flintlockd` and metrics ports.
 # The check stage's cases against the sources. Where this machine has nft
 # and unprivileged user and network namespaces they also load the rules and
 # show what the kernel drops and lets through.

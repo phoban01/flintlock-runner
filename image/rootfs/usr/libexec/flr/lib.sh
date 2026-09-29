@@ -63,8 +63,8 @@ die() {
 
 # The not-ready contract (image/README.md): one file per unit under
 # /run/flr/not-ready.d, holding a one-line reason, present exactly while the
-# unit's condition holds. The Pod Provider reports each as the Virtual
-# Node's not ready message (KF-016).
+# unit's condition holds. battery-operator's Exec Agent reports each in its
+# Host's Node report (battery-operator EA-033).
 not_ready() {
   local tmp
   if [ ! -d "$FLR_NOT_READY_DIR" ]; then
@@ -75,7 +75,7 @@ not_ready() {
   printf '%s\n' "$(printf '%s' "$*" | tr '\n' ' ')" >"$tmp"
   chmod 0644 "$tmp"
   # A rename keeps the label of the file renamed, so the reason is labelled
-  # for the Pod Provider before it takes its name (HI-065).
+  # for the Exec Agent before it takes its name (HI-065).
   relabel "$tmp" || log "warning: could not label the reason for the Host Agent"
   mv -f "$tmp" "$FLR_NOT_READY_DIR/$FLR_UNIT"
   log "not ready: $*"

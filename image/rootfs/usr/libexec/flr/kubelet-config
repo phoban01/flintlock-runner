@@ -52,8 +52,8 @@ labels="$labels,battery.liquidmetal-x.dev/host=true"
 #= docs/requirements/11-host-image.md#kubernetes-node
 #/ The Host Image SHALL configure the kubelet to reserve all CPU
 #/ and memory beyond the configured Host reserve, so that the Host's Node
-#/ offers only the Host reserve to pods and the Virtual Node of KF-012 offers
-#/ the rest to MicroVMs.
+#/ offers only the Host reserve to pods and leaves the rest to the MicroVMs
+#/ that battery places on the Host.
 # Allocatable is capacity minus the reservations, so reserving capacity
 # minus the Host reserve leaves the Host reserve. The reservation is
 # accounting only: nothing enforces it on a cgroup, which is right, because
