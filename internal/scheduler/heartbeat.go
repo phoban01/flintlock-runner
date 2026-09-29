@@ -171,11 +171,98 @@ func (s *impl) heartbeatInterval(profile string) time.Duration {
 // Allocation are this one's. The `runner_system_failure` half is the
 // Executor's: it turns ErrLeaseLost from Handle.Err into a common.BuildError
 // carrying RunnerSystemFailure by cancelling the Build's context with that
-// cause. Until internal/executor lands, nothing produces the failure reason;
-// see Handle in interfaces.go.
+// cause. The Executor also calls CheckLease when a Stage ends without an
+// exit status, so that a MicroVM deleted with its Lease is not reported as
+// a script failure.
 func (s *impl) leaseLost(h *handle, log *slog.Logger, cause error) {
 	h.markLeaseGone()
 	h.fail(cause)
 	log.Error("lease lost, aborting the job", "error", cause)
 	s.finish(h)
+}
+
+//= docs/requirements/03-scheduler.md#lease-keep-alive
+//# If a heartbeat reports that the Lease no longer exists, then the
+//# Scheduler SHALL abort the Job with the failure reason
+//# `runner_system_failure` and drop the Allocation without a release call.
+
+// CheckLease sends one heartbeat for the Lease of h at once, outside the
+// keep-alive loop, and returns the Handle's error when the Lease is lost. It
+// returns nil while the Lease is held, and also when the answer is unknown.
+//
+// The Executor calls it when a Stage ends without an exit status. Battery
+// deletes the MicroVM of a Lease that has expired, and that kills the Stage
+// at once, often before the next scheduled heartbeat. Without this call the
+// Job would be reported by how its command died, not by why. A lost Lease
+// is handled as the keep-alive loop handles it: the Handle is failed with
+// ErrLeaseLost and the Allocation is dropped with no release call.
+//
+// A heartbeat that fails for another reason proves nothing, unless the
+// Lease expiry it last received has passed (SC-062). An Allocation that has
+// already ended, by Release or otherwise, is not checked.
+func (s *impl) CheckLease(ctx context.Context, h Handle) error {
+	hh, ok := h.(*handle)
+	if !ok || hh == nil {
+		return nil
+	}
+	select {
+	case <-hh.Done():
+		return hh.Err()
+	default:
+	}
+	if !s.holds(hh) {
+		return nil
+	}
+
+	alloc := hh.Allocation()
+	log := s.log.With("job", alloc.JobID, "vm", alloc.VMUID, "lease", alloc.Lease.ID,
+		"pool", alloc.Lease.Pool.String(), "host", alloc.Placement.Host)
+	lease := alloc.Lease
+
+	deadline := s.set.PoolManager.Deadline
+	if deadline <= 0 {
+		deadline = config.DefaultPoolManagerDeadline
+	}
+	callCtx, cancel := context.WithTimeout(ctx, deadline)
+	expiresAt, err := s.deps.PoolManager.Heartbeat(callCtx, lease.ID)
+	cancel()
+
+	// The Allocation can end while the call is in flight. A Lease handed
+	// back on purpose is not a lost one.
+	if !s.holds(hh) {
+		return hh.Err()
+	}
+
+	var cause error
+	switch {
+	case err == nil:
+		lease.ExpiresAt = expiresAt
+		lease.LastHeartbeatAt = s.clk.Now()
+		hh.setLease(lease)
+		return nil
+	case errors.Is(err, poolmgr.ErrNotFound):
+		cause = fmt.Errorf("%w: the pool manager no longer has lease %s", ErrLeaseLost, lease.ID)
+	case !s.clk.Now().Before(lease.ExpiresAt):
+		cause = fmt.Errorf("%w: lease %s expired at %s without a successful heartbeat",
+			ErrLeaseLost, lease.ID, lease.ExpiresAt.Format(time.RFC3339))
+	default:
+		log.Warn("lease check failed", "error", err, "expires_at", lease.ExpiresAt)
+		return nil
+	}
+
+	select {
+	case <-hh.Done():
+		// The keep-alive loop found the loss first.
+	default:
+		s.leaseLost(hh, log, cause)
+	}
+	return hh.Err()
+}
+
+// holds reports whether h is still one of the Scheduler's Allocations.
+func (s *impl) holds(h *handle) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	_, ok := s.allocations[h.id]
+	return ok
 }

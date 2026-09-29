@@ -67,6 +67,10 @@ type fakeScheduler struct {
 	allocStarted chan struct{}
 	// tune, when set, changes each Allocation before it is handed out.
 	tune func(*scheduler.Allocation)
+	// leaseLost, when set, is what CheckLease finds: the Lease is lost with
+	// this error. leaseChecks counts the CheckLease calls.
+	leaseLost   error
+	leaseChecks int
 }
 
 func newFakeScheduler() *fakeScheduler {
@@ -143,6 +147,29 @@ func (s *fakeScheduler) Retain(h scheduler.Handle) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.retained = append(s.retained, h)
+}
+
+// CheckLease is the Scheduler's lease check. With leaseLost set it fails
+// the Handle with that error, as the Scheduler does for a lost Lease, and
+// returns it; otherwise the Lease is held.
+func (s *fakeScheduler) CheckLease(_ context.Context, h scheduler.Handle) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.leaseChecks++
+	if s.leaseLost == nil {
+		return nil
+	}
+	if fh, ok := h.(*fakeHandle); ok && fh.err == nil {
+		fh.err = s.leaseLost
+		close(fh.done)
+	}
+	return s.leaseLost
+}
+
+func (s *fakeScheduler) checks() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.leaseChecks
 }
 
 func (s *fakeScheduler) counts() (allocs, released, retained int) {
