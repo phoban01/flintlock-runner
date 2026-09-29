@@ -290,6 +290,7 @@ func newRunner(ctx context.Context, cfg *config.Config, log *slog.Logger, onInit
 		Tracker:      tracker,
 		Health:       health,
 		Hosts:        hosts,
+		Agents:       access.probe,
 		Logger:       log,
 	}, scheduler.Settings{
 		RunnerName:      cfg.GitLab.Name,

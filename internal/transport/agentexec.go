@@ -136,6 +136,31 @@ func (a *AgentHosts) Lease(ctx context.Context, claim AgentClaim) (flintlock.Hos
 	return c.client, func() { once.Do(func() { a.release(c) }) }, nil
 }
 
+//= docs/requirements/12-cluster-fleet.md#claim-host-faults
+//# by calling `GetMicroVM` for the claim's MicroVM
+//# with a claim token of that claim
+
+// Probe asks the Exec Agent of claim about the claim's MicroVM, and returns
+// nil only when it answers for it (KF-200). battery-operator's Exec Agent
+// relays GetMicroVM to its Host's flintlockd once the claim authorizes it,
+// so an answer proves the agent, the Host's flintlockd and the MicroVM at
+// once. Each probe dials a connection of its own, with the claim's token
+// as every Lease does, and closes it: a Host that stops answering is not
+// hidden behind a connection the Job's Stages still hold open. ctx bounds
+// the probe.
+func (a *AgentHosts) Probe(ctx context.Context, claim AgentClaim) error {
+	client, done, err := a.Lease(ctx, claim)
+	if err != nil {
+		return err
+	}
+	defer done()
+	if _, err := client.GetMicroVM(ctx, claim.VMUID); err != nil {
+		return fmt.Errorf("transport: the exec agent of claim %s on host %s did not answer for microvm %s: %w",
+			claim.LeaseID, claim.Host, claim.VMUID, err)
+	}
+	return nil
+}
+
 // release closes one claim's client.
 func (a *AgentHosts) release(c *agentClient) {
 	a.mu.Lock()

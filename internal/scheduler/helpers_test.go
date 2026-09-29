@@ -831,6 +831,8 @@ type envConfig struct {
 	specsErr  error
 	// wrapHosts, when set, wraps the test Registry the Scheduler is given.
 	wrapHosts func(*testRegistry) flintlock.Registry
+	// agents is the Scheduler's probe of claims' Exec Agents, nil for none.
+	agents AgentProber
 }
 
 // env is a Scheduler with every dependency a test can reach.
@@ -924,6 +926,7 @@ func newEnv(t *testing.T, cfg envConfig) *env {
 		Tracker:      e.tracker,
 		Health:       e.health,
 		Hosts:        hosts,
+		Agents:       cfg.agents,
 		Clock:        e.clk,
 		Backoff:      cfg.backoff,
 		Metrics:      e.metrics,

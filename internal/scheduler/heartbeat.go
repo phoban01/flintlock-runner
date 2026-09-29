@@ -17,7 +17,8 @@ const minHeartbeatDelay = time.Millisecond
 
 // startHeartbeat starts the keep-alive loop of one Allocation. The loop runs
 // under the Scheduler's background context, not the Job's, so a Lease is
-// still heartbeated while the Runner is shutting down (GL-071).
+// still heartbeated while the Runner is shutting down (GL-071). The Exec
+// Agent probe of a claim runs under the same context (KF-200).
 func (s *impl) startHeartbeat(h *handle) {
 	ctx, cancel := context.WithCancel(s.background())
 
@@ -29,7 +30,9 @@ func (s *impl) startHeartbeat(h *handle) {
 	// rather than released leaves nothing attached to the background context.
 	if !s.inBackground(func() { defer cancel(); s.heartbeatLoop(ctx, h) }) {
 		cancel()
+		return
 	}
+	s.startAgentProbe(ctx, h)
 }
 
 // stopHeartbeat ends the keep-alive loop of an Allocation. It does not wait
