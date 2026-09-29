@@ -10,7 +10,6 @@ import (
 
 	"github.com/phoban01/flintlock-runner/internal/config"
 	"github.com/phoban01/flintlock-runner/internal/poolmgr/claim"
-	"github.com/phoban01/flintlock-runner/internal/poolmgr/kube"
 )
 
 const testKubeconfig = `apiVersion: v1
@@ -32,11 +31,10 @@ users:
 `
 
 // TestPoolBackendSelection checks that battery stays the backend of a
-// configuration that names none, and that pool_manager.backend: kubernetes
-// builds the Kubernetes pool backend from the named kubeconfig, without
-// needing the API server to be up, as the battery client needs no battery;
-// and that pool_manager.backend: claim builds the claim pool backend the
-// same way, never battery in its place.
+// configuration that names none, and that pool_manager.backend: claim
+// builds the claim pool backend from the named kubeconfig, never battery in
+// its place, without needing the API server to be up, as the battery client
+// needs no battery.
 func TestPoolBackendSelection(t *testing.T) {
 	t.Parallel()
 	log := slog.New(slog.NewTextHandler(io.Discard, nil))
@@ -50,7 +48,7 @@ func TestPoolBackendSelection(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer func() { _ = battery.Close() }()
-	if _, isKube := battery.Client.(*kube.Backend); isKube || battery.setProfiles != nil {
+	if _, isClaim := battery.Client.(*claim.Backend); isClaim || battery.setProfiles != nil || battery.claim != nil {
 		t.Errorf("no backend selected built %T, want the battery client", battery.Client)
 	}
 
@@ -58,24 +56,6 @@ func TestPoolBackendSelection(t *testing.T) {
 	if err := os.WriteFile(path, []byte(testKubeconfig), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	cfg.PoolManager = config.PoolManager{
-		Backend:    config.PoolBackendKubernetes,
-		Kubernetes: &config.KubernetesPools{Kubeconfig: path, Context: "fleet", Namespace: "runners"},
-	}
-	k8s, err := newPoolClient(cfg, log)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer func() { _ = k8s.Close() }()
-	if _, isKube := k8s.Client.(*kube.Backend); !isKube || k8s.setProfiles == nil {
-		t.Errorf("backend kubernetes built %T, want the kubernetes pool backend with a profile setter", k8s.Client)
-	}
-
-	cfg.PoolManager.Kubernetes.Kubeconfig = filepath.Join(t.TempDir(), "missing")
-	if _, err := newPoolClient(cfg, log); err == nil {
-		t.Error("a missing kubeconfig was accepted")
-	}
-
 	cfg.PoolManager = config.PoolManager{
 		Backend:  config.PoolBackendClaim,
 		Endpoint: "127.0.0.1:1",

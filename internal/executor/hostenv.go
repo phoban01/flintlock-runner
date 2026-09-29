@@ -13,7 +13,7 @@ import (
 
 // Host Service names as they appear in the flintlock_prepare section
 // (EX-064). They are the keys of the host_services configuration section,
-// and the names the Pod Provider publishes a cluster fleet's Host Services
+// and the names the Host Agent publishes a cluster fleet's Host Services
 // under (kubelabels).
 const (
 	ServiceBuildkit       = kubelabels.HostServiceBuildkit

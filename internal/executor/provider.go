@@ -67,14 +67,6 @@ func WithHTTPCacheUpstreams(upstreams []config.HTTPCacheUpstream) Option {
 	}
 }
 
-// WithGuestTransport makes every Profile's Stages run over the named Guest
-// Transport, whatever the Profile says. The Runner of a cluster fleet sets
-// kube-exec, because its MicroVMs are pods it reaches through the API
-// server and there is no Host it may connect to (KF-128, KF-063).
-func WithGuestTransport(kind transport.Kind) Option {
-	return func(p *provider) { p.transport = kind }
-}
-
 // AgentHosts hands out the clients of Exec Agents per claim. The Executor
 // asks once per Job, for the claim of that Job's Allocation, and holds the
 // client until the Job ends. *transport.AgentHosts binds each client to

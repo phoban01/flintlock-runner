@@ -24,11 +24,8 @@ func TestClaimBackendDefaults(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !cfg.PoolManager.IsClaim() || cfg.PoolManager.IsKubernetes() {
-		t.Fatal("backend: claim does not select the claim pool backend alone")
-	}
-	if cfg.PoolManager.Kubernetes != nil {
-		t.Errorf("pool_manager.kubernetes = %+v, want it left unset for the claim backend", cfg.PoolManager.Kubernetes)
+	if !cfg.PoolManager.IsClaim() {
+		t.Fatal("backend: claim does not select the claim pool backend")
 	}
 	k := cfg.PoolManager.Claim
 	if k.HolderServiceAccount != "runner" {
@@ -77,8 +74,14 @@ func TestClaimBackendSettings(t *testing.T) {
 	}
 }
 
-// TestClaimBackendRejected checks the validation of the claim section, and
-// that it is read only with its backend.
+//= docs/requirements/12-cluster-fleet.md#kube-exec-transport
+//= type=test
+//# Where the claim backend is configured, the Runner SHALL read no
+//# Inventory
+
+// TestClaimBackendRejected checks the validation of the claim section, that
+// it is read only with its backend, and that an Inventory is refused with
+// it.
 func TestClaimBackendRejected(t *testing.T) {
 	t.Parallel()
 	claim := func(mutate func(*ClaimPools)) func(*Config) {
@@ -98,22 +101,6 @@ func TestClaimBackendRejected(t *testing.T) {
 	const f = "pool_manager.claim"
 	runRejectCases(t, []rejectCase{
 		{"claim section under battery", func(c *Config) { c.PoolManager.Claim = &ClaimPools{} }, f, "is only read with"},
-		{
-			"claim section under kubernetes",
-			func(c *Config) {
-				c.PoolManager.Backend = PoolBackendKubernetes
-				c.PoolManager.Claim = &ClaimPools{}
-			},
-			f, "is only read with",
-		},
-		{
-			"kubernetes section under claim",
-			func(c *Config) {
-				claim(func(*ClaimPools) {})(c)
-				c.PoolManager.Kubernetes = &KubernetesPools{}
-			},
-			"pool_manager.kubernetes", "is only read with",
-		},
 		{
 			"no claim section",
 			func(c *Config) {
@@ -139,14 +126,6 @@ func TestClaimBackendRejected(t *testing.T) {
 				c.Inventory = inv
 			},
 			"inventory", "name their Hosts",
-		},
-		{
-			"kube-exec under claim",
-			func(c *Config) {
-				claim(func(*ClaimPools) {})(c)
-				c.Profiles[0].Transport = Transport{Kind: TransportKubeExec}
-			},
-			"profiles[0].transport.kind", "needs pool_manager.backend",
 		},
 	})
 

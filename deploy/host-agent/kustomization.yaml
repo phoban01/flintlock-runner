@@ -6,12 +6,6 @@
 #
 # The Exec Agent is not here: battery-operator's Manifests run it
 # (deploy/README.md).
-#
-# rbac.yaml and admission-policy.yaml in this directory are the Pod
-# Provider's, still on main for internal/kubelet's tests until the Virtual
-# Node design is withdrawn; they are deliberately not listed here.
-# host-services-rbac.yaml and host-services-admission-policy.yaml take their
-# place.
 apiVersion: kustomize.config.k8s.io/v1beta1
 kind: Kustomization
 

@@ -38,9 +38,6 @@ const (
 	DefaultPoolManagerEventsPoll               = 5 * time.Second
 	DefaultPoolManagerDeclareRetry             = 30 * time.Second
 	DefaultPoolManagerReleaseRetry             = 5
-	DefaultKubernetesJobTimeout                = 2 * time.Hour
-	DefaultKubernetesCleanupMargin             = 15 * time.Minute
-	DefaultKubernetesRolloutInterval           = 10 * time.Second
 	DefaultClaimServingCANamespace             = "battery-operator-system"
 	DefaultClaimServingCAName                  = "flintlockd-ca"
 	DefaultClaimServingCAKey                   = "serving-ca.crt"
@@ -203,11 +200,6 @@ func applyProfileDefaults(c *Config) {
 		}
 		if p.Transport.Kind == "" {
 			p.Transport.Kind = TransportExec
-			// A cluster fleet reaches every guest through its pod
-			// (KF-128).
-			if c.PoolManager.IsKubernetes() {
-				p.Transport.Kind = TransportKubeExec
-			}
 		}
 		if p.User == "" {
 			p.User = DefaultUser
@@ -285,32 +277,15 @@ func applyPoolManagerDefaults(pm *PoolManager) {
 	if pm.ReleaseRetryLimit == 0 {
 		pm.ReleaseRetryLimit = DefaultPoolManagerReleaseRetry
 	}
-	// The Kubernetes and claim sections are defaulted only where their
-	// backend is selected, so a battery configuration shows no trace of
-	// them.
+	// The claim section is defaulted only where its backend is selected, so
+	// a battery configuration shows no trace of it.
 	if pm.IsClaim() {
 		applyClaimDefaults(pm)
-	}
-	if !pm.IsKubernetes() {
-		return
-	}
-	if pm.Kubernetes == nil {
-		pm.Kubernetes = &KubernetesPools{}
-	}
-	if pm.Kubernetes.JobTimeout == 0 {
-		pm.Kubernetes.JobTimeout = DefaultKubernetesJobTimeout
-	}
-	if pm.Kubernetes.CleanupMargin == 0 {
-		pm.Kubernetes.CleanupMargin = DefaultKubernetesCleanupMargin
-	}
-	if pm.Kubernetes.RolloutInterval == 0 {
-		pm.Kubernetes.RolloutInterval = DefaultKubernetesRolloutInterval
 	}
 }
 
 // applyClaimDefaults fills the claim section. The namespace is left empty,
-// because the Runner resolves it where it runs, as for the Kubernetes
-// backend; the Holder has no default.
+// because the Runner resolves it where it runs; the Holder has no default.
 func applyClaimDefaults(pm *PoolManager) {
 	if pm.Claim == nil {
 		pm.Claim = &ClaimPools{}

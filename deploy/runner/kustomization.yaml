@@ -5,10 +5,6 @@
 # It needs battery-operator v0.1.0's Manifests in the cluster first: the
 # Pool and MicroVMClaim resources, and the namespace battery-operator-system,
 # where rbac.yaml lets the Runner read the serving CA (deploy/README.md).
-#
-# role.yaml in this directory is the Virtual Node design's Role for the
-# Kubernetes pool backend, still on main for internal/poolmgr/kube's tests
-# until that design is withdrawn; it is deliberately not listed here.
 apiVersion: kustomize.config.k8s.io/v1beta1
 kind: Kustomization
 

@@ -59,7 +59,6 @@ func TestSubcommandsAreRegistered(t *testing.T) {
 		"run":           nil,
 		"config":        {"show"},
 		"fleet":         {"provision", "verify", "up", "drain", "teardown", "emit-userdata"},
-		"kubelet":       nil,
 		"host-services": nil,
 	}
 	for _, c := range app.Commands {

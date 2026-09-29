@@ -37,7 +37,7 @@ build:
 	$(GO) build -o $(BIN)/flintlock-devstack ./cmd/flintlock-devstack
 
 ## test: run every Go test with the race detector
-# The Kubernetes pool backend's tests need a kube-apiserver and etcd (KF-121).
+# The claim backend's tests need a kube-apiserver and etcd (KF-191).
 # `go test ./...` on its own finds the ones `make envtest` has downloaded and
 # skips those tests when there are none; here they are downloaded first and
 # required, so this target never skips them.

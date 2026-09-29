@@ -58,6 +58,10 @@ type agentStub struct{ flintlock.HostClient }
 //# each Stage through the Exec Agent of the Host named in the Job's claim,
 //# with the Stage script on standard input.
 
+//= docs/requirements/12-cluster-fleet.md#kube-exec-transport
+//= type=test
+//# SHALL open no connection to a `flintlockd`.
+
 // TestAgentExecThroughTheClaimsHost runs a Job whose Profile names ssh on
 // an executor configured for agent-exec. The transport is built as
 // agent-exec for the claimed MicroVM, with the client of the Exec Agent at

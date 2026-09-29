@@ -9,6 +9,8 @@ import (
 
 	"github.com/urfave/cli"
 	"k8s.io/client-go/kubernetes"
+	"k8s.io/client-go/rest"
+	"k8s.io/client-go/tools/clientcmd"
 
 	"github.com/phoban01/flintlock-runner/internal/hostservices"
 )
@@ -53,7 +55,7 @@ func runHostServices(c *cli.Context) error {
 	if err != nil {
 		return cli.NewExitError(err.Error(), exitInvalidConfig)
 	}
-	restConfig, err := providerRESTConfig(cfg.Kubeconfig)
+	restConfig, err := hostRESTConfig(cfg.Kubeconfig)
 	if err != nil {
 		return cli.NewExitError(fmt.Sprintf("host-services: %v", err), 1)
 	}
@@ -65,4 +67,13 @@ func runHostServices(c *cli.Context) error {
 	defer stop()
 	logger.Info("Publishing the Host Services on the host's Node", "node", cfg.HostNode, "services", cfg.EnabledHostServices())
 	return hostservices.Run(ctx, cfg, kube, logger)
+}
+
+// hostRESTConfig is the client configuration of a component on a Host: the
+// in-cluster one, or a kubeconfig's.
+func hostRESTConfig(kubeconfig string) (*rest.Config, error) {
+	if kubeconfig == "" {
+		return rest.InClusterConfig()
+	}
+	return clientcmd.BuildConfigFromFlags("", kubeconfig)
 }
