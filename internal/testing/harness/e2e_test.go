@@ -6,6 +6,8 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"io"
+	"net/http"
 	"os"
 	"os/exec"
 	"regexp"
@@ -182,6 +184,36 @@ func TestRunnerIsGoneAfterShutdown(t *testing.T) {
 	}
 	if processGroupAlive(pid) {
 		t.Errorf("the runner's process group %d is still alive after Shutdown", pid)
+	}
+}
+
+// TestRunnerServesMetricsOnItsLoggedAddress starts the Runner on port 0 and
+// checks that the address it logs serves gitlab-runner's metrics and the
+// Runner's readiness (#109).
+func TestRunnerServesMetricsOnItsLoggedAddress(t *testing.T) {
+	opts := FakeTier()
+	opts.RunnerBinary = runnerBinary
+	s := New(t, opts)
+	if err := startRunner(s); err != nil {
+		t.Fatal(err)
+	}
+	addr, err := s.ObservabilityAddr()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for path, want := range map[string]string{
+		"/metrics": "gitlab_runner_concurrent",
+		"/readyz":  `"ready":true`,
+	} {
+		eventually(t, path+" on "+addr, func() bool {
+			resp, err := http.Get("http://" + addr + path) //nolint:gosec,noctx // the Runner on loopback
+			if err != nil {
+				return false
+			}
+			defer func() { _ = resp.Body.Close() }()
+			body, err := io.ReadAll(resp.Body)
+			return err == nil && resp.StatusCode == http.StatusOK && strings.Contains(string(body), want)
+		})
 	}
 }
 

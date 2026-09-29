@@ -77,16 +77,13 @@ func runRunner(c *cli.Context) error {
 	// start, so that /healthz answers while the Runner verifies its token
 	// and reaches the Pool Manager. gitlab-runner's metrics server listens
 	// on a loopback address behind it (healthServer).
-	metricsAddr, err := freeLoopbackAddr()
-	if err != nil {
-		return cli.NewExitError(err.Error(), 1)
-	}
-	health, err := newHealthServer(cfg.Observability.ListenAddress, metricsAddr, log)
+	health, err := newHealthServer(cfg.Observability.ListenAddress, log)
 	if err != nil {
 		return cli.NewExitError(err.Error(), 1)
 	}
 	health.serve()
 	defer health.close()
+	log.Info("observability server listening", "address", health.Addr())
 
 	//= docs/requirements/06-fleet.md#launch-template-mode
 	//# Where launch template mode is selected, the Runner SHALL refresh
@@ -157,10 +154,11 @@ func runRunner(c *cli.Context) error {
 	// identifier from; it then sets it on the RunnerConfig that every
 	// runner-scoped request of the network client carries.
 	runnerPath := filepath.Join(cfg.StateDir, runnerConfigFile)
-	// The run loop's metrics server listens on the loopback address that
-	// the health server proxies /metrics to, since the health server holds
-	// the configured one (OB-010).
-	rcfg.ListenAddress = metricsAddr
+	// The run loop's metrics server listens on a loopback port that the
+	// kernel picks, since the health server holds the configured address.
+	// The health server finds that port and proxies /metrics to it
+	// (OB-010).
+	rcfg.ListenAddress = runLoopMetricsAddr
 	if err := rcfg.SaveConfig(runnerPath); err != nil {
 		return cli.NewExitError(fmt.Sprintf("writing %s: %v", runnerPath, err), 1)
 	}
@@ -202,6 +200,14 @@ func runRunner(c *cli.Context) error {
 	reloader := config.NewReloader(cfg, path, config.WithLogger(log))
 	reloader.Subscribe(live.reload)
 	go func() { _ = reloader.ServeSIGHUP(ctx) }()
+
+	// The run loop binds its metrics server inside app.Run, so every
+	// loopback listener that exists now is not that server.
+	if before, err := loopbackListeners(); err != nil {
+		log.Error("cannot find the run loop's metrics server; /metrics is not served", "error", err)
+	} else {
+		go health.followRunLoop(ctx, before, 20*time.Millisecond)
+	}
 
 	app := cli.NewApp()
 	app.Name = c.App.Name

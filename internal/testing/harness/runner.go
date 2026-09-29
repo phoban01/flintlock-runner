@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"syscall"
 	"time"
@@ -302,6 +303,26 @@ func (s *Stack) RunnerLogTail(n int) string {
 		}
 	}
 	return strings.Join(lines, "\n")
+}
+
+// observabilityLine matches the line in which the Runner logs the address
+// its observability server listens on.
+var observabilityLine = regexp.MustCompile(`msg="observability server listening" address=(\S+)`)
+
+// ObservabilityAddr returns the address the Runner serves /metrics, /healthz
+// and /readyz on. The configuration gives port 0, so the address comes from
+// the Runner's log, from the last Runner started. It fails before the
+// Runner has logged it.
+func (s *Stack) ObservabilityAddr() (string, error) {
+	b, err := os.ReadFile(s.RunnerLog)
+	if err != nil {
+		return "", fmt.Errorf("harness: runner log: %w", err)
+	}
+	m := observabilityLine.FindAllSubmatch(b, -1)
+	if len(m) == 0 {
+		return "", fmt.Errorf("harness: the runner has not logged its observability address in %s", s.RunnerLog)
+	}
+	return string(m[len(m)-1][1]), nil
 }
 
 // helperPackage is the import path of the gitlab-runner-helper stand-in.

@@ -1,14 +1,18 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"io"
 	"log/slog"
+	"net"
 	"net/http"
 	"net/http/httptest"
+	"net/netip"
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/phoban01/flintlock-runner/internal/poolmgr"
 	"github.com/phoban01/flintlock-runner/internal/poolmgr/claim"
@@ -33,11 +37,11 @@ func (f *fakeStatus) set(snap scheduler.Snapshot) {
 	f.snap = snap
 }
 
-// startHealth starts a health server on a loopback port in front of
-// upstream and returns its base URL.
-func startHealth(t *testing.T, upstream string) (*healthServer, string) {
+// startHealth starts a health server on a loopback port, with no run loop
+// behind it yet, and returns its base URL.
+func startHealth(t *testing.T) (*healthServer, string) {
 	t.Helper()
-	h, err := newHealthServer("127.0.0.1:0", upstream, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	h, err := newHealthServer("127.0.0.1:0", slog.New(slog.NewTextHandler(io.Discard, nil)))
 	if err != nil {
 		t.Fatalf("newHealthServer: %v", err)
 	}
@@ -82,7 +86,7 @@ func readyz(t *testing.T, base string) (int, readinessReport) {
 // Pool Manager is still alive, and the kubelet must not restart it.
 func TestHealthzAnswersBeforeTheRunnerIsReady(t *testing.T) {
 	t.Parallel()
-	_, base := startHealth(t, "127.0.0.1:1")
+	_, base := startHealth(t)
 
 	if code, _ := get(t, base+"/readyz"); code != http.StatusServiceUnavailable {
 		t.Fatalf("/readyz = %d before anything is ready, want 503", code)
@@ -114,7 +118,7 @@ func TestHealthzAnswersBeforeTheRunnerIsReady(t *testing.T) {
 // three conditions hold. It fails again when the last Host goes unhealthy.
 func TestReadyzFailsUntilEveryConditionHolds(t *testing.T) {
 	t.Parallel()
-	h, base := startHealth(t, "127.0.0.1:1")
+	h, base := startHealth(t)
 	status := &fakeStatus{}
 
 	expect := func(step string, want int) {
@@ -181,7 +185,7 @@ func (f *fakePools) set(pools ...claim.PoolReadiness) {
 // are still needed. The body carries each Pool's readiness (OB-032).
 func TestReadyzUnderTheClaimBackendWaitsForAReadyPool(t *testing.T) {
 	t.Parallel()
-	h, base := startHealth(t, "127.0.0.1:1")
+	h, base := startHealth(t)
 	status := &fakeStatus{}
 	pools := &fakePools{}
 	h.setStatus(status)
@@ -247,7 +251,7 @@ func TestReadyzUnderTheClaimBackendWaitsForAReadyPool(t *testing.T) {
 // only that it has answered once).
 func TestReadyzReportsHostsPoolManagerAndPools(t *testing.T) {
 	t.Parallel()
-	h, base := startHealth(t, "127.0.0.1:1")
+	h, base := startHealth(t)
 	h.tokenVerified()
 	status := &fakeStatus{}
 	h.setStatus(status)
@@ -291,19 +295,149 @@ func TestReadyzReportsHostsPoolManagerAndPools(t *testing.T) {
 // configured listen address (OB-010, OB-011).
 func TestMetricsArePassedToTheRunLoop(t *testing.T) {
 	t.Parallel()
-	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/metrics" {
-			http.NotFound(w, r)
+	upstream := httptest.NewServer(fakeRunLoopMetrics())
+	t.Cleanup(upstream.Close)
+	h, base := startHealth(t)
+
+	if code, _ := get(t, base+"/metrics"); code != http.StatusServiceUnavailable {
+		t.Fatalf("/metrics = %d before the run loop's server is known, want 503", code)
+	}
+	h.setRunLoop(strings.TrimPrefix(upstream.URL, "http://"))
+	for path, want := range map[string]string{
+		"/metrics":             "gitlab_runner_version_info",
+		"/debug/jobs/list":     "jobs",
+		"/debug/process/state": "running",
+		"/debug/pprof/cmdline": "cmdline",
+		"/healthz":             "ok",
+	} {
+		code, body := get(t, base+path)
+		if code != http.StatusOK || !strings.Contains(body, want) {
+			t.Errorf("%s = %d %q, want 200 and %q", path, code, body, want)
+		}
+	}
+}
+
+// fakeRunLoopMetrics stands in for gitlab-runner's metrics server: it
+// answers /metrics and the /debug paths, and nothing else.
+func fakeRunLoopMetrics() http.Handler {
+	mux := http.NewServeMux()
+	for path, body := range map[string]string{
+		"/metrics":             "gitlab_runner_version_info 1\n",
+		"/debug/jobs/list":     "jobs\n",
+		"/debug/process/state": "running\n",
+		"/debug/pprof/cmdline": "cmdline\n",
+	} {
+		mux.HandleFunc(path, func(w http.ResponseWriter, _ *http.Request) {
+			_, _ = io.WriteString(w, body)
+		})
+	}
+	return mux
+}
+
+// TestRunLoopMetricsSurviveATakenPort binds the run loop's metrics server
+// as gitlab-runner does, net.Listen on runLoopMetricsAddr, after another
+// listener takes the port that address names. It checks that the bind
+// succeeds and that /metrics reaches the server through the health server.
+// With a port chosen ahead of the bind, the other listener wins the port,
+// and gitlab-runner stops the Runner (#109).
+//
+// The test is not parallel: followRunLoop looks at every listener of the
+// process, and a parallel test's listener would look like a second
+// candidate.
+func TestRunLoopMetricsSurviveATakenPort(t *testing.T) {
+	h, base := startHealth(t)
+	before, err := loopbackListeners()
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	go h.followRunLoop(ctx, before, 5*time.Millisecond)
+
+	// Another process takes the port the run loop is to bind, where the
+	// address names one.
+	_, port, err := net.SplitHostPort(runLoopMetricsAddr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if port != "0" {
+		other, err := net.Listen("tcp", runLoopMetricsAddr)
+		if err != nil {
+			t.Fatalf("taking the run loop's port: %v", err)
+		}
+		t.Cleanup(func() { _ = other.Close() })
+	}
+
+	lis, err := net.Listen("tcp", runLoopMetricsAddr)
+	if err != nil {
+		t.Fatalf("the run loop cannot bind its metrics server: %v", err)
+	}
+	srv := &http.Server{Handler: fakeRunLoopMetrics(), ReadHeaderTimeout: time.Second}
+	go func() { _ = srv.Serve(lis) }()
+	t.Cleanup(func() { _ = srv.Close() })
+
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		code, body := get(t, base+"/metrics")
+		if code == http.StatusOK && strings.Contains(body, "gitlab_runner_version_info") {
 			return
 		}
-		_, _ = io.WriteString(w, "gitlab_runner_version_info 1\n")
-	}))
-	t.Cleanup(upstream.Close)
-	_, base := startHealth(t, strings.TrimPrefix(upstream.URL, "http://"))
+		if time.Now().After(deadline) {
+			t.Fatalf("/metrics = %d %q, want the run loop's metrics", code, body)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}
 
-	code, body := get(t, base+"/metrics")
-	if code != http.StatusOK || !strings.Contains(body, "gitlab_runner_version_info") {
-		t.Fatalf("/metrics = %d %q, want the run loop's metrics", code, body)
+// TestFollowRunLoopDoesNotGuess checks that followRunLoop waits, and does
+// not pick one, while more than one loopback listener is new. It is not
+// parallel, for the reason TestRunLoopMetricsSurviveATakenPort gives.
+func TestFollowRunLoopDoesNotGuess(t *testing.T) {
+	h, _ := startHealth(t)
+	before, err := loopbackListeners()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for range 2 {
+		lis, err := net.Listen("tcp", "127.0.0.1:0")
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { _ = lis.Close() })
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+	h.followRunLoop(ctx, before, 5*time.Millisecond)
+	if h.runLoop.Load() != nil {
+		t.Fatal("followRunLoop chose one of two new listeners")
+	}
+}
+
+// TestLoopbackListenersSeesOnlyListeners checks that loopbackListeners
+// finds a listener on the run loop's host, and leaves out a connected
+// socket.
+func TestLoopbackListenersSeesOnlyListeners(t *testing.T) {
+	t.Parallel()
+	lis, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = lis.Close() })
+	conn, err := net.Dial("tcp", lis.Addr().String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = conn.Close() })
+
+	got, err := loopbackListeners()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !got[netip.MustParseAddrPort(lis.Addr().String())] {
+		t.Errorf("loopbackListeners() = %v, lacks the listener %s", got, lis.Addr())
+	}
+	if got[netip.MustParseAddrPort(conn.LocalAddr().String())] {
+		t.Errorf("loopbackListeners() = %v, has the connected socket %s", got, conn.LocalAddr())
 	}
 }
 
@@ -311,8 +445,8 @@ func TestMetricsArePassedToTheRunLoop(t *testing.T) {
 // process holds fails the start of `run` rather than a later probe.
 func TestHealthServerRefusesABusyAddress(t *testing.T) {
 	t.Parallel()
-	h, _ := startHealth(t, "127.0.0.1:1")
-	if _, err := newHealthServer(h.Addr(), "127.0.0.1:1", slog.New(slog.NewTextHandler(io.Discard, nil))); err == nil {
+	h, _ := startHealth(t)
+	if _, err := newHealthServer(h.Addr(), slog.New(slog.NewTextHandler(io.Discard, nil))); err == nil {
 		t.Fatal("a second health server bound the same address")
 	}
 }

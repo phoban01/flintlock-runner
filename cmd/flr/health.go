@@ -25,8 +25,9 @@ import (
 // gitlab-runner's run loop builds its metrics server with a private mux and a
 // private Prometheus registry, so nothing can be added to it and its
 // registry cannot be served from elsewhere. The Runner therefore owns the
-// configured address, and the run loop gets the loopback one (runRunner).
-// Scrapers and probes see one port, as deploy/runner expects.
+// configured address. The run loop listens on a loopback port that the
+// kernel picks when the run loop binds it, and followRunLoop finds that
+// port. Scrapers and probes see one port, as deploy/runner expects.
 type healthServer struct {
 	log *slog.Logger
 	srv *http.Server
@@ -42,6 +43,9 @@ type healthServer struct {
 	// any other backend. Where it is set, a Ready Pool takes the place of
 	// a healthy Host (OB-031).
 	pools atomic.Pointer[poolReadiness]
+	// runLoop proxies to gitlab-runner's metrics server, once
+	// followRunLoop has found the address it listens on.
+	runLoop atomic.Pointer[httputil.ReverseProxy]
 }
 
 // poolReadiness is what the claim backend says about the readiness of the
@@ -73,30 +77,42 @@ type poolReport struct {
 	Ready *bool `json:"ready,omitempty"`
 }
 
-// newHealthServer listens on addr and proxies every path but its own to
-// upstream, gitlab-runner's metrics server. The listener is bound here, so
-// that a busy address fails the start of `run` at once.
-func newHealthServer(addr, upstream string, log *slog.Logger) (*healthServer, error) {
-	target, err := url.Parse("http://" + upstream)
-	if err != nil {
-		return nil, fmt.Errorf("metrics upstream %q: %w", upstream, err)
-	}
+// newHealthServer listens on addr. It serves /healthz and /readyz, and
+// passes every other path to gitlab-runner's metrics server once setRunLoop
+// gives it that server's address. The listener is bound here, so that a
+// busy address fails the start of `run` at once.
+func newHealthServer(addr string, log *slog.Logger) (*healthServer, error) {
 	lis, err := net.Listen("tcp", addr)
 	if err != nil {
 		return nil, fmt.Errorf("observability listen address: %w", err)
 	}
 	h := &healthServer{log: log, lis: lis}
-	proxy := httputil.NewSingleHostReverseProxy(target)
-	// Until the run loop starts its server, and after it stops, /metrics
-	// fails with a 502; that is not worth a log line at every scrape.
-	proxy.ErrorLog = slog.NewLogLogger(log.Handler(), slog.LevelDebug)
-
 	mux := http.NewServeMux()
 	mux.HandleFunc("/healthz", h.serveHealthz)
 	mux.HandleFunc("/readyz", h.serveReadyz)
-	mux.Handle("/", proxy)
+	mux.HandleFunc("/", h.serveRunLoop)
 	h.srv = &http.Server{Handler: mux, ReadHeaderTimeout: 10 * time.Second}
 	return h, nil
+}
+
+// setRunLoop gives the server the address of gitlab-runner's metrics server.
+func (h *healthServer) setRunLoop(addr string) {
+	proxy := httputil.NewSingleHostReverseProxy(&url.URL{Scheme: "http", Host: addr})
+	// After the run loop stops its server, /metrics fails with a 502; that
+	// is not worth a log line at every scrape.
+	proxy.ErrorLog = slog.NewLogLogger(h.log.Handler(), slog.LevelDebug)
+	h.runLoop.Store(proxy)
+}
+
+// serveRunLoop passes the request to gitlab-runner's metrics server, or
+// answers 503 while that server has not started.
+func (h *healthServer) serveRunLoop(w http.ResponseWriter, r *http.Request) {
+	proxy := h.runLoop.Load()
+	if proxy == nil {
+		http.Error(w, "the run loop's metrics server has not started", http.StatusServiceUnavailable)
+		return
+	}
+	proxy.ServeHTTP(w, r)
 }
 
 // Addr is the address the server listens on.
@@ -219,20 +235,4 @@ func (r *readinessReport) setPoolReady(pool string, ready bool) {
 		}
 	}
 	r.Pools = append(r.Pools, poolReport{Pool: pool, Ready: &ready})
-}
-
-// freeLoopbackAddr returns a loopback address whose port was free a moment
-// ago, for gitlab-runner's metrics server behind the health server. The port
-// is released before the run loop binds it; if another process takes it in
-// between, the run loop fails to start and says so.
-func freeLoopbackAddr() (string, error) {
-	lis, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		return "", fmt.Errorf("finding a port for the metrics server: %w", err)
-	}
-	addr := lis.Addr().String()
-	if err := lis.Close(); err != nil {
-		return "", fmt.Errorf("finding a port for the metrics server: %w", err)
-	}
-	return addr, nil
 }

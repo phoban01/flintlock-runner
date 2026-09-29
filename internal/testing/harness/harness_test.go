@@ -487,3 +487,30 @@ func TestBuildJob(t *testing.T) {
 		t.Error("the job carries artifacts or cache, which need gitlab-runner-helper")
 	}
 }
+
+// TestObservabilityAddrReadsTheLastRunnersLog checks that ObservabilityAddr
+// fails until the Runner logs its address, and then returns the address of
+// the last Runner started, since the log is appended to on each start.
+func TestObservabilityAddrReadsTheLastRunnersLog(t *testing.T) {
+	t.Parallel()
+	s := &Stack{RunnerLog: filepath.Join(t.TempDir(), "runner.log")}
+	if _, err := s.ObservabilityAddr(); err == nil {
+		t.Fatal("ObservabilityAddr() succeeded with no runner log")
+	}
+	lines := `time=2026-09-29T10:00:00.000Z level=INFO msg="starting"` + "\n"
+	if err := os.WriteFile(s.RunnerLog, []byte(lines), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.ObservabilityAddr(); err == nil {
+		t.Fatal("ObservabilityAddr() succeeded before the runner logged its address")
+	}
+	lines += `time=2026-09-29T10:00:00.001Z level=INFO msg="observability server listening" address=127.0.0.1:40001` + "\n" +
+		`time=2026-09-29T10:00:05.000Z level=INFO msg="observability server listening" address=127.0.0.1:40002` + "\n"
+	if err := os.WriteFile(s.RunnerLog, []byte(lines), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	got, err := s.ObservabilityAddr()
+	if err != nil || got != "127.0.0.1:40002" {
+		t.Fatalf("ObservabilityAddr() = %q, %v; want 127.0.0.1:40002", got, err)
+	}
+}
