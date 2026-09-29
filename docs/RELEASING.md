@@ -15,25 +15,23 @@ For `linux/amd64`, `linux/arm64`, `darwin/amd64` and `darwin/arm64`:
 | `flr_<version>_<os>_<arch>.tar.gz` | `flr`: the Runner, which a Control Node installs, and the `fleet` commands |
 | `flintlock-devtools_<version>_<os>_<arch>.tar.gz` | `fake-poolmgr`, the stand-in Pool Manager an early fleet can run without battery (TD-009), and `flintlock-devstack`, the local demo stack |
 | `flintlock-runner-fleet.yaml` | the Fleet Manifests: `kustomize build deploy/`, with every image of this project by the digest this release pushed |
-| `flintlock-runner-capi.yaml` | the Cluster API objects of a cluster fleet: `kustomize build deploy/capi`, likewise by digest |
 | `images.txt` | each image tag this release pushed, next to the digest it names |
-| `checksums.txt` | SHA-256 of every archive, both manifests assets and `images.txt` |
+| `checksums.txt` | SHA-256 of every archive, the manifests asset and `images.txt` |
 | `requirements-report.html`, `requirements-report.json` | the duvet report for the tagged commit: every requirement in `docs/requirements/` and whether this build implements and tests it |
 
-And four container images, in the project's registry
+And three container images, in the project's registry
 (`docs/requirements/12-cluster-fleet.md#cluster-release` and
 `docs/requirements/13-guest-image.md#guest-release`):
 
 | Image | Tags | Contents |
 |---|---|---|
 | `ghcr.io/phoban01/flintlock-runner/flr` | `<version>` | one index for `linux/amd64` and `linux/arm64`: the same `flr` binaries as the archives, the CA certificates and the time zone database, on `scratch`, running as uid 65532. No shell, no package manager, no `/etc/passwd` (KF-140, KF-141) |
-| `ghcr.io/phoban01/flintlock-runner/host` | `<version>` and `<version>-k8s-<kubernetes version>` | the bootc Host Image of `image/`, `linux/amd64` only, the same manifest under both tags. The Kubernetes version is `KUBERNETES_VERSION` in `image/versions.env` (KF-142) |
 | `ghcr.io/phoban01/flintlock-runner/guest-kernel` | `<version>` | one index for `linux/amd64` and `linux/arm64`: the Guest Image's kernel, Firecracker's CI 6.1 kernel, at `boot/vmlinux` and nothing else (GI-010, GI-040) |
 | `ghcr.io/phoban01/flintlock-runner/guest-rootfs` | `<version>` | one index for `linux/amd64` and `linux/arm64`: the Guest Image's root filesystem of `guest/rootfs`, Ubuntu 24.04 with systemd, the guest agent, bash, git, curl, the CA certificates, `gitlab-runner-helper` and DHCP (GI-020 to GI-034, GI-040) |
 
 `<version>` is the tag without its `v`: `v1.2.0-rc.1` publishes
 `flr:1.2.0-rc.1`. No other tag is ever pushed: no `latest`, no `1` or `1.2`,
-no bare Kubernetes version, because each of those would move from one
+because each of those would move from one
 release to the next (KF-145). A tag, once pushed, is never pushed again: the
 workflow refuses a version any of whose tags already exist. Use the digests
 from the manifests or `images.txt` wherever a reference has to stay put;
@@ -44,21 +42,11 @@ The flr image's CA certificates and time zone data are copied from
 `hack/release/flr.Containerfile`; distroless itself is not the base because
 it carries a passwd file, a dpkg database and more that KF-141 leaves out.
 
-The Release does not publish an AMI. Making one needs an AWS account, which
-the release workflow does not have, so an operator makes it from the
-published Host Image in their own account (HI-009, `image/README.md`):
-
-```sh
-git checkout v0.1.0-rc.1          # image/versions.env must be the release's
-digest=sha256:...                 # the host digest from images.txt
-sudo podman pull "ghcr.io/phoban01/flintlock-runner/host@$digest"
-make image-ami HOST_IMAGE="ghcr.io/phoban01/flintlock-runner/host@$digest" \
-  IMAGE_AMI_ARGS="--bucket my-import-bucket --region eu-west-1"
-```
-
-bootc-image-builder reads the image from root's podman storage, hence
-`sudo`. The AMI is tagged with the image digest and the Kubernetes version,
-and a MachineDeployment has to ask for that Kubernetes version.
+The Release publishes no Host Image and no AMI. The Hosts boot
+battery-operator's reference Host Image, which battery-operator publishes,
+and an operator makes the AMI from it with battery-operator's tools (its
+HI-009, `hostimage/README.md` there). flintlock-runner's own Host Image,
+`image/`, was removed in #107.
 
 Up to `v1.0.0-rc.1` the Runner's archive and binary were called
 `flintlock-runner`; from then on they are `flr`. The configuration, paths
@@ -98,34 +86,31 @@ A release candidate is how a version gets tried before it is called done.
 
 3. The workflow checks the tag, reruns `go vet`, the race-enabled tests and the
    end-to-end harness on the tagged commit, then publishes, in this order:
-   - **the Host Image** (job `host image`): `make image` and
-     `make image-check` with podman, exactly as CI's `image` job builds it,
-     then `hack/release/push-host-image.sh` pushes it under both of its tags;
    - **the Guest Image** (job `guest images`): `guest/build.sh` builds the
      kernel and root filesystem images for both platforms, check stages
      included, exactly as CI's `guest` job builds them, and pushes each as
      one index tagged `<version>`; `hack/release/check-guest-images.sh`
      checks both platforms and the tags. The Runner's Profiles name these
-     images by digest, which the manifests assets fill in;
+     images by digest, which the manifests asset fills in;
    - **the flr image and the archives** (job `publish`): goreleaser builds
      the binaries once, archives them, builds the image for both platforms
      from them, pushes it, and creates the GitHub release as a *draft*;
-   - **the manifests assets**: the workflow writes `images.txt`, each tag
+   - **the manifests asset**: the workflow writes `images.txt`, each tag
      it pushed next to its digest. Then `hack/release/render-manifests.sh`
-     renders `deploy/` and `deploy/capi` through a throwaway overlay that
+     renders `deploy/` through a throwaway overlay that
      sets every image of this project to the digest just pushed. The
      Runner's Profiles name the Guest Image in its configuration file,
      which kustomize does not rewrite, so the render first writes the
      `guest-kernel` and `guest-rootfs` digests of `images.txt` over them,
      in a copy of `deploy/`. It refuses any reference that is still by
-     tag. The assets are attached with `images.txt` and the extended
+     tag. The asset is attached with `images.txt` and the extended
      `checksums.txt`, and only then is the draft published as a
      pre-release.
 
    Before the release is published, the workflow checks the pushed flr
    image (`hack/release/check-flr-image.sh`: both platforms, nothing but
-   flr, certificates and time zone data, non-root, no shell) and every tag in
-   both repositories (`hack/release/check-tags.sh`).
+   flr, certificates and time zone data, non-root, no shell) and every tag of
+   the flr repository (`hack/release/check-tags.sh`).
 
 A release candidate publishes images too, so that a candidate can be tried
 on a cluster before its version is released. Cut `-rc.2`, `-rc.3` and so on
@@ -179,13 +164,12 @@ need, and the workflow enforces both:
 | any failing test, including the end-to-end harness | a release is rebuilt from scratch, so it is retested on exactly what ships |
 | a module graph that `go mod tidy` would change | the build must be of exactly what the tag points at |
 | a version any of whose image tags already exists | a pushed tag never moves (KF-145) |
-| a Host Image that fails its check stage or its label check | the image that is pushed is the one that was checked |
 | a Guest Image that fails a check stage, or an index without both platforms | the images that are pushed are the ones that were checked (GI-003, GI-040) |
 | an flr image with anything but flr, certificates and time zone data in it, a root or non-numeric user, or a platform missing | KF-140, KF-141 |
 | a tag in either repository that is not a full release version, `latest` included | KF-145 |
 | a manifests asset with a reference to this project's images that is not by this release's digest, or a fleet asset without the flr image | KF-143 |
 
-Only the jobs that push, `host image`, `guest images` and `publish`, hold
+Only the jobs that push, `guest images` and `publish`, hold
 `packages: write`.
 
 ### The packaging dry run
@@ -194,8 +178,6 @@ A pull request that changes `.goreleaser.yaml`, the release workflow,
 `hack/release/`, `guest/build.sh` or `deploy/` runs the whole of the above
 without publishing anything:
 
-- the Host Image is built and checked as on a tag, and pushed to a registry
-  that exists only inside the job, where its tags are checked;
 - the Guest Image is built for both platforms, checked, and pushed to a
   registry that exists only inside its job, where its platforms and tags
   are checked;
@@ -205,7 +187,7 @@ without publishing anything:
   the published one;
 - `hack/release/test-render.sh` tests rendering and its checks against the
   stand-in kustomizations in `hack/release/testdata/`, and the real
-  `deploy/` is rendered against the digests of those two throwaway pushes,
+  `deploy/` is rendered against the digest of the flr image's throwaway push,
   and against stand-in digests for the Guest Image, which that job does not
   push.
   The result is kept as the workflow artifact `manifests-dry-run`; its
@@ -232,7 +214,7 @@ tar -xzf flr_0.1.0-rc.1_linux_amd64.tar.gz
 
 ## Checking the images
 
-`checksums.txt` covers the manifests assets and `images.txt`, so check those
+`checksums.txt` covers the manifests asset and `images.txt`, so check those
 first as above. Then confirm that the registry serves the digests they name,
 with `skopeo` (or `crane digest`):
 
@@ -242,14 +224,13 @@ cat images.txt
 
 # the digest of a manifest is the sha256 of its bytes, so this recomputes it
 skopeo inspect --raw docker://ghcr.io/phoban01/flintlock-runner/flr:0.1.0-rc.1 | sha256sum
-skopeo inspect --raw docker://ghcr.io/phoban01/flintlock-runner/host:0.1.0-rc.1 | sha256sum
 
 # every reference to this project's images in the manifests, all by digest
 grep -ho 'ghcr.io/phoban01/flintlock-runner/[^"[:space:]]*' \
-  flintlock-runner-fleet.yaml flintlock-runner-capi.yaml | sort | uniq -c
+  flintlock-runner-fleet.yaml | sort | uniq -c
 ```
 
-`hack/release/check-manifests.sh --flr <ref> --host <ref> FILE...` from a
+`hack/release/check-manifests.sh --flr <ref> FILE...` from a
 checkout does the last check strictly. The flr image's contents can be
 checked from a checkout too:
 
@@ -264,7 +245,6 @@ hack/release/check-flr-image.sh --version 0.1.0-rc.1 \
 - Nothing is signed: not the archives, not the images. Signing with
   Sigstore's keyless `cosign` is the natural next step and needs only an
   `id-token: write` permission, a `signs` and a `docker_signs` section in
-  `.goreleaser.yaml`, and a `cosign sign` of the Host Image by digest.
-- No AMI is published; an operator makes one with `make image-ami` (above).
+  `.goreleaser.yaml`.
 - The image pushes and the release publication have not run yet: before the
   first candidate that has them, only the dry run has.

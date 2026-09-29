@@ -1,12 +1,13 @@
 #!/bin/sh
 # prepare-cache.sh: the Host Agent's second init container. It creates each
-# enabled Host Service's directory under the Host Service cache directory of
-# HI-024 and gives it to the user id that service runs as (KF-072).
+# enabled Host Service's directory in the Host Service cache, the pod's
+# emptyDir volume cache, and gives it to the user id that service runs as
+# (KF-197).
 #
 # Each Host Service component lists its directories in a ConfigMap entry
 # named cache-dirs.<service>, one "path uid" per line, relative to the cache
-# directory. The cache directory itself is the Host Image's (flr-cache mounts
-# the cache volume there, root-owned); nothing outside it is touched.
+# directory. The kubelet makes the volume, owned by root; nothing outside
+# it is touched.
 #
 # This is the only container of the Host Agent that runs as root, and it
 # holds CAP_CHOWN alone: root owns the cache directory, so creating entries
@@ -27,7 +28,7 @@ die() {
   exit 1
 }
 
-[ -d "$cache" ] || die "$cache is not a directory: the Host Image's flr-cache unit has not run"
+[ -d "$cache" ] || die "$cache is not a directory: the pod has no cache volume"
 
 for list in "$templates"/cache-dirs.*; do
   [ -e "$list" ] || continue

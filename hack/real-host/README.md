@@ -60,7 +60,7 @@ queues a new Job each time.
 each said in the file: the fake GitLab over plain HTTP, one arm64 Profile
 as the default, the Guest Image from the Host's registry, and no Host
 Services. The trial runs no Host Agent, because the Host Agent needs the
-Host Image's `/run/flr/host.env`.
+Host Image's `/run/battery/host.env`.
 
 ## The fake GitLab
 

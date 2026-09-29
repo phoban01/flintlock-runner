@@ -106,39 +106,6 @@ clean:
 	rm -rf $(BIN) .duvet/requirements .duvet/reports
 
 # ---------------------------------------------------------------------------
-# The Host Image (image/, docs/requirements/11-host-image.md), in a block of
-# its own.
-#
-# CONTAINER_ENGINE builds it: podman when installed, docker otherwise.
-# HOST_IMAGE is the tag it gets. HOST_IMAGE_BUILD_ARGS passes every
-# *_VERSION of image/versions.env as a --build-arg, so that the Containerfile
-# can turn them into OCI labels (HI-005). IMAGE_AMI_ARGS are the arguments of
-# image/publish-ami.sh, for example "--bucket B --region R".
-CONTAINER_ENGINE     ?= $(shell command -v podman 2>/dev/null || command -v docker 2>/dev/null || echo podman)
-HOST_IMAGE           ?= localhost/flintlock-runner-host:dev
-HOST_IMAGE_BUILD_ARGS = $(shell sed -n 's/^\([A-Z_]*_VERSION\)=\(.*\)$$/--build-arg \1=\2/p' image/versions.env)
-IMAGE_AMI_ARGS       ?=
-
-.PHONY: image image-check image-lint image-ami
-
-## image: build the x86_64 bootc Host Image, check stage included (needs neither KVM nor AWS; emulated on other architectures)
-image:
-	$(CONTAINER_ENGINE) build --platform linux/amd64 $(HOST_IMAGE_BUILD_ARGS) -f image/Containerfile -t $(HOST_IMAGE) image
-
-## image-check: run the check stage again in the built Host Image and compare its OCI labels with image/versions.env
-image-check:
-	$(CONTAINER_ENGINE) run --rm --platform linux/amd64 $(HOST_IMAGE) /usr/libexec/flr/check
-	CONTAINER_ENGINE=$(CONTAINER_ENGINE) image/check-labels.sh $(HOST_IMAGE)
-
-## image-lint: lint the Host Image sources without building (bash -n, shellcheck, the digest pin, thin-pool cases, systemd-analyze)
-image-lint:
-	image/lint.sh
-
-## image-ami: publish HOST_IMAGE as an AMI with bootc-image-builder; needs AWS and IMAGE_AMI_ARGS, see image/README.md
-image-ami:
-	CONTAINER_ENGINE=$(CONTAINER_ENGINE) image/publish-ami.sh $(HOST_IMAGE) $(IMAGE_AMI_ARGS)
-
-# ---------------------------------------------------------------------------
 # The Guest Image (guest/, docs/requirements/13-guest-image.md), in a block
 # of its own: the kernel and root filesystem images a Profile names.
 #
@@ -167,16 +134,15 @@ guest-lint:
 #
 # The tools are installed with `go install` at the pinned versions below into
 # MANIFESTS_TOOLS, one directory per version. kubeconform validates against
-# the Kubernetes schemas of K8S_SCHEMA_VERSION, the Kubernetes version of the
-# Host Image (image/versions.env), and the Cluster API and CAPA CRD schemas
-# of the datreeio CRDs-catalog, both read from pinned commits.
+# the Kubernetes schemas of K8S_SCHEMA_VERSION, read from a pinned commit. It
+# is the Kubernetes version of battery-operator's Host Image, which the Hosts
+# boot from.
 KUSTOMIZE_VERSION    ?= v5.8.1
 KUBECONFORM_VERSION  ?= v0.8.0
 YQ_VERSION           ?= v4.53.6
 MANIFESTS_TOOLS      ?= $(abspath $(BIN))/manifests-tools
 K8S_SCHEMA_VERSION   ?= 1.35.8
 K8S_SCHEMA_COMMIT    ?= 491f6d0bac338516572de67fbd5ec4c510f7e657
-CRDS_CATALOG_COMMIT  ?= ad3b08c5045129d7bb1eeffd8e61719b2c8dd1e2
 KUSTOMIZE_BIN         = $(MANIFESTS_TOOLS)/kustomize-$(KUSTOMIZE_VERSION)/kustomize
 KUBECONFORM_BIN       = $(MANIFESTS_TOOLS)/kubeconform-$(KUBECONFORM_VERSION)/kubeconform
 YQ_BIN                = $(MANIFESTS_TOOLS)/yq-$(YQ_VERSION)/yq
@@ -195,17 +161,14 @@ $(YQ_BIN):
 ## manifests-tools: install the pinned kustomize, kubeconform and yq into MANIFESTS_TOOLS
 manifests-tools: $(KUSTOMIZE_BIN) $(KUBECONFORM_BIN) $(YQ_BIN)
 
-## manifests: render the Fleet Manifests (deploy/) and the Cluster API objects (deploy/capi) to stdout
+## manifests: render the Fleet Manifests (deploy/) to stdout
 manifests: $(KUSTOMIZE_BIN)
 	@$(KUSTOMIZE_BIN) build deploy
-	@echo ---
-	@$(KUSTOMIZE_BIN) build deploy/capi
 
-## manifests-check: render deploy/ and deploy/capi, validate them with kubeconform and run deploy/tests/checks.yaml
+## manifests-check: render deploy/, validate it with kubeconform and run deploy/tests/checks.yaml
 manifests-check: manifests-tools
 	$(GO) build -o $(BIN)/flr ./cmd/flr
 	KUSTOMIZE=$(KUSTOMIZE_BIN) KUBECONFORM=$(KUBECONFORM_BIN) YQ=$(YQ_BIN) FLR=$(abspath $(BIN))/flr \
 		K8S_SCHEMA_VERSION=$(K8S_SCHEMA_VERSION) \
 		K8S_SCHEMA_LOCATION='https://raw.githubusercontent.com/yannh/kubernetes-json-schema/$(K8S_SCHEMA_COMMIT)/{{.NormalizedKubernetesVersion}}-standalone{{.StrictSuffix}}/{{.ResourceKind}}{{.KindSuffix}}.json' \
-		CRD_SCHEMA_LOCATION='https://raw.githubusercontent.com/datreeio/CRDs-catalog/$(CRDS_CATALOG_COMMIT)/{{.Group}}/{{.ResourceKind}}_{{.ResourceAPIVersion}}.json' \
 		deploy/check.sh

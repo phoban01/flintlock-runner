@@ -1,13 +1,12 @@
 #!/usr/bin/env bash
-# Render the two manifests assets of a release (docs/RELEASING.md):
+# Render the manifests asset of a release (docs/RELEASING.md):
 #
 #   flintlock-runner-fleet.yaml   kustomize build deploy/
-#   flintlock-runner-capi.yaml    kustomize build deploy/capi
 #
 # with every image of this project rewritten to the digest this release
 # published. The kustomizations under deploy/ name the images by tag
 # (ghcr.io/phoban01/flintlock-runner/flr:dev); this script never edits them.
-# It builds each one through a throwaway overlay whose only content is
+# It builds deploy/ through a throwaway overlay whose only content is
 # `kustomize edit set image`, then runs check-manifests.sh over the result,
 # so an asset with a tag reference in it is never written.
 #
@@ -18,16 +17,18 @@
 # to those two images in the copy, so that the configuration's ConfigMap
 # is generated with them.
 #
-# usage: render-manifests.sh --flr REF@sha256:... --host REF@sha256:...
+# The Hosts boot battery-operator's Host Image, and battery-operator's
+# Cluster API templates make them, so this project publishes neither.
+#
+# usage: render-manifests.sh --flr REF@sha256:...
 #                            [--images FILE] [--deploy DIR] [--out DIR]
 #
-#   --flr, --host  the published flr image and Host Image, by digest
+#   --flr          the published flr image, by digest
 #   --images       the release's images.txt: one line per pushed tag, the
 #                  tag and then the same image by digest. The guest-kernel
 #                  and guest-rootfs digests are taken from it
-#   --deploy       the kustomization root, default deploy (its capi/
-#                  subdirectory is the Cluster API root)
-#   --out          where the two files go, default dist
+#   --deploy       the kustomization root, default deploy
+#   --out          where the file goes, default dist
 #
 # KUSTOMIZE names the kustomize binary (default kustomize).
 set -euo pipefail
@@ -37,7 +38,6 @@ kustomize=${KUSTOMIZE:-kustomize}
 deploy=deploy
 out=dist
 flr=
-host=
 images=
 
 usage() { sed -n '2,/^set -euo/p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//; /^set -euo/d' >&2; exit 2; }
@@ -45,7 +45,6 @@ usage() { sed -n '2,/^set -euo/p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//; /^s
 while [ $# -gt 0 ]; do
 	case $1 in
 	--flr) flr=${2:?}; shift 2 ;;
-	--host) host=${2:?}; shift 2 ;;
 	--images) images=${2:?}; shift 2 ;;
 	--deploy) deploy=${2:?}; shift 2 ;;
 	--out) out=${2:?}; shift 2 ;;
@@ -56,31 +55,23 @@ done
 
 # A reference by digest, never by tag: registry/repository@sha256:<64 hex>.
 by_digest='^[a-z0-9.:-]+(/[a-z0-9._-]+)+@sha256:[0-9a-f]{64}$'
-for pair in "flr=$flr" "host=$host"; do
-	ref=${pair#*=}
-	if [ -z "$ref" ]; then
-		echo "render-manifests: --${pair%%=*} is required" >&2
-		exit 2
-	fi
-	if ! [[ $ref =~ $by_digest ]]; then
-		echo "render-manifests: --${pair%%=*} $ref is not a reference by digest (REPO@sha256:<64 hex>)" >&2
-		exit 2
-	fi
-done
+if [ -z "$flr" ]; then
+	echo "render-manifests: --flr is required" >&2
+	exit 2
+fi
+if ! [[ $flr =~ $by_digest ]]; then
+	echo "render-manifests: --flr $flr is not a reference by digest (REPO@sha256:<64 hex>)" >&2
+	exit 2
+fi
 
 # The names the images carry in deploy/, which are the published
 # repositories; kustomize matches on the name and replaces the tag with the
 # digest. Every image of this project is listed here.
 prefix=ghcr.io/phoban01/flintlock-runner
 flr_name=$prefix/flr
-host_name=$prefix/host
 guest_names=("$prefix/guest-kernel" "$prefix/guest-rootfs")
 if [ "${flr%@*}" != "$flr_name" ]; then
 	echo "render-manifests: --flr must be in $flr_name, not ${flr%@*}" >&2
-	exit 2
-fi
-if [ "${host%@*}" != "$host_name" ]; then
-	echo "render-manifests: --host must be in $host_name, not ${host%@*}" >&2
 	exit 2
 fi
 
@@ -109,11 +100,9 @@ work=$(mktemp -d)
 trap 'rm -rf "$work"' EXIT
 
 #= docs/requirements/12-cluster-fleet.md#cluster-release
-#/ The Release SHALL publish the Fleet Manifests as two release
-#/ assets, one for the workload cluster and one for the Cluster API objects
-#/ of the management cluster, in which every container image of this project
-#/ is referenced by
-#/ digest.
+#/ The Release SHALL publish the Fleet Manifests as one release asset
+#/ for the workload cluster, in which every container image of this project
+#/ is referenced by digest.
 #
 # The copy of the kustomization root that is rendered: deploy/ itself, with
 # every reference to a Guest Image, by any tag or digest, replaced by the
@@ -144,11 +133,10 @@ render() { # render <kustomization root> <asset name> [check-manifests options]
 		cd "$overlay"
 		"$kustomize" create --resources "$(realpath --relative-to="$overlay" "$root")"
 		"$kustomize" edit set image \
-			"$flr_name=$flr" \
-			"$host_name=$host"
+			"$flr_name=$flr"
 	)
 	"$kustomize" build "$overlay" >"$work/$asset"
-	"$here/check-manifests.sh" --flr "$flr" --host "$host" "$@" "$work/$asset"
+	"$here/check-manifests.sh" --flr "$flr" "$@" "$work/$asset"
 	mv "$work/$asset" "$out/$asset"
 	echo "render-manifests: wrote $out/$asset"
 }
@@ -158,7 +146,5 @@ for ref in "${guest_refs[@]}"; do
 	guest_checks+=(--image "$ref")
 done
 
-# The fleet runs flr, so its asset has to reference the flr image; the
-# Cluster API objects reference the Host Image only where they name one.
+# The fleet runs flr, so its asset has to reference the flr image.
 render "$src" flintlock-runner-fleet.yaml --require-flr "${guest_checks[@]}"
-render "$src/capi" flintlock-runner-capi.yaml "${guest_checks[@]}"

@@ -36,7 +36,7 @@ spec:
             - name: rendered
               mountPath: /etc/flr/rendered
               readOnly: true
-            # KF-072: its own directory of the cache.
+            # KF-197: its own directory of the cache.
             - name: cache
               mountPath: /var/lib/flintlock-runner/cache/http
               subPath: http

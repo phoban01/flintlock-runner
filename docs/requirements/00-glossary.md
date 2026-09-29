@@ -26,10 +26,23 @@ directory. It contains no requirements.
   Manager and Host Services, and generate the Runner configuration from the
   resulting inventory.
 
-- **Host Image** — the bootc container image, and the AMI made from it, from
-  which a Host of a cluster fleet boots. It carries `flintlockd`, containerd,
-  the hypervisors, the kubelet and the systemd units that prepare the thin
-  pool, the guest bridge and the firewall.
+- **Host Image** — battery-operator's reference bootc Host Image
+  (`hostimage/` there, its ADR 0007), and the AMI made from it, from which
+  a Host of a cluster fleet boots. It carries `flintlockd`, containerd, the
+  hypervisors, the kubelet and the systemd units that prepare the thin
+  pool, the guest bridge and the firewall. flintlock-runner has no image of
+  its own; `11-host-image.md` holds its withdrawn requirements.
+- **Host pool** — a set of Hosts of one instance type and one AMI, made by
+  one Cluster API MachineDeployment from battery-operator's Host Pool
+  Templates (`config/capi/` there, its `12-host-pool.md`). Not a Pool: a
+  Pool holds MicroVMs, and a Host pool holds the machines they run on.
+- **Host label** — `battery.liquidmetal-x.dev/host=true`, on the Node of
+  every Host of a cluster fleet. battery-operator's Host Image and Host
+  Pool Templates set it (its HI-074 and HP-020). The Exec Agent and the
+  Host Agent run on the Nodes that carry it, and the Runner on the others.
+- **Host taint** — `battery.liquidmetal-x.dev/host=true:NoSchedule`, with
+  which battery-operator's Host Pool Templates join every Host (its
+  HP-021), so that only pods that tolerate it run on a Host's own Node.
 - **Guest Image** — the kernel image and the root filesystem image, built
   from `guest/`, that a Profile names and every MicroVM of its Pool boots
   from. It carries flintlock's guest agent, bash, git, curl, the CA
@@ -39,7 +52,7 @@ directory. It contains no requirements.
   the `flr kubelet` process on each Host of a cluster fleet, which
   registered the Host's Virtual Node and ran each pod bound to it as one
   MicroVM. battery-operator's Exec Agent takes its place. The term stays
-  because the Host Image requirements still name its port.
+  because withdrawn requirements still name it.
 - **Virtual Node** — withdrawn with the Virtual Node design in #101. It was
   the Kubernetes Node object a Pod Provider registered for its Host.
 - **Kubernetes pool backend** — withdrawn with the Virtual Node design in
@@ -49,8 +62,9 @@ directory. It contains no requirements.
 - **Host Agent** — the DaemonSet pod on each Host of a cluster fleet, which
   contains the Host Services and publishes where they listen.
 - **Fleet Manifests** — the Kubernetes manifests in this repository that
-  deploy a cluster fleet: the Host pool's Cluster API objects, the Host
-  Agent, the Runner and their access rules.
+  deploy a cluster fleet to the workload cluster: the Host Agent, the
+  Runner and their access rules. The Hosts come from battery-operator's
+  Host Pool Templates instead.
 - **Exec Agent** — battery-operator's process on each Host of a cluster
   fleet that relays a Runner's exec request to `MicroVMExec` on the Host's
   `flintlockd`, after checking that the request carries a claim token of a

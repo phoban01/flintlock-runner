@@ -6,27 +6,31 @@ resources: battery schedules MicroVMs and owns the Pools, the Runner claims
 a MicroVM with a `MicroVMClaim`, and the Exec Agent on each Host relays
 every Stage to that Host's `flintlockd`. The resources and the Exec Agent
 come from [battery-operator v0.1.0](https://github.com/phoban01/battery-operator/releases/tag/v0.1.0);
-see [The Exec Agent](#the-exec-agent). Two kustomize roots here:
+see [The Exec Agent](#the-exec-agent).
+
+The Hosts come from battery-operator too. They boot its
+[reference Host Image](https://github.com/phoban01/battery-operator/tree/main/hostimage),
+and its [Cluster API templates](https://github.com/phoban01/battery-operator/tree/main/config/capi)
+make them (its ADR 0007). This repository has no Host Image and no Cluster
+API objects of its own. See [Host pools](#host-pools) for what a pool of
+this fleet sets.
+
+One kustomize root here:
 
 | Root | Applied to | What |
 |------|------------|------|
 | `deploy/` | the workload cluster | namespace `flintlock-system`, the Host Agent with the Host Services, and the Runner on the claim backend with its Holder and permissions (`deploy/runner/`) |
-| `deploy/capi/` | the management cluster | one MachineDeployment, KubeadmConfigTemplate, AWSMachineTemplate and MachineHealthCheck per Host pool |
 
 ```sh
-make manifests                 # render deploy/ and deploy/capi
-make manifests-check           # render deploy/, deploy/capi and deploy/runner, kubeconform, deploy/tests/checks.yaml
+make manifests                 # render deploy/
+make manifests-check           # render deploy/ and deploy/runner, kubeconform, deploy/tests/checks.yaml
 ```
 
-Nothing here names a real account, cluster or AMI. Neither root applies
+Nothing here names a real account or cluster. `deploy/` does not apply
 until the operator has replaced what says `REPLACE` and supplied what is
 listed below. A release's `flintlock-runner-fleet.yaml` has this project's
 images by digest already, the Guest Image in the Runner's Profiles
 included (`docs/RELEASING.md`).
-
-The fleet's own Hosts reach battery once each pool's `host.conf` sets
-`FLINTLOCKD_CLIENT_CIDRS` to the Operator's pod network. See
-[Known gaps](#known-gaps).
 
 ## Order of application
 
@@ -54,16 +58,15 @@ the one before it made.
 4. **The GitLab runner token**, as the Secret
    `flintlock-runner-gitlab-token` in `flintlock-system`
    ([The Runner](#the-runner)). The Runner's pod does not start without it.
-5. **`deploy/capi/`**, or a release's `flintlock-runner-capi.yaml`, to the
-   management cluster, for the Hosts.
+5. **The Host pools**, from battery-operator's `config/capi`, to the
+   management cluster, with the settings of [Host pools](#host-pools).
 
 What each side provides:
 
 | From | What |
 |------|------|
-| battery-operator | the `Pool` and `MicroVMClaim` resources, battery, the Exec Agent on every Host, the Inventory Controller that gives battery its Hosts, and the serving CA |
-| `deploy/` | the Host Agent and its Host Services, and their addresses on each Host's Node (KF-194); the Runner, its Holder and its permissions |
-| `deploy/capi/` | the Hosts, as Cluster API Machines of the Host Image |
+| battery-operator | the `Pool` and `MicroVMClaim` resources, battery, the Exec Agent on every Host, the Inventory Controller that gives battery its Hosts, the serving CA, the Host Image and the Cluster API templates of the Host pools |
+| `deploy/` | the Host Agent and its Host Services, and their addresses on each Host's Node (KF-194); the Runner, its Holder and its permissions; the settings every Host pool adds for the Host Services (`host-agent/config/host-pool.conf`, KF-198) |
 
 ## Layout
 
@@ -73,13 +76,12 @@ What each side provides:
 | `host-agent/` | the DaemonSet and ServiceAccount of the Host Agent, with its `host-services` container |
 | `host-agent/host-services-rbac.yaml`, `host-agent/host-services-admission-policy.yaml` | what the `host-services` container may do: annotate its own Host's Node with the Host Services. internal/hostservices' tests load these files unchanged |
 | `host-agent/config/` | `render.sh`, `prepare-cache.sh`, `prewarm.sh`, and `host-services.yaml.tmpl`, the configuration of `flr host-services` |
+| `host-agent/config/host-pool.conf` | the two lines every Host pool adds to its `host.conf` (KF-198) |
 | `host-agent/services/<service>/` | one kustomize Component per Host Service: containers, configuration templates, settings |
 | `runner/` | the Runner's Deployment, ServiceAccount and configuration file `config.yaml` |
 | `runner/rbac.yaml` | what the Runner may do (KF-196). cmd/flr's end-to-end test of the claim backend applies it unchanged |
 | `runner/holder.yaml` | the Holder, the ServiceAccount every claim names; bound to nothing |
 | `runner/job-timeout.yaml` | the one place the job timeout is set (KF-081) |
-| `capi/host-pool/` | the objects of one Host pool, with placeholders |
-| `capi/pools/<pool>/host-pool.yaml` | the settings of one Host pool |
 | `tests/` | the checks of `make manifests-check` and the overlays they build |
 
 ## What the operator supplies
@@ -116,13 +118,12 @@ In the workload cluster:
 
 In the manifests:
 
-- `capi/pools/default/host-pool.yaml`: the cluster, the AMI, the instance
-  type, and in `host.conf` the node, pod and Service CIDRs and the
-  Operator's pod CIDR.
-- `capi/kustomization.yaml`: the namespace of the workload cluster's Cluster.
 - `runner/config.yaml`: the GitLab URL and the Profiles. Applied from
   source, the Profiles' Guest Image says `:REPLACE`; pin it by the digests
   of a release's `images.txt`. A release's fleet asset has them already.
+
+In the management cluster: the Host pools, from battery-operator's
+templates, with the settings of [Host pools](#host-pools).
 
 ## The Exec Agent
 
@@ -135,8 +136,9 @@ battery-operator's documentation says what they need: cert-manager for the
 Operator's own certificates, and the Host prerequisites of its Exec Agent.
 
 Its Exec Agent runs on every Node labelled
-`battery.liquidmetal-x.dev/host=true`. The Host Image registers each Host's
-Node with that label as well as the Host label of this project (HI-074).
+`battery.liquidmetal-x.dev/host=true`, the Host label. battery-operator's
+Host Image and its Cluster API templates both put that label on each
+Host's Node (its HI-074, HP-020). The Host Agent selects the same label.
 
 `deploy/` and battery-operator's Manifests can be applied to the same
 cluster. Nothing of one clashes with the other:
@@ -189,9 +191,10 @@ admission policy take the Pod Provider's place on each Host.
 
 `deploy/runner` holds the Runner, and `deploy/kustomization.yaml` lists
 it. The Runner runs as a Deployment of one pod in `flintlock-system`, off
-the Hosts (KF-082). It reads its configuration from a ConfigMap and the
-GitLab runner token from the Secret `flintlock-runner-gitlab-token`, key
-`token` (KF-080), which the operator creates:
+the Hosts (KF-082): it needs a Node without the Host label, and it does
+not tolerate the Host taint. It reads its configuration from a ConfigMap
+and the GitLab runner token from the Secret `flintlock-runner-gitlab-token`,
+key `token` (KF-080), which the operator creates:
 
 ```sh
 kubectl -n flintlock-system create secret generic \
@@ -219,6 +222,10 @@ with the pod's own identity:
 - **Host Services.** The Executor reads them from the annotations of the
   Node of the claim's Host (KF-189).
 
+The Runner does not select Hosts by a label of its own. battery places each
+MicroVM, and the claim names its Host. So no Host needs the old label
+`gitlab-runner.flintlock.dev/host`, and nothing here sets or reads it.
+
 `runner/rbac.yaml` grants exactly that and no more (KF-196): in
 `flintlock-system`, `microvmclaims` (create, get, list, watch, patch,
 delete), `pools` (create, get, list, watch, update, patch), `secrets`
@@ -231,12 +238,16 @@ on Nodes; and `get` on the ConfigMap `flintlockd-ca` in
 ## Requirements on the workload cluster
 
 - **Kubernetes 1.32 or later**, for the node name in bound ServiceAccount
-  tokens that the admission policies rely on, and the version of the Host
-  Image's kubelet (`image/versions.env`) for the Hosts.
+  tokens that the admission policies rely on. The Hosts run the kubelet of
+  battery-operator's Host Image (`KUBERNETES_VERSION` in its
+  `hostimage/versions.env`).
 - **A route from the Runner to port 10270 of every Host's internal
   address**, where the Exec Agents listen.
 - **An AWS cloud controller manager**, as for any CAPA cluster: Hosts join
   with `cloud-provider: external`.
+- **CNI and kube-proxy DaemonSets that tolerate the Host taint**,
+  `battery.liquidmetal-x.dev/host=true:NoSchedule`. Most tolerate every
+  taint.
 
 ## Host Services
 
@@ -248,11 +259,21 @@ well.
 
 Every Host Service binds only the guest bridge gateway address (KF-071).
 That address is the first address of `GUEST_SUBNET` in the Host
-configuration file, which differs per pool, so it is not in the manifests.
-The Host Agent's `render` init container reads it from `/run/flr/host.env`,
-which the Host Image's `flr-host-config` unit writes at every boot, and
+configuration file, which can differ per pool, so it is not in the
+manifests. The Host Agent's `render` init container reads it as
+`BATTERY_GATEWAY` from `/run/battery/host.env`, which battery-operator's
+Host Image writes at every boot (its `battery-host-config` unit), and
 writes it into each service's configuration. A Host without that file does
 not start the Host Agent.
+
+The same container reads `BATTERY_GATEWAY_SERVICE_PORTS` and
+`BATTERY_GATEWAY_SERVICE_UIDS` from that file. If the Host leaves out a
+port or a user id of `host-agent/config/host-pool.conf`, it fails, and no
+Host Service starts on that Host (KF-199). Its log says which value is
+missing. See [Host pools](#host-pools).
+
+The Host Agent does not read `/run/battery/not-ready.d`. battery-operator's
+Exec Agent reports those reasons on the Node.
 
 Settings per service, in `host-agent/services/<service>/`:
 
@@ -269,47 +290,125 @@ registry mirror is zot rather than distribution because one zot is a
 pull-through cache of every upstream, where a distribution registry proxies
 one.
 
-All storage is under `/var/lib/flintlock-runner/cache`, the Host Image's
-cache volume (KF-072). The `prepare-cache` init container creates one
-directory per service and gives it to that service's user id; each service
-mounts only its own.
+### The Host Service cache
+
+All Host Service storage is in the volume `cache` of the Host Agent's pod,
+mounted at `/var/lib/flintlock-runner/cache` (KF-197). It is an
+`emptyDir` on the Node's disk. The `prepare-cache` init container creates
+one directory per service in it and gives it to that service's user id;
+each service mounts only its own.
+
+The cache used to be a volume that the flintlock-runner Host Image made on
+the instance-store disk, mounted as a hostPath. battery-operator's Host
+Image makes no such volume, so the cache had to move into the manifests.
+There were two choices: a hostPath under `/var`, or an ephemeral volume.
+It is an `emptyDir` for these reasons:
+
+- **SELinux.** battery-operator's Host Image enforces SELinux, and runs
+  the Host Agent's containers as `container_t` (its HI-066). That domain
+  may write only files labelled for containers. The kubelet labels an
+  `emptyDir` for the pod that mounts it. It labels no hostPath, and
+  battery-operator's image labels no directory for this project, so a
+  hostPath under `/var` would be `var_lib_t` and every write to it would be
+  refused.
+- **Nothing left on the Host.** An `emptyDir` goes with its pod. A
+  hostPath would stay on the Host after the Host Agent is removed.
+- **No generic ephemeral volume.** A generic ephemeral volume needs a
+  StorageClass with a local provisioner on every Host, which the fleet does
+  not have.
+
+What it costs:
+
+- **The cache starts cold with each new pod.** It survives a restart of a
+  container, but not a rollout of the DaemonSet or an eviction, and so not
+  the replacement of a Host.
+- **It is on the root disk, not the instance-store disk.** The thin pool
+  takes the whole instance-store disk. A pool sets the size of each Host's
+  root volume with `rootVolumeGiB` in battery-operator's templates, 100 GiB
+  in the example. The cache shares that volume with the operating system and the
+  kubelet, and counts against the Node's ephemeral storage, so a full disk
+  makes the kubelet evict pods. buildkitd keeps its
+  use under its garbage collection limit (`buildkitd.toml.tmpl`), and the
+  HTTP cache under the size of each upstream. zot and Athens have no size
+  limit.
+
+The pod's SELinux level is fixed, `s0:c311,c827`. The kubelet labels the
+volume with that level. buildkitd names its own SELinux type (KF-139), so
+it repeats the level; without it, containerd would give it random
+categories, and it could not use the volume.
 
 ## Host pools
 
-`capi/pools/default` is one pool. To add one, copy the directory, give its
-`host-pool.yaml` a new ConfigMap name and a new `name`, and list it in
-`capi/kustomization.yaml`. The AMI is the one `make image-ami` published
-from the Host Image (`ghcr.io/phoban01/flintlock-runner/host`), and the
-pool's `kubernetesVersion` has to be the one that image carries.
+The Host pools are battery-operator's Cluster API templates, in its
+[`config/capi/`](https://github.com/phoban01/battery-operator/tree/main/config/capi),
+specified in its
+[`docs/requirements/12-host-pool.md`](https://github.com/phoban01/battery-operator/blob/main/docs/requirements/12-host-pool.md)
+(HP-001 to HP-031). Its
+[README](https://github.com/phoban01/battery-operator/blob/main/config/capi/README.md)
+says how to fill in a pool, and how to make the AMI from the Host Image
+(its HI-009). This section says what a pool of this fleet sets on top of
+that, in the pool's `host-pool.yaml`.
 
-A Host has no instance profile (KF-112). CAPA therefore passes the bootstrap
-data in the instance's user data instead of Secrets Manager
-(`insecureSkipSecretsManager`); it holds a short-lived join token and the
-Host configuration file, which holds no secret.
+In `host.conf`:
+
+```sh
+# The Host Services: copy both lines from deploy/host-agent/config/host-pool.conf.
+GATEWAY_SERVICE_PORTS=1234,3000,5000,3128
+GATEWAY_SERVICE_UIDS=101,1000,10001,10002,100000-165535
+# The cluster: every pool sets these (battery-operator HP-011).
+FLINTLOCKD_CLIENT_CIDRS=<the Operator's pod network>
+PROTECTED_CIDRS=<the node, pod and Service ranges>
+```
+
+- **`GATEWAY_SERVICE_PORTS`**: the ports the Host Services serve on the
+  guest bridge gateway: buildkitd 1234, the Go module proxy 3000, the
+  registry mirror 5000 and the HTTP cache 3128. The Host Image opens them
+  to guests and to nothing else (battery-operator HI-078, HI-079).
+- **`GATEWAY_SERVICE_UIDS`**: the user ids the Host Services run as:
+  nginx 101, buildkitd 1000, Athens 10001 and zot 10002, and
+  100000-165535, the subordinate ids of the buildkit image's user, which
+  build steps run as. The Host Image drops their traffic to the instance
+  metadata service, to the Host's control ports and to `flintlockd`'s port
+  (battery-operator HI-080).
+- **`FLINTLOCKD_CLIENT_CIDRS`**: the Operator's pod network, where battery
+  runs. Only these addresses reach `flintlockd` from off the Host
+  (battery-operator HI-069). On a CNI that masquerades pod traffic between
+  Nodes, add the node range. While it is empty, the default, battery cannot
+  reach a Host and no Stage reaches a MicroVM there.
+- **`PROTECTED_CIDRS`**: the cluster's node, pod and Service ranges, so
+  that no MicroVM reaches them (battery-operator HI-035, HI-076).
+
+`make manifests-check` checks that `host-pool.conf` lists exactly the
+ports and user ids of the manifests (KF-198). A change to a Host Service's
+`runAsUser` or port changes that file too, and then every pool's
+`host.conf`. A pool that does not set them runs no Host Service (KF-199).
 
 If a pool's `host.conf` sets `HOST_CONTROL_PORTS`, keep 10270, the Exec
-Agent's port, in the list.
+Agent's port, in the list. None of the gateway service ports may be in it.
+
+In `additionalSecurityGroups`: at least one security group that admits TCP
+port 9090, `flintlockd`'s port, from the ranges of
+`FLINTLOCKD_CLIENT_CIDRS`, and from the node range on a CNI that
+masquerades pod traffic between Nodes. CAPA's default node security group
+does not open that port (battery-operator HP-006).
+
+The Host label and the Host taint need nothing from the pool. The
+templates join every Host with the label
+`battery.liquidmetal-x.dev/host=true` and the taint
+`battery.liquidmetal-x.dev/host=true:NoSchedule` (battery-operator HP-020,
+HP-021). The Host Agent selects that label and tolerates that taint, and
+the Runner avoids both.
+
+A Host has no instance profile (battery-operator HP-030), and the Fleet
+Manifests grant no AWS permission (KF-112).
 
 ## Known gaps
 
-- **The Host Image and battery-operator's Exec Agent.** The Host Image
-  serves `flintlockd` on the Host's address, port 9090, with mutual TLS,
-  from the certificates the Exec Agent writes to `/etc/battery/flintlockd`.
-  It labels the Node `battery.liquidmetal-x.dev/host=true` (HI-067 to
-  HI-074). battery reaches `flintlockd` only from the addresses in the
-  pool's `FLINTLOCKD_CLIENT_CIDRS`. Set it to the Operator's pod network,
-  and add the node range on a CNI that masquerades pod traffic between
-  Nodes. While it is empty, the default, battery cannot reach a Host and no
-  Stage reaches a MicroVM there. None of this has run on a booted Host.
-- **SELinux.** The Host Image enforces SELinux and labels the host paths
-  the Host Agent mounts for `container_t` (HI-065): `host.env` read-only,
-  the cache directory writable, both at `s0`. The
-  Host Agent's pod keeps `container_t` with a fixed MCS level,
-  `s0:c311,c827`, so that its caches survive a restart of the pod; see
-  "SELinux" in `image/README.md`. The Host Image's containerd labels every
-  unprivileged pod (HI-066), so the Host Agent's containers, and every other
-  unprivileged pod on a Host, run confined as `container_t`; privileged
-  containers stay unconfined. None of this has run on a booted Host.
+- **Nothing has run on a booted Host.** The Host Agent has not run on
+  battery-operator's Host Image yet. In particular, whether the kubelet
+  labels the cache volume as described, and whether the Host Services run
+  without an SELinux denial, only an enforcing Host can show: run one and
+  read `ausearch -m avc -ts boot`.
 - **buildkitd in `container_engine_t`.** Every build step of rootless
   buildkitd mounts a fresh `devpts`, which `container_t` may not, so the
   buildkitd container alone names the base policy's `container_engine_t`
@@ -326,21 +425,12 @@ Agent's port, in the list.
   build steps, which buildkit starts with no label of their own (no
   `--oci-worker-selinux`), stay in `container_engine_t` at that same level.
   It is not a `svirt_sandbox_domain`, so what that attribute grants
-  `container_t` it does not get. Whether a build then runs without a denial
-  only an enforcing Host can show: run one and read
-  `ausearch -m avc -ts boot`.
-- **Builds and the metadata service.** Rootless buildkitd runs in the
-  Host's network namespace, as push provisioning runs it. The Host Image
-  drops traffic from the Host Services' user ids, and from buildkit's
-  subordinate ids that build steps run as, to the metadata service and the
-  Host's control ports (HI-064); the ids are `HOST_SERVICE_UIDS` of the Host
-  configuration file, and `make manifests-check` checks that they are the
-  ones these manifests run the Host Services as. A pool whose `host.conf`
-  sets `HOST_SERVICE_UIDS`, or a change to a Host Service's `runAsUser`,
-  has to change the other too.
+  `container_t` it does not get.
+- **A cold cache after each rollout.** See
+  [The Host Service cache](#the-host-service-cache).
 - **One DaemonSet for every pool.** The Host Service settings are the same
   on every Host.
 - **A Host that cannot run MicroVMs stays in its pool.** battery-operator's
   Exec Agent reports a Host not ready (its EA-030 to EA-034) in an
   annotation of its Node, not as a Node condition, so the
-  MachineHealthCheck (KF-005) does not see it.
+  MachineHealthCheck of the pool (battery-operator HP-005) does not see it.

@@ -8,10 +8,12 @@
 # overlayfs snapshotter and a garbage collection limit (FL-102), the
 # registry mirror first (FL-103), storage under the cache directory
 # (FL-107). The push-provisioned firewall for the buildkit user (SE-030,
-# SE-031) is the Host Image's HI-064: it drops traffic from this
-# container's user id, and from the image's subordinate ids that build
-# steps run as, to the metadata service and the Host's control ports.
-# Change runAsUser only together with HOST_SERVICE_UIDS of the Host Image.
+# SE-031) is now battery-operator's Host Image (its HI-080): it drops
+# traffic from the gateway service user ids of the Host configuration file
+# to the metadata service and the Host's control ports. Those ids are this
+# container's user id, and the image's subordinate ids that build steps run
+# as, in ../../config/host-pool.conf, which every Host pool sets (KF-198).
+# Change runAsUser only together with that file.
 apiVersion: apps/v1
 kind: DaemonSet
 metadata:
@@ -68,8 +70,8 @@ spec:
             # held to MCS. The level repeats the pod's (daemonset.yaml): the
             # kubelet takes a container's seLinuxOptions whole, not merged
             # with the pod's, and containerd gives a container that names a
-            # type but no level fresh random categories, which would lose the
-            # cache to the next pod.
+            # type but no level fresh random categories, and with them it
+            # could not use the cache volume, which carries the pod's level.
             seLinuxOptions:
               type: container_engine_t
               level: "s0:c311,c827"
@@ -90,7 +92,7 @@ spec:
             - name: rendered
               mountPath: /etc/flr/rendered
               readOnly: true
-            # KF-072: its own directory of the cache, nothing else of it.
+            # KF-197: its own directory of the cache, nothing else of it.
             - name: cache
               mountPath: /var/lib/flintlock-runner/cache/buildkit
               subPath: buildkit

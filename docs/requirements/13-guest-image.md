@@ -82,7 +82,8 @@ their arguments.
 flintlock gives a MicroVM `eth0` for Firecracker's metadata service, and the
 Pool's interfaces after it, from `eth1`. The Host answers DHCP on the bridge
 of those interfaces: battery-operator's trial Host with dnsmasq on `flbr0`
-(battery-operator#162), and the Host Image later (#73). A guest with no
+(battery-operator#162), and battery-operator's Host Image with its
+`battery-dnsmasq` unit (its HI-031). A guest with no
 answer still boots, and the Executor still reaches it through the guest
 agent over vsock; only a Job that needs the network fails. systemd derives
 an interface's MAC address from the machine ID, so with one machine ID for

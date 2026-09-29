@@ -1,8 +1,8 @@
 # Cluster fleet {#cluster-fleet}
 
 This document specifies how a fleet is run from a Kubernetes cluster. Hosts
-are nodes of an existing workload cluster, created by a Cluster API
-MachineDeployment from the Host Image (`11-host-image.md`). battery is the
+are nodes of an existing workload cluster, made by battery-operator's
+Cluster API templates from its Host Image (see below). battery is the
 scheduler and the authority over Pools. It runs in front of the Hosts'
 `flintlockd`s, behind the `Pool` and `MicroVMClaim` resources of
 battery-operator (`#battery-claims`). The Runner claims a MicroVM with a
@@ -31,32 +31,54 @@ Test doubles keep the numbers of that design, withdrawn. Each withdrawn
 requirement names what replaced it. KF-063 and KF-126 are reworded for the
 claim design, which still needs them.
 
+**The Host Image and the Host pools are battery-operator's.** On
+2026-09-29 (#107) the Host Image and the Cluster API templates of the Host
+pools moved to battery-operator (its ADR 0007). flintlock-runner removed
+`image/` and `deploy/capi`, and withdrew `11-host-image.md` and KF-001 to
+KF-005. The Hosts now boot battery-operator's reference Host Image, and
+battery-operator's Host Pool Templates (its `config/capi/`, specified in
+its `12-host-pool.md`) make them. Each withdrawn requirement names the
+battery-operator requirement that replaces it; "battery-operator HP-0nn"
+and "battery-operator HI-0nn" are the requirements of those numbers there.
+What stays here is what a Host pool sets for this project's Host
+Services (KF-198), and the Host Service cache, which is now the Host
+Agent's own (KF-197).
+
 ## Host pool {#host-pool}
 
-- **KF-001** The Fleet Manifests SHALL define each Host pool as one Cluster
-  API MachineDeployment with a single instance type and an AMI given by
-  explicit id.
-- **KF-002** The Fleet Manifests SHALL join every Host with the taint
-  `gitlab-runner.flintlock.dev/host=true:NoSchedule`, so that only pods that
-  tolerate it run on a Host's own Node.
-- **KF-003** The Fleet Manifests SHALL write the Host configuration file of
-  HI-050 through the bootstrap configuration of the MachineDeployment.
-- **KF-004** The Fleet Manifests SHALL set no node drain timeout shorter than
-  the configured drain timeout on a Host pool's Machines.
-- **KF-005** The Fleet Manifests SHALL define a MachineHealthCheck for each
-  Host pool that replaces a Machine whose Node stays not ready beyond the
-  configured interval.
+- **KF-001** (withdrawn) Replaced by battery-operator HP-001: the Host Pool
+  Templates define each Host pool as one MachineDeployment with one
+  instance type, an AMI by id and a subnet by id.
+- **KF-002** (withdrawn) Replaced by battery-operator HP-021: every Host
+  joins with the taint `battery.liquidmetal-x.dev/host=true:NoSchedule`,
+  which is now the Host taint.
+- **KF-003** (withdrawn) Replaced by battery-operator HP-010 and HP-011:
+  the Host Pool Templates write `/etc/battery/host.conf` through the
+  KubeadmConfigTemplate's files.
+- **KF-004** (withdrawn) Replaced by battery-operator HP-004.
+- **KF-005** (withdrawn) Replaced by battery-operator HP-005.
+- **KF-198** The Fleet Manifests SHALL provide the gateway service ports and
+  gateway service user ids that a Host pool sets for the Host Services,
+  listing every port a Host Service serves on and every user id a Host
+  Service runs as.
 
-A known gap: the MachineHealthCheck of KF-005 watches the Host's own Node,
-and a Host that cannot run MicroVMs, for want of KVM (HI-011) or of a thin
-pool device (HI-022), reports that through battery-operator's Exec Agent
-instead (battery-operator EA-031, EA-033). battery-operator's Inventory
-Controller then takes the Host out of battery's Hosts, but the Machine stays
-in the pool until an operator replaces it.
+The Host Services serve guests on the bridge gateway, and they run in the
+Host's own network namespace. battery-operator's Host Image opens only the
+gateway service ports of the Host configuration file to guests (its
+HI-078), and drops the traffic of the gateway service user ids to the
+metadata service and the Host's control ports (its HI-080). Both are empty
+by default. So every Host pool of a cluster fleet sets them, in its
+`host.conf`, to the values that `deploy/host-agent/config/host-pool.conf`
+gives. That file is KF-198's: its ports are the Host Services' ports, and
+its user ids are the Host Services' user ids and rootless `buildkitd`'s
+subordinate ids, which the `RUN` steps of a Job's image build run as.
+This carries SE-030 and SE-031 over to the Host Services: those steps
+reach the metadata service and the Host's control ports no more than the
+Job's MicroVM does.
 
-One instance type per pool keeps capacity arithmetic trivial today and is
-what a snapshot compatibility class will need later. The number of Hosts is
-the replica count of the MachineDeployment.
+A Host pool also sets `FLINTLOCKD_CLIENT_CIDRS` and a security group for
+`flintlockd`'s port (battery-operator HP-006, HP-011), as any Host pool of
+battery-operator does. `deploy/README.md` says what a pool sets.
 
 ## Virtual Node {#virtual-node}
 
@@ -87,7 +109,7 @@ the replica count of the MachineDeployment.
 - **KF-018** (withdrawn) battery-operator's Exec Agent takes the Pod
   Provider's place as the client of `flintlockd` on a Host, and reaches it
   over mutual TLS on the Host's address (battery-operator EA-001), not
-  through the local endpoint of HI-042. It was implemented by
+  through the local endpoint of the withdrawn HI-042. It was implemented by
   `flr kubelet`, whose citation is removed.
 
 ## MicroVM pods {#microvm-pods}
@@ -221,9 +243,9 @@ address.
   Services of FL-100.
 - **KF-071** The Host Agent SHALL run in the Host's network namespace and
   SHALL bind every Host Service only to the guest bridge gateway address.
-- **KF-072** The Host Agent SHALL keep all Host Service storage in the Host
-  Service cache directory of HI-024, so that it outlives the pod and a
-  reboot of the Host.
+- **KF-072** (withdrawn) Replaced by KF-197: the Host Service cache is no
+  longer a directory of the Host Image, which battery-operator's Host Image
+  does not make, but a volume of the Host Agent's pod.
 - **KF-073** The Fleet Manifests SHALL supply the registry mirror's upstream
   credentials and the Go module proxy's private module credential from
   Kubernetes Secrets mounted only into the Host Agent.
@@ -238,6 +260,12 @@ address.
   `buildkit`, `go_proxy`, `registry_mirror` and `http_cache`, as the
   annotations `host-service.gitlab-runner.flintlock.dev/<name>` on its Host's
   Node.
+- **KF-197** The Host Agent SHALL keep all Host Service storage in one
+  `emptyDir` volume of its pod, on the Node's disk rather than in
+  memory.
+- **KF-199** If the Host's gateway service ports or gateway service user ids
+  leave out any that the Fleet Manifests provide, then the Host Agent
+  SHALL NOT start the Host Services.
 
 The Host Agent does not contain the Exec Agent. battery-operator's
 Manifests run it, as a DaemonSet of their own (`#exec-agent`). That Exec
@@ -250,6 +278,28 @@ identity change only these annotations, and only on its own Host's Node.
 Pre-pulling Profile images needs no requirement of its own: battery creates
 a Pool's warm MicroVMs on its Hosts before any claim, and `flintlockd`
 pulls their images then.
+
+KF-197 replaces the cache volume of the withdrawn Host Image. It is an
+`emptyDir` rather than a hostPath for two reasons. battery-operator's
+Host Image enforces SELinux and runs the Host Agent's containers in the
+ordinary container domain (its HI-066), which may write only files
+labelled for containers. The kubelet labels an `emptyDir` for the pod that
+mounts it, but it labels no hostPath, and battery-operator's image labels
+no directory for this project, so a hostPath cache would be refused on
+every enforcing Host. And an `emptyDir` leaves nothing behind on the Host
+when the Host Agent goes. The cost is a cold cache: the cache lives as
+long as the pod, through container restarts but not through a rollout of
+the DaemonSet or an eviction. It is on the Node's disk, in the kubelet's
+directory, so it counts against the Node's ephemeral storage rather than
+its memory. The thin pool takes the whole instance-store disk.
+
+KF-199 keeps a Host pool that does not set KF-198's values from running
+the Host Services open. Without the ports, guests could not reach them.
+Without the user ids, a `RUN` step of a Job's image build could reach the
+instance metadata service and the Host's control ports from the Host's own
+network namespace. The Host Agent's `render` init container compares the
+Host's settings in `/run/battery/host.env` with KF-198's, and fails, so
+that no container of the pod starts.
 
 ## Runner {#cluster-runner}
 
@@ -342,7 +392,7 @@ token with a TokenReview, which asks nothing of the Holder.
   `flintlockd` any more: battery-operator's Exec Agent does, from a
   DaemonSet of its own and over mutual TLS (battery-operator EA-001,
   EA-004). The Fleet Manifests still run no container as the user id that
-  HI-070 admits. It was never cited.
+  battery-operator HI-070 admits. It was never cited.
 - **KF-138** (withdrawn) Node Leases belong to the Virtual Nodes, which the
   cluster fleet no longer uses after the change to battery's claim resources
   of 2026-09-22; it was never implemented.
@@ -350,11 +400,11 @@ token with a TokenReview, which asks nothing of the Holder.
   Host Agent in the `container_engine_t` SELinux domain, and SHALL NOT name a
   domain for any other container.
 
-KF-139 is the one exception to the container domain HI-066 assigns.
-Rootless `buildkitd` runs every `RUN` step of a Job's image build as a
-container of its own, and each step mounts a fresh `devpts`, which the
-ordinary container domain may not do, so under enforcing SELinux every build
-step would be refused. `container_engine_t` is the domain the base policy
+KF-139 is the one exception to the container domain that battery-operator
+HI-066 assigns. Rootless `buildkitd` runs every `RUN` step of a Job's image
+build as a container of its own, and each step mounts a fresh `devpts`,
+which the ordinary container domain may not do, so under enforcing SELinux
+every build step would be refused. `container_engine_t` is the domain the base policy
 provides for exactly this, a container engine inside a container: it may
 create user namespaces and mount what a nested container needs, and it is
 still confined, with no access to the Host's files beyond those labelled for
@@ -368,11 +418,11 @@ Exec Agent does, from a DaemonSet of its own, over mutual TLS.
 
 Every process in the Host's network namespace, any pod with host networking
 included, can open a connection to the Host's own addresses. `flintlockd`
-admits any certificate from its client CA, so HI-070 admits one user id,
-the Exec Agent's, to its port from the Host, and the Fleet Manifests run no
-container of the Host Agent as that user id. This keeps out unprivileged
-host-network pods. A privileged pod can already do anything on the Host, so
-it is not the threat this addresses.
+admits any certificate from its client CA, so battery-operator HI-070
+admits one user id, the Exec Agent's, to its port from the Host, and the
+Fleet Manifests run no container of the Host Agent as that user id. This
+keeps out unprivileged host-network pods. A privileged pod can already do
+anything on the Host, so it is not the threat this addresses.
 
 ## Test doubles {#cluster-test-doubles}
 
@@ -598,34 +648,31 @@ Exec Agent for each claim, not one for each Host.
 - **KF-141** The container image of `flr` SHALL run as a non-root user and
   SHALL contain nothing but the `flr` binary, certificate authority
   certificates and time zone data.
-- **KF-142** The Release SHALL publish the Host Image to the project's
-  container registry, tagged with the release version and with the release
-  version joined to the Kubernetes version it carries.
-- **KF-143** The Release SHALL publish the Fleet Manifests as two release
-  assets, one for the workload cluster and one for the Cluster API objects
-  of the management cluster, in which every container image of this project
-  is referenced by digest.
+- **KF-142** (withdrawn) The Release no longer publishes a Host Image.
+  battery-operator builds, checks and publishes its reference Host Image
+  (its ADR 0007, decision 5; the image's own requirements are its HI-001 to
+  HI-008). battery-operator has no requirement for the publishing itself.
+- **KF-143** The Release SHALL publish the Fleet Manifests as one release
+  asset for the workload cluster, in which every container image of this
+  project is referenced by digest.
 - **KF-144** The Fleet Manifests SHALL reference every third-party container
   image they use, including those of the Host Services, by digest.
 - **KF-145** The Release SHALL NOT publish a `latest` tag or any other tag
   that moves.
 
-The Host Image carries the Kubernetes version in a tag such as
-`1.1.0-k8s-v1.35.8` rather than a bare `v1.35.8`: the bare tag would point at
-a different image with every release, which KF-145 forbids, while the joined
-one names exactly one build. The Cluster API objects are a separate asset
-because they are applied to the management cluster, and the rest to the
-workload cluster the Hosts join. The registry's packages have to be public,
-or readable by both clusters, for a fleet to pull them; that is set once on
-the registry and is not something a release can check.
+KF-143 had a second asset, for the Cluster API objects of the management
+cluster. Those objects are now battery-operator's Host Pool Templates, so
+the Release publishes the workload cluster's asset alone. The registry's
+packages have to be public, or readable by the cluster, for a fleet to pull
+them; that is set once on the registry and is not something a release can
+check.
 
 A release candidate publishes images too, so that a candidate can be tried
-on a cluster before its version is released. The Release does not publish
-an AMI: making one needs an AWS account, which the release workflow does not
-have, so an operator runs `make image-ami` against the published Host Image
-in their own account (HI-009). Every reference that a cluster fleet pulls is
-immutable, so a Host or a Runner started from a release's manifests runs
-exactly what that release tested.
+on a cluster before its version is released. Every reference that a
+cluster fleet pulls from this project is immutable, so a Runner or a Host
+Agent started from a release's manifests runs exactly what that release
+tested. The Hosts run the Host Image and AMI that the operator chose from
+battery-operator's releases (its HI-009).
 
 ## Relation to the other documents {#relation-to-other-documents}
 
@@ -640,20 +687,20 @@ This section is not normative.
 | Host client and Inventory, `05-hosts.md` | none; the Runner reaches only the Exec Agents, KF-063 |
 | `exec` Guest Transport in `02-executor.md` | `agent-exec`, KF-185 to KF-188 |
 | Discovery, FL-001 to FL-006, FL-116 | battery-operator's Inventory Controller |
-| KVM check, FL-117 | HI-011, battery-operator's Exec Agent |
+| KVM check, FL-117 | battery-operator HI-011 and its Exec Agent |
 | Remote execution, FL-010 to FL-014 | none; nothing is pushed to a Host |
-| Host provisioning, FL-020 to FL-027, FL-029, FL-030 | Host Image, `11-host-image.md` |
+| Host provisioning, FL-020 to FL-027, FL-029, FL-030 | battery-operator's Host Image (its `11-host-image.md`) |
 | Pre-pull, FL-028 | battery's warm MicroVMs pull their own images |
-| Host networking, FL-040 to FL-046 | HI-030 to HI-037 |
+| Host networking, FL-040 to FL-046 | battery-operator HI-030 to HI-037, HI-075 to HI-080 |
 | Pool Manager install, FL-051 to FL-055 | battery-operator's Manifests |
 | Inventory, FL-060 to FL-064 | none; battery-operator's Inventory Controller gives battery its Hosts |
 | Verification, FL-070 to FL-073, FL-109 | not yet specified for the claim design |
 | Drain, FL-080, FL-084 | battery-operator's Exec Agent and Inventory Controller |
-| Teardown, FL-081 to FL-083 | deleting the manifests and the MachineDeployment |
-| Launch template mode, FL-090 to FL-092 | the MachineDeployment, KF-001 to KF-005 |
-| Host services, FL-100 to FL-115 | KF-070 to KF-076, KF-194, HI-036 |
+| Teardown, FL-081 to FL-083 | deleting the manifests and the Host pool's MachineDeployment |
+| Launch template mode, FL-090 to FL-092 | battery-operator's Host Pool Templates, its HP-001 to HP-031 |
+| Host services, FL-100 to FL-115 | KF-070 to KF-076, KF-194, KF-197 to KF-199, battery-operator HI-078 to HI-080 |
 | Certificate authority and Host mutual TLS, SE-023, FL-024 | battery-operator's Host certificates, its EA-060 to EA-068 |
-| IAM policy, SE-040 to SE-042 | KF-112, KF-196 |
+| IAM policy, SE-040 to SE-042 | KF-112, KF-196, and battery-operator HP-030 for the Hosts |
 
 This document withdraws no requirement of another document. Once a cluster
 fleet has passed the hardware tier, the battery client, the Host client,

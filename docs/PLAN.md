@@ -112,7 +112,9 @@ the image, an API server test environment and the fake Host for the rest.
 
 Phase 5 replaces the Virtual Node design. `withdraw-vk` (#101) removed its
 packages and withdrew their requirements, so the Virtual Node rows below
-are history.
+are history. So are the `image` row, the Host Image parts of
+`provider-hardening` and `hardening-2`, and the Host pool part of
+`manifests`: `remove-image` (#107, Phase 5) moved them to battery-operator.
 
 | Key | Package | Owns | Depends on | Done when |
 |-----|---------|------|------------|-----------|
@@ -165,10 +167,17 @@ Holder, bound to that one claim. So the Runner builds on
 `pkg/claimclient` and `api/v1alpha1` at v0.1.0, and nothing waits for a
 field name any more.
 
-What carries over unchanged: the Host Image, the Cluster API host pool, the
-Host Services, packaging and release, and the Runner's Scheduler and
-Executor above `poolmgr.Client`. The Pod Provider's relay, TLS front,
-readiness checks and drain guard live on in battery-operator's Exec Agent.
+What carries over unchanged: the Host Services, packaging and release, and
+the Runner's Scheduler and Executor above `poolmgr.Client`. The Pod
+Provider's relay, TLS front, readiness checks and drain guard live on in
+battery-operator's Exec Agent.
+
+Settled 2026-09-29: the Host Image and the Cluster API host pools move to
+battery-operator (its ADR 0007). Hosts boot its reference Host Image, and
+its Host Pool Templates (`config/capi/` there) make them. flintlock-runner
+keeps only what is its own: the Host Service cache, now a volume of the
+Host Agent, and the gateway service ports and user ids that its Host pools
+set for the Host Services.
 
 | Key | Package | Owns | Depends on | Issue | Done when |
 |-----|---------|------|------------|-------|-----------|
@@ -181,8 +190,10 @@ readiness checks and drain guard live on in battery-operator's Exec Agent.
 | `guest-image` | the guest image build (`guest/`), with networking by DHCP in the guest, and the Profiles in `deploy/runner/config.yaml`; networking on the Host moved to [#73](https://github.com/phoban01/flintlock-runner/issues/73) | GI-001..004, GI-010, GI-020..024, GI-030..034, GI-040 | nothing | [#82](https://github.com/phoban01/flintlock-runner/issues/82) | a Job in the claim harness can clone a repository and reach the Host Services |
 | `claim-harness` | `internal/testing/harness` (reworks the held `wp/kube-harness`), a scripted run on a real Host | KF-192, KF-193 | `manifests-2`; `guest-image` for a Job that needs the network | [#79](https://github.com/phoban01/flintlock-runner/issues/79) | every TD-051 scenario green over the claim stack, and a Job from the fake GitLab runs end to end on battery-operator's real hosts trial |
 | `withdraw-vk` | done: removes `internal/kubelet`, `internal/poolmgr/kube`, `internal/hostcheck`, `kube-exec`, `cmd/flr kubelet`, the `kubernetes` pool backend and their manifests | withdraws KF-010..KF-032, KF-040..KF-052, KF-060..KF-062, KF-090..KF-094, KF-100..KF-102, KF-110, KF-111, KF-120..KF-125, KF-127, KF-128, KF-130..KF-134, KF-136, KF-137, less KF-018, which `exec-agent` withdraws; rewords KF-063 and KF-126 for the claim backend | `claim-harness` | [#101](https://github.com/phoban01/flintlock-runner/issues/101) | nothing on `main` cites a withdrawn requirement |
+| `remove-image` | removes `image/`, `deploy/capi`, their CI jobs, release steps and make targets; moves the Host Service cache to an `emptyDir` of the Host Agent; the Host Agent reads `/run/battery/host.env` | withdraws every HI requirement still in force, and KF-001..KF-005, KF-072, KF-142; adds KF-197..KF-199; rewords KF-143 | nothing | [#107](https://github.com/phoban01/flintlock-runner/issues/107) | nothing on `main` cites a withdrawn requirement, and `deploy/README.md` points at battery-operator's Host Image and Cluster API templates |
 
-`inventory` and `withdraw-vk` are done with this plan. `claim-interfaces` (#76) goes first,
+`inventory` and `withdraw-vk` are done with this plan, and `remove-image`
+(#107) with its pull request. `claim-interfaces` (#76) goes first,
 because it changes lead-owned interfaces. Then `exec-agent` with
 `agent-exec` (#74), and `claim-backend` (#77), in parallel. Then
 `manifests-2` (#78), and last `claim-harness` with the real Host run
@@ -192,7 +203,7 @@ no network does not. The held branches of Phase 4 are not merged as they stand:
 `pr/manifests` becomes `manifests-2`, `wp/kube-harness` becomes
 `claim-harness`, and `wp/kube-verify` is dropped until verification is
 specified for the claim design. `wp/hardening-2` (HI-064..HI-066, KF-139)
-carries over.
+carried over; its HI part is battery-operator's now.
 
 ## Running agents
 

@@ -22,16 +22,17 @@ the coverage report.
 | `08-observability.md` | `OB` | Logging, metrics, health, job-log annotations |
 | `09-security.md` | `SE` | Isolation, secrets, transport security |
 | `10-test-doubles.md` | `TD` | The fakes (Pool Manager, Host, GitLab, AWS) and the end-to-end harness that stand in for EC2, KVM and battery during development |
-| `11-host-image.md` | `HI` | The bootc Host Image a cluster fleet's Hosts boot from |
-| `12-cluster-fleet.md` | `KF` | Running the fleet from a Kubernetes cluster: Cluster API Host pools, battery-operator's `Pool` and `MicroVMClaim` resources, the Host Agent, the `agent-exec` Guest Transport |
+| `11-host-image.md` | `HI` | Withdrawn: the Host Image is battery-operator's. Each requirement names its replacement |
+| `12-cluster-fleet.md` | `KF` | Running the fleet from a Kubernetes cluster: what its Host pools set, battery-operator's `Pool` and `MicroVMClaim` resources, the Host Agent, the `agent-exec` Guest Transport |
 | `13-guest-image.md` | `GI` | The Guest Image: the kernel and root filesystem images a Profile names, and what a Job finds in the guest |
 
 ## EARS patterns
 
 Use exactly one of these shapes per requirement. The subject is always one of
 the defined system names from the glossary (the Runner, the Executor, the
-Scheduler, the Guest Transport, the Fleet Controller, the Host Image, the
-Host Agent, the Fleet Manifests, the Release, the Exec Agent, the Inventory Controller, the Guest Image).
+Scheduler, the Guest Transport, the Fleet Controller, the Host Agent, the
+Fleet Manifests, the Release, the Exec Agent, the Inventory Controller, the
+Guest Image).
 
 | Pattern | Shape |
 |---------|-------|
@@ -89,13 +90,14 @@ code they test and are matched by the same source glob):
 func TestReserveRefusesWhenFull(t *testing.T) {
 ```
 
-Files under `image/` and YAML under `deploy/` cite requirements the same way
-with `#=` and `#/` in place of `//=` and `//#`:
+YAML and `.conf` files under `deploy/`, the Guest Image's files under
+`guest/` and the release scripts cite requirements the same way with `#=`
+and `#/` in place of `//=` and `//#`:
 
-```dockerfile
-#= docs/requirements/11-host-image.md#image-build
-#/ The Host Image SHALL be built for the `x86_64` architecture.
-FROM quay.io/fedora/fedora-bootc@sha256:...
+```yaml
+#= docs/requirements/12-cluster-fleet.md#cluster-runner
+#/ The Fleet Manifests SHALL NOT schedule the Runner onto Hosts.
+affinity:
 ```
 
 Other annotation types: `type=exception` with a `reason=` line for a

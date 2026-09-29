@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
 # deploy/check.sh: `make manifests-check`. Renders the Fleet Manifests,
-# validates every object against the Kubernetes 1.35 schemas and the Cluster
-# API and CAPA CRD schemas with kubeconform, runs the Host Agent's render,
-# cache and pre-warm scripts against a sample Host, and then runs the
-# targeted checks of deploy/tests/checks.yaml, which carry the requirement
-# citations (duvet reads deploy/**/*.yaml, not this file).
+# validates every object against the Kubernetes 1.35 schemas with
+# kubeconform, runs the Host Agent's render, cache and pre-warm scripts
+# against a sample Host, and then runs the targeted checks of
+# deploy/tests/checks.yaml, which carry the requirement citations (duvet
+# reads deploy/**/*.yaml, not this file).
 #
 # Tools come from the environment, as the Makefile pins and installs them:
 #   KUSTOMIZE, KUBECONFORM, YQ  the binaries
@@ -12,7 +12,6 @@
 #                               Runner and Exec Agent configurations
 #   K8S_SCHEMA_VERSION          the Kubernetes schema version, v1.35.x
 #   K8S_SCHEMA_LOCATION         kubeconform's location for the built-in kinds
-#   CRD_SCHEMA_LOCATION         kubeconform's location for the CRDs
 #   CHECK_WORK                  a scratch directory (default: mktemp)
 #   CHECK_ONLY                  run only the checks whose name matches this
 set -euo pipefail
@@ -26,7 +25,6 @@ deploy=$root/deploy
 : "${FLR:=}"
 : "${K8S_SCHEMA_VERSION:=1.35.8}"
 : "${K8S_SCHEMA_LOCATION:=default}"
-: "${CRD_SCHEMA_LOCATION:=https://raw.githubusercontent.com/datreeio/CRDs-catalog/main/{{.Group}}/{{.ResourceKind}}_{{.ResourceAPIVersion}}.json}"
 
 if [ -n "${CHECK_WORK:-}" ]; then
   work=$CHECK_WORK
@@ -71,12 +69,10 @@ fi
 # so that the checks can tell its objects from the Host Agent's, and check
 # that deploy/ renders them unchanged.
 fleet=$work/fleet.yaml
-capi=$work/capi.yaml
 runner=$work/runner.yaml
 "$KUSTOMIZE" build "$deploy" >"$fleet"
-"$KUSTOMIZE" build "$deploy/capi" >"$capi"
 "$KUSTOMIZE" build "$deploy/runner" >"$runner"
-log "rendered deploy/ ($(grep -c '^kind:' "$fleet") objects), deploy/capi ($(grep -c '^kind:' "$capi") objects) and deploy/runner ($(grep -c '^kind:' "$runner") objects)"
+log "rendered deploy/ ($(grep -c '^kind:' "$fleet") objects) and deploy/runner ($(grep -c '^kind:' "$runner") objects)"
 
 # The test overlays under deploy/tests, each rendered to <name>.yaml.
 for k in "$deploy"/tests/*/kustomization.yaml; do
@@ -90,10 +86,9 @@ kubeconform_run() {
   "$KUBECONFORM" -strict -summary -output text \
     -kubernetes-version "$K8S_SCHEMA_VERSION" \
     -schema-location "$K8S_SCHEMA_LOCATION" \
-    -schema-location "$CRD_SCHEMA_LOCATION" \
     "$@"
 }
-kubeconform_run "$fleet" "$capi" "$runner" >"$work/kubeconform.txt" 2>&1 || {
+kubeconform_run "$fleet" "$runner" >"$work/kubeconform.txt" 2>&1 || {
   cat "$work/kubeconform.txt" >&2
   die "kubeconform failed"
 }
@@ -118,27 +113,28 @@ extract_config() {
 templates=$work/templates
 extract_config "$fleet" "$templates"
 
-# A Host as flr-host-config describes it in /run/flr/host.env.
+# A Host as battery-operator's battery-host-config describes it in
+# /run/battery/host.env, with a pool's host.conf that sets the lines of
+# host-agent/config/host-pool.conf.
 sample_host_env() {
-  cat <<EOF
-# Written by flr-host-config.service at every boot. Do not edit.
-FLR_GUEST_SUBNET=10.200.0.0/16
-FLR_PREFIX=16
-FLR_NETMASK=255.255.0.0
-FLR_GATEWAY=10.200.0.1
-FLR_DHCP_START=10.200.0.10
-FLR_DHCP_END=10.200.255.254
-FLR_THIN_POOL_DEVICE=
-FLR_PROTECTED_CIDRS=10.0.0.0/16,10.244.0.0/16,10.96.0.0/12
-FLR_HOST_RESERVE_VCPU=3
-FLR_HOST_RESERVE_MEMORY_MB=6144
-FLR_HOST_SERVICE_PORTS=1234,3000,5000,3128
-FLR_HOST_CONTROL_PORTS=9090,8090,10248,10250,10255,10256,10260,10270,9252,1338
-FLR_CACHE_VOLUME_PERCENT=15
-FLR_EXEC_AGENT_UID=65532
-FLR_FLINTLOCKD_CLIENT_CIDRS=10.244.0.0/16
-FLR_HOST_SERVICE_UIDS=101,1000,10001,10002,100000-165535
-EOF
+  cat <<EOT
+# Written by battery-host-config.service at every boot. Do not edit.
+BATTERY_GUEST_SUBNET=10.200.0.0/16
+BATTERY_PREFIX=16
+BATTERY_NETMASK=255.255.0.0
+BATTERY_GATEWAY=10.200.0.1
+BATTERY_DHCP_START=10.200.0.10
+BATTERY_DHCP_END=10.200.255.254
+BATTERY_THIN_POOL_DEVICE=
+BATTERY_PROTECTED_CIDRS=10.0.0.0/16,10.244.0.0/16,10.96.0.0/12
+BATTERY_HOST_RESERVE_VCPU=3
+BATTERY_HOST_RESERVE_MEMORY_MB=6144
+BATTERY_HOST_CONTROL_PORTS=9090,8090,10248,10250,10255,10256,10270,1338
+BATTERY_EXEC_AGENT_UID=65532
+BATTERY_FLINTLOCKD_CLIENT_CIDRS=10.244.0.0/16
+BATTERY_GATEWAY_SERVICE_PORTS=1234,3000,5000,3128
+BATTERY_GATEWAY_SERVICE_UIDS=101,1000,10001,10002,100000-165535
+EOT
 }
 sample_host_env >"$work/host.env"
 gateway=10.200.0.1
@@ -206,7 +202,7 @@ seconds() {
 }
 EOF
 
-export YQ KUSTOMIZE KUBECONFORM FLR root deploy work fleet capi runner templates templates_full rendered rendered_full gateway
+export YQ KUSTOMIZE KUBECONFORM FLR root deploy work fleet runner templates templates_full rendered rendered_full gateway
 
 failed=0
 passed=0
