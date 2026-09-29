@@ -236,10 +236,8 @@ var scenarios = []scenario{
 		// battery-operator does when a Lease lapses (KF-154). Either way the
 		// Scheduler fails the Job (SC-061). On both stacks the MicroVM
 		// outlives the Lease for a while, so the Runner learns of the loss
-		// from the Lease, not from a command killed with its MicroVM. A
-		// MicroVM deleted at once ends the Stage with the exit status -1
-		// before the next heartbeat, and the Job is reported as a
-		// script_failure instead.
+		// from the Lease, not from a command killed with its MicroVM. The
+		// next scenario deletes the MicroVM at once.
 		name:          "lease expires during a job",
 		fakeHostsOnly: true,
 		run: func(t *testing.T, s *Stack) {
@@ -265,6 +263,43 @@ var scenarios = []scenario{
 				// disowned; the fake refused its heartbeats without
 				// forgetting it, and expires it at the threshold as battery
 				// does, deleting its MicroVM.
+				eventually(t, "the refused lease to expire", func() bool { return len(s.PoolManager.Leases()) == 0 })
+				s.PoolManager.SetFaults(poolmgr.Faults{})
+			}
+			wantStatus(t, rec, fakegitlab.StatusFailed, "runner_system_failure")
+			wantNotInTrace(t, rec, "job finished")
+		},
+	},
+	{
+		// The Job's Lease expires while it runs, and its MicroVM goes at
+		// once. The fake battery's plain Expire deletes the MicroVM with the
+		// Lease, as battery does. On the battery stack the fake Pool Manager
+		// refuses every heartbeat and the test deletes the MicroVM on its
+		// Host. The Stage ends with the exit status -1 before the next
+		// heartbeat, so the Executor asks for the Lease at that moment and
+		// the Job is a runner_system_failure, not a script_failure (SC-061).
+		name:          "lease expires during a job and its microvm goes at once",
+		fakeHostsOnly: true,
+		run: func(t *testing.T, s *Stack) {
+			gate := s.NewGate("lease-vm")
+			id, err := s.Enqueue(Job{Name: "expiring-vm", Script: []string{`echo "job started"`, gate.Wait(), `echo "job finished"`}})
+			if err != nil {
+				t.Fatal(err)
+			}
+			waitTrace(t, s, id, "job started")
+			defer func() { _ = gate.Open() }()
+			if s.Claim != nil {
+				claims, err := s.BoundClaims(context.Background())
+				if err != nil || len(claims) != 1 {
+					t.Fatalf("bound claims %v (%v), want one", claims, err)
+				}
+				s.Claim.Battery.Expire(claims[0])
+			} else {
+				s.PoolManager.SetFaults(poolmgr.Faults{RefuseHeartbeats: true})
+				deleteLeasedMicroVM(t, s)
+			}
+			rec := wait(t, s, id)
+			if s.PoolManager != nil {
 				eventually(t, "the refused lease to expire", func() bool { return len(s.PoolManager.Leases()) == 0 })
 				s.PoolManager.SetFaults(poolmgr.Faults{})
 			}
@@ -473,6 +508,32 @@ func unzip(t *testing.T, data []byte) map[string]string {
 }
 
 // leaseHost is the fake Host of the one Lease held.
+// deleteLeasedMicroVM deletes the MicroVM of the one Lease the fake Pool
+// Manager holds on its fake Host, as battery does when a Lease expires. A
+// command running in it is killed.
+func deleteLeasedMicroVM(t *testing.T, s *Stack) {
+	t.Helper()
+	leases := s.PoolManager.Leases()
+	if len(leases) != 1 {
+		t.Fatalf("%d leases held, want 1", len(leases))
+	}
+	var hostName string
+	for _, vm := range s.PoolManager.VMs() {
+		if vm.UID == leases[0].VMUID {
+			hostName = vm.Host
+		}
+	}
+	h := s.Host(hostName)
+	if h == nil {
+		t.Fatalf("microvm %s is on %q, which is not a fake host of the stack", leases[0].VMUID, hostName)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	if err := h.Client().DeleteMicroVM(ctx, leases[0].VMUID); err != nil {
+		t.Fatalf("deleting microvm %s on %s: %v", leases[0].VMUID, hostName, err)
+	}
+}
+
 func leaseHost(t *testing.T, s *Stack) flintlock.HostFaultInjector {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)

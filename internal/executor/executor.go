@@ -663,6 +663,9 @@ func (e *executor) runStage(cmd common.ExecutorCommand, command transport.Comman
 		if expired(ctx) {
 			return stageCancelled(ctx)
 		}
+		if err := e.leaseLost(cmd.Context, cmd.Stage, r); err != nil {
+			return err
+		}
 		return e.stageError(cmd.Stage, r)
 	case <-ctx.Done():
 	}
@@ -750,6 +753,67 @@ func stageCancelled(ctx context.Context) error {
 	return cause
 }
 
+// leaseChecker is the Scheduler's CheckLease. The Executor asserts it on
+// its Scheduler rather than name it in the Scheduler interface. A Scheduler
+// without it is never asked, and a Stage is then reported by its
+// transport's answer alone.
+type leaseChecker interface {
+	CheckLease(ctx context.Context, h scheduler.Handle) error
+}
+
+// noExitStatus reports whether a Stage ended without an exit status of its
+// own: the stream failed, or the guest agent reported the status -1 that
+// stands for a command it killed, as it does when the MicroVM is deleted
+// under a running Stage. A shell's own exit status is never negative.
+func noExitStatus(r stageResult) bool {
+	return r.err != nil || r.status < 0
+}
+
+//= docs/requirements/03-scheduler.md#lease-keep-alive
+//# If a heartbeat reports that the Lease no longer exists, then the
+//# Scheduler SHALL abort the Job with the failure reason
+//# `runner_system_failure` and drop the Allocation without a release call.
+
+// leaseLost asks the Scheduler whether the Job's Lease is lost when a Stage
+// ended without an exit status, and returns a runner_system_failure
+// BuildError when it is. Battery deletes the MicroVM of an expired Lease at
+// once, and that ends the Stage before the next scheduled heartbeat can
+// find the loss. Without an answer now, the killed command would be
+// reported as a script_failure with the status -1. A Stage with an exit
+// status of its own, and a Stage whose Lease is still held, are left to
+// stageError. The Stage is recorded as failed so that it is not run again
+// (EX-023).
+func (e *executor) leaseLost(ctx context.Context, stage common.BuildStage, r stageResult) error {
+	if !noExitStatus(r) {
+		return nil
+	}
+	lc, ok := e.p.deps.Scheduler.(leaseChecker)
+	if !ok {
+		return nil
+	}
+	lost := lc.CheckLease(ctx, e.handle)
+	if lost == nil {
+		return nil
+	}
+	inner := fmt.Errorf("stage %s: the guest agent reported the exit status %d: %w", stage, r.status, lost)
+	if r.err != nil {
+		inner = fmt.Errorf("stage %s: guest transport failed before the exit status was known: %w: %w", stage, r.err, lost)
+	}
+	err := &common.BuildError{Inner: inner, FailureReason: common.RunnerSystemFailure}
+	e.recordFailed(stage, err)
+	return err
+}
+
+// recordFailed remembers the error of a Stage that must not run again.
+func (e *executor) recordFailed(stage common.BuildStage, err error) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if e.failedStages == nil {
+		e.failedStages = make(map[common.BuildStage]error)
+	}
+	e.failedStages[stage] = err
+}
+
 //= docs/requirements/02-executor.md#run
 //# When a Stage's command exits with a non-zero status, the
 //# Executor SHALL return a build error carrying that exit code so that the
@@ -773,12 +837,7 @@ func (e *executor) stageError(stage common.BuildStage, r stageResult) error {
 			Inner:         fmt.Errorf("stage %s: guest transport failed before the exit status was known: %w", stage, r.err),
 			FailureReason: common.RunnerSystemFailure,
 		}
-		e.mu.Lock()
-		if e.failedStages == nil {
-			e.failedStages = make(map[common.BuildStage]error)
-		}
-		e.failedStages[stage] = err
-		e.mu.Unlock()
+		e.recordFailed(stage, err)
 		return err
 	}
 	if r.status != 0 {
