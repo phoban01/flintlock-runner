@@ -391,11 +391,14 @@ func (h *harness) createPool(spec poolmgr.PoolSpec) {
 	}
 }
 
-// tick waits for the control loop to arm its timer, then fires it.
+// tick waits for the control loop to arm its timer, fires it, and waits for
+// the loop to arm it again. The loop arms its timer only once the tick has
+// run, so what that tick did is visible when tick returns, and it cannot
+// run later, in the middle of what the test does next.
 func (h *harness) tick() {
 	h.t.Helper()
 	h.waitTimers(1)
-	h.clk.Advance(testInterval)
+	h.advance(testInterval)
 }
 
 // advance moves the clock by d, which fires the control loop's timer on the
