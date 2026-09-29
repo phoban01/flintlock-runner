@@ -46,7 +46,8 @@ var (
 	ErrNotRunning = errors.New("scheduler: not running")
 
 	// ErrHostUnhealthy is Handle.Err when the Host of the MicroVM was marked
-	// unhealthy (SC-043).
+	// unhealthy (SC-043), or when the Exec Agent of its claim stopped
+	// answering (KF-201).
 	ErrHostUnhealthy = errors.New("scheduler: host of microvm became unhealthy")
 	// ErrLeaseLost is Handle.Err when a heartbeat reported the Lease gone
 	// (SC-061) or heartbeats failed for longer than the expiry (SC-062).
@@ -418,6 +419,15 @@ type Metrics interface {
 	FailureCounted(kind FailureKind)
 }
 
+// AgentProber reaches the Exec Agent of a claim, for the claim backend's
+// Runner, which has no Inventory of Hosts to probe (KF-200).
+type AgentProber interface {
+	// ProbeAgent asks the Exec Agent of the Allocation's claim about the
+	// Allocation's MicroVM, with a claim token of that claim, and returns
+	// nil only when the agent answers for it. ctx carries the deadline.
+	ProbeAgent(ctx context.Context, a Allocation) error
+}
+
 // Deps are the Scheduler's dependencies. Every field is an interface with an
 // in-memory implementation; nothing here opens a socket.
 type Deps struct {
@@ -434,6 +444,9 @@ type Deps struct {
 	Health  poolmgr.Health
 	// Hosts is the Host Registry (HO-010), built over a flintlock.Dialer.
 	Hosts flintlock.Registry
+	// Agents probes the Exec Agent of each claim a Job holds (KF-200 to
+	// KF-202). The claim backend sets it; nil probes nothing.
+	Agents AgentProber
 	// Clock and Backoff default to real time and the configured exponential
 	// policy when nil.
 	Clock   clock.Clock
