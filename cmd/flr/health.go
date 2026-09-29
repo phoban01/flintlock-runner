@@ -13,6 +13,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/phoban01/flintlock-runner/internal/poolmgr/claim"
 	"github.com/phoban01/flintlock-runner/internal/scheduler"
 )
 
@@ -37,6 +38,16 @@ type healthServer struct {
 	// and holds the state its own loops keep, so a probe makes no call to
 	// the Pool Manager, to a Host or to the API server.
 	status atomic.Pointer[scheduler.Status]
+	// pools is the claim backend's view of the Runner's Pools, nil under
+	// any other backend. Where it is set, a Ready Pool takes the place of
+	// a healthy Host (OB-031).
+	pools atomic.Pointer[poolReadiness]
+}
+
+// poolReadiness is what the claim backend says about the readiness of the
+// Runner's Pools, from its watch (claim.Backend).
+type poolReadiness interface {
+	PoolsReady() []claim.PoolReadiness
 }
 
 // readinessReport is the body of /readyz (OB-032).
@@ -57,6 +68,9 @@ type readinessReport struct {
 type poolReport struct {
 	Pool      string `json:"pool"`
 	Available int32  `json:"available"`
+	// Ready is whether the Pool's status reports Ready. Only the claim
+	// backend reports it.
+	Ready *bool `json:"ready,omitempty"`
 }
 
 // newHealthServer listens on addr and proxies every path but its own to
@@ -112,6 +126,10 @@ func (h *healthServer) tokenVerified() { h.verified.Store(true) }
 // setStatus gives the server the Scheduler to read readiness from.
 func (h *healthServer) setStatus(s scheduler.Status) { h.status.Store(&s) }
 
+// setPools gives the server the claim backend's Pool readiness. It is
+// called only where the claim backend is configured.
+func (h *healthServer) setPools(p poolReadiness) { h.pools.Store(&p) }
+
 //= docs/requirements/08-observability.md#health
 //# The Runner SHALL serve a liveness endpoint at `/healthz` that
 //# returns success while the process is running.
@@ -128,7 +146,10 @@ func (h *healthServer) serveHealthz(w http.ResponseWriter, _ *http.Request) {
 //= docs/requirements/08-observability.md#health
 //# The Runner SHALL serve a readiness endpoint at `/readyz` that
 //# returns success only after the runner token has been verified, the Pool
-//# Manager has answered at least once and at least one Host is healthy.
+//# Manager has answered at least once and at least one Host is healthy,
+//# except that where the claim backend is configured, at least one of the
+//# Runner's Pools reporting Ready in its status takes the place of the
+//# healthy Host.
 
 //= docs/requirements/04-pool-manager.md#client
 //# If the Pool Manager is unreachable at startup, then the Scheduler SHALL
@@ -153,8 +174,9 @@ func (h *healthServer) serveReadyz(w http.ResponseWriter, _ *http.Request) {
 //# number of healthy Hosts, whether the Pool Manager is reachable and the
 //# available count of each Pool.
 
-// readiness builds the report from the token state and the Scheduler's
-// Snapshot. Before the Scheduler exists the Runner is not ready.
+// readiness builds the report from the token state, the Scheduler's
+// Snapshot and, under the claim backend, the Pools' readiness. Before the
+// Scheduler exists the Runner is not ready.
 func (h *healthServer) readiness() readinessReport {
 	report := readinessReport{TokenVerified: h.verified.Load(), Pools: []poolReport{}}
 	sp := h.status.Load()
@@ -172,8 +194,31 @@ func (h *healthServer) readiness() readinessReport {
 	for _, p := range snap.Pools {
 		report.Pools = append(report.Pools, poolReport{Pool: p.Pool.String(), Available: p.Status.Available})
 	}
-	report.Ready = report.TokenVerified && snap.Ready()
+
+	// Under the claim backend the Runner probes no Host, so a Pool that
+	// battery-operator marks Ready stands in for a healthy Host.
+	capacity := report.HealthyHosts > 0
+	if pp := h.pools.Load(); pp != nil {
+		capacity = false
+		for _, p := range (*pp).PoolsReady() {
+			capacity = capacity || p.Ready
+			report.setPoolReady(p.Pool.String(), p.Ready)
+		}
+	}
+	report.Ready = report.TokenVerified && report.PoolManagerContacted && capacity
 	return report
+}
+
+// setPoolReady records a Pool's readiness in the report, adding the Pool if
+// the Scheduler does not track it.
+func (r *readinessReport) setPoolReady(pool string, ready bool) {
+	for i := range r.Pools {
+		if r.Pools[i].Pool == pool {
+			r.Pools[i].Ready = &ready
+			return
+		}
+	}
+	r.Pools = append(r.Pools, poolReport{Pool: pool, Ready: &ready})
 }
 
 // freeLoopbackAddr returns a loopback address whose port was free a moment

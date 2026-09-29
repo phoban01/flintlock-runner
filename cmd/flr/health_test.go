@@ -11,6 +11,7 @@ import (
 	"testing"
 
 	"github.com/phoban01/flintlock-runner/internal/poolmgr"
+	"github.com/phoban01/flintlock-runner/internal/poolmgr/claim"
 	"github.com/phoban01/flintlock-runner/internal/scheduler"
 )
 
@@ -99,7 +100,7 @@ func TestHealthzAnswersBeforeTheRunnerIsReady(t *testing.T) {
 //= type=test
 //# The Runner SHALL serve a readiness endpoint at `/readyz` that
 //# returns success only after the runner token has been verified, the Pool
-//# Manager has answered at least once and at least one Host is healthy.
+//# Manager has answered at least once and at least one Host is healthy,
 
 //= docs/requirements/04-pool-manager.md#client
 //= type=test
@@ -147,6 +148,91 @@ func TestReadyzFailsUntilEveryConditionHolds(t *testing.T) {
 
 	status.set(scheduler.Snapshot{PoolManagerContacted: true, PoolManagerHealthy: true, Hosts: hostDown})
 	expect("last host went unhealthy", http.StatusServiceUnavailable)
+}
+
+// fakePools is the claim backend's Pool readiness, as a test sets it.
+type fakePools struct {
+	mu    sync.Mutex
+	pools []claim.PoolReadiness
+}
+
+func (f *fakePools) PoolsReady() []claim.PoolReadiness {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]claim.PoolReadiness(nil), f.pools...)
+}
+
+func (f *fakePools) set(pools ...claim.PoolReadiness) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.pools = pools
+}
+
+//= docs/requirements/08-observability.md#health
+//= type=test
+//# except that where the claim backend is configured, at least one of the
+//# Runner's Pools reporting Ready in its status takes the place of the
+//# healthy Host.
+
+// TestReadyzUnderTheClaimBackendWaitsForAReadyPool covers the claim backend,
+// where the Runner probes no Host: with the token verified and the backend
+// answering, /readyz fails while no Pool is Ready and passes once one is. A
+// healthy Host does not count there, and the token and the backend's answer
+// are still needed. The body carries each Pool's readiness (OB-032).
+func TestReadyzUnderTheClaimBackendWaitsForAReadyPool(t *testing.T) {
+	t.Parallel()
+	h, base := startHealth(t, "127.0.0.1:1")
+	status := &fakeStatus{}
+	pools := &fakePools{}
+	h.setStatus(status)
+	h.setPools(pools)
+
+	small := poolmgr.PoolRef{Namespace: "ci", Name: "small"}
+	large := poolmgr.PoolRef{Namespace: "ci", Name: "large"}
+	status.set(scheduler.Snapshot{
+		PoolManagerContacted: true,
+		PoolManagerHealthy:   true,
+		Pools:                []poolmgr.PoolAvailability{{Pool: small, Status: poolmgr.PoolStatus{Available: 1}}},
+		// A healthy Host does not stand in for a Ready Pool.
+		Hosts: []scheduler.HostHealth{{Name: "host-1", Healthy: true}},
+	})
+	expect := func(step string, want int) readinessReport {
+		t.Helper()
+		code, report := readyz(t, base)
+		if code != want || report.Ready != (want == http.StatusOK) {
+			t.Fatalf("%s: /readyz = %d, ready %t; want %d", step, code, report.Ready, want)
+		}
+		return report
+	}
+
+	h.tokenVerified()
+	expect("no pool seen yet", http.StatusServiceUnavailable)
+
+	pools.set(claim.PoolReadiness{Pool: large}, claim.PoolReadiness{Pool: small})
+	report := expect("no pool ready", http.StatusServiceUnavailable)
+	for _, p := range report.Pools {
+		if p.Ready == nil || *p.Ready {
+			t.Errorf("pool %s: ready = %v, want false", p.Pool, p.Ready)
+		}
+	}
+
+	pools.set(claim.PoolReadiness{Pool: large}, claim.PoolReadiness{Pool: small, Ready: true})
+	report = expect("one pool ready", http.StatusOK)
+	want := map[string]bool{"ci/small": true, "ci/large": false}
+	if len(report.Pools) != len(want) {
+		t.Fatalf("pools = %+v, want %v", report.Pools, want)
+	}
+	for _, p := range report.Pools {
+		if p.Ready == nil || *p.Ready != want[p.Pool] {
+			t.Errorf("pool %s: ready = %v, want %t", p.Pool, p.Ready, want[p.Pool])
+		}
+		if p.Pool == "ci/small" && p.Available != 1 {
+			t.Errorf("pool ci/small: available = %d, want 1", p.Available)
+		}
+	}
+
+	status.set(scheduler.Snapshot{PoolManagerHealthy: false})
+	expect("backend never answered", http.StatusServiceUnavailable)
 }
 
 //= docs/requirements/08-observability.md#health

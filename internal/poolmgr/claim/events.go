@@ -3,10 +3,12 @@ package claim
 import (
 	"context"
 	"fmt"
+	"sort"
 	"sync"
 	"time"
 
 	poolmgrv1 "github.com/liquidmetal-dev/battery/api/proto/poolmgr/v1alpha1"
+	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/watch"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -55,10 +57,12 @@ type hub struct {
 	closed    bool
 }
 
-// reported is what the hub last said about a Pool.
+// reported is what the hub last said about a Pool, and whether the Pool
+// reported Ready in its status when the hub last saw it (OB-031).
 type reported struct {
 	ref   poolmgr.PoolRef
 	count int32
+	ready bool
 }
 
 func newHub(b *Backend) *hub {
@@ -167,6 +171,9 @@ func (h *hub) observe(pool *batteryv1alpha1.Pool) {
 		return
 	}
 	h.moveLocked(pool.Name, ref, pool.Status.Available)
+	last := h.available[pool.Name]
+	last.ready = meta.IsStatusConditionTrue(pool.Status.Conditions, batteryv1alpha1.PoolConditionReady)
+	h.available[pool.Name] = last
 }
 
 // gone reports a deleted Pool as having no available MicroVM.
@@ -262,6 +269,34 @@ func (b *Backend) Subscribe(ctx context.Context, filter poolmgr.EventFilter) (po
 	}
 	h.subs[s] = struct{}{}
 	return s, nil
+}
+
+// PoolReadiness is one of the Runner's Pools and whether its status
+// reports Ready.
+type PoolReadiness struct {
+	Pool  poolmgr.PoolRef
+	Ready bool
+}
+
+//= docs/requirements/08-observability.md#health
+//# except that where the claim backend is configured, at least one of the
+//# Runner's Pools reporting Ready in its status takes the place of the
+//# healthy Host.
+
+// PoolsReady reports each of the Runner's Pools and whether battery-operator
+// marks it Ready, sorted by Pool. It reads what the watch last saw, so a
+// readiness probe makes no call to the API server. Before the first list of
+// the watch it reports no Pool.
+func (b *Backend) PoolsReady() []PoolReadiness {
+	h := b.hub
+	h.mu.Lock()
+	out := make([]PoolReadiness, 0, len(h.available))
+	for _, last := range h.available {
+		out = append(out, PoolReadiness{Pool: last.ref, Ready: last.ready})
+	}
+	h.mu.Unlock()
+	sort.Slice(out, func(i, j int) bool { return out[i].Pool.String() < out[j].Pool.String() })
+	return out
 }
 
 // close ends every stream.

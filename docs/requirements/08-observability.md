@@ -50,10 +50,18 @@ capacity, on MicroVM creation or on Host health.
   returns success while the process is running.
 - **OB-031** The Runner SHALL serve a readiness endpoint at `/readyz` that
   returns success only after the runner token has been verified, the Pool
-  Manager has answered at least once and at least one Host is healthy.
+  Manager has answered at least once and at least one Host is healthy,
+  except that where the claim backend is configured, at least one of the
+  Runner's Pools reporting Ready in its status takes the place of the
+  healthy Host.
 - **OB-032** The readiness endpoint SHALL report, in its response body, the
   number of healthy Hosts, whether the Pool Manager is reachable and the
   available count of each Pool.
+
+Under the claim backend the Runner has no Hosts of its own: it probes no
+Host, so none is ever healthy. battery-operator's Pool status says instead
+whether battery holds the Pool at its size, and a Ready Pool is what a Job
+needs. The maintainer's decision is on issue #94.
 
 ## Job log annotations {#job-log-annotations}
 
