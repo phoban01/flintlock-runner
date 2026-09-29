@@ -110,6 +110,10 @@ mutual TLS drop out of a cluster fleet. The constraints of this phase still
 hold, so every package below is done against fakes: a container build for
 the image, an API server test environment and the fake Host for the rest.
 
+Phase 5 replaces the Virtual Node design. `withdraw-vk` (#101) removed its
+packages and withdrew their requirements, so the Virtual Node rows below
+are history.
+
 | Key | Package | Owns | Depends on | Done when |
 |-----|---------|------|------------|-----------|
 | `image` | `image/` (Containerfile, units, versions file, check stage) | HI-001..HI-062 | nothing | PR #52 |
@@ -176,9 +180,9 @@ readiness checks and drain guard live on in battery-operator's Exec Agent.
 | `manifests-2` | `cmd/flr` (the claim backend and `agent-exec` wiring), `deploy/runner`, `deploy/README.md` (reworks the held `pr/manifests`) | the KF IDs of KF-001..KF-005, KF-070..KF-076, KF-080..KF-082, KF-112, KF-113, KF-144 that still stand | `agent-exec`, `claim-backend` | [#78](https://github.com/phoban01/flintlock-runner/issues/78) | `flr` runs on the claim backend and `agent-exec`, and the manifests render and pass the schema check next to battery-operator v0.1.0's Manifests |
 | `guest-image` | the guest image build (`guest/`), with networking by DHCP in the guest, and the Profiles in `deploy/runner/config.yaml`; networking on the Host moved to [#73](https://github.com/phoban01/flintlock-runner/issues/73) | GI-001..004, GI-010, GI-020..024, GI-030..034, GI-040 | nothing | [#82](https://github.com/phoban01/flintlock-runner/issues/82) | a Job in the claim harness can clone a repository and reach the Host Services |
 | `claim-harness` | `internal/testing/harness` (reworks the held `wp/kube-harness`), a scripted run on a real Host | KF-192, KF-193 | `manifests-2`; `guest-image` for a Job that needs the network | [#79](https://github.com/phoban01/flintlock-runner/issues/79) | every TD-051 scenario green over the claim stack, and a Job from the fake GitLab runs end to end on battery-operator's real hosts trial |
-| `withdraw-vk` | removes `internal/kubelet`, `internal/poolmgr/kube`, `kube-exec` and their manifests | withdraws KF-010..KF-032, KF-040..KF-052, KF-060..KF-063, KF-090..KF-094, KF-100..KF-102, KF-110, KF-111, KF-120..KF-128, KF-130..KF-137, less KF-018 and KF-135, which `exec-agent` withdraws | `claim-harness` | none yet | nothing on `main` cites a withdrawn requirement |
+| `withdraw-vk` | done: removes `internal/kubelet`, `internal/poolmgr/kube`, `internal/hostcheck`, `kube-exec`, `cmd/flr kubelet`, the `kubernetes` pool backend and their manifests | withdraws KF-010..KF-032, KF-040..KF-052, KF-060..KF-062, KF-090..KF-094, KF-100..KF-102, KF-110, KF-111, KF-120..KF-125, KF-127, KF-128, KF-130..KF-134, KF-136, KF-137, less KF-018, which `exec-agent` withdraws; rewords KF-063 and KF-126 for the claim backend | `claim-harness` | [#101](https://github.com/phoban01/flintlock-runner/issues/101) | nothing on `main` cites a withdrawn requirement |
 
-`inventory` is done with this plan. `claim-interfaces` (#76) goes first,
+`inventory` and `withdraw-vk` are done with this plan. `claim-interfaces` (#76) goes first,
 because it changes lead-owned interfaces. Then `exec-agent` with
 `agent-exec` (#74), and `claim-backend` (#77), in parallel. Then
 `manifests-2` (#78), and last `claim-harness` with the real Host run

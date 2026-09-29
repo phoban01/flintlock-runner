@@ -16,7 +16,6 @@ import (
 	"github.com/phoban01/flintlock-runner/internal/executor"
 	"github.com/phoban01/flintlock-runner/internal/poolmgr"
 	"github.com/phoban01/flintlock-runner/internal/poolmgr/claim"
-	"github.com/phoban01/flintlock-runner/internal/poolmgr/kube"
 )
 
 // inClusterNamespaceFile is where a pod finds its own namespace.
@@ -29,13 +28,8 @@ type poolClient struct {
 	// setProfiles is nil for battery, which learns everything it needs from
 	// the PoolSpec.
 	setProfiles func([]config.Profile)
-	// kube is the Kubernetes API access of the Kubernetes pool backend, nil
-	// for battery. The kube-exec Guest Transport and the Virtual Node
-	// lookup share it, so that the Runner talks to one API server as one
-	// identity (KF-128).
-	kube *kubeAccess
 	// claim is what the claim pool backend gives the agent-exec Guest
-	// Transport and the Host Service lookup, nil for the other backends.
+	// Transport and the Host Service lookup, nil for battery.
 	claim *claimAccess
 }
 
@@ -61,68 +55,23 @@ func (c *claimAccess) dialAgent(ctx context.Context, leaseID string, opts ...grp
 	return held.Dial(ctx, opts...)
 }
 
-// kubeAccess is how the Runner of a cluster fleet reaches the Kubernetes
-// API: one client configuration, its clientset and the namespace of its
-// Pools.
-type kubeAccess struct {
-	config    *rest.Config
-	client    kubernetes.Interface
-	namespace string
-}
-
 // newPoolClient builds the Pool backend pool_manager.backend selects: the
-// battery gRPC client unless it names Kubernetes or claim. Everything above
-// poolmgr.Client is the same for each (KF-052, KF-156).
+// battery gRPC client unless it names claim. Everything above
+// poolmgr.Client is the same for each (KF-156).
 func newPoolClient(cfg *config.Config, log *slog.Logger) (*poolClient, error) {
 	pm := cfg.PoolManager
 	if pm.IsClaim() {
 		return newClaimClient(cfg, log)
 	}
-	if !pm.IsKubernetes() {
-		client, err := poolmgr.NewClient(poolmgr.ClientConfig{
-			Endpoint: pm.Endpoint,
-			TLS:      pm.TLS,
-			Deadline: pm.Deadline,
-		})
-		if err != nil {
-			return nil, fmt.Errorf("pool manager client: %w", err)
-		}
-		return &poolClient{Client: client}, nil
-	}
-
-	k := config.KubernetesPools{}
-	if pm.Kubernetes != nil {
-		k = *pm.Kubernetes
-	}
-	restConfig, err := kubeRESTConfig(k.Kubeconfig, k.Context)
-	if err != nil {
-		return nil, fmt.Errorf("kubernetes pool backend: %w", err)
-	}
-	clientset, err := kubernetes.NewForConfig(restConfig)
-	if err != nil {
-		return nil, fmt.Errorf("kubernetes pool backend: %w", err)
-	}
-	namespace := kubeNamespace(k.Namespace, cfg.Scheduler.Namespace, os.ReadFile)
-	backend, err := kube.New(kube.Options{
-		Client:              clientset,
-		Namespace:           namespace,
-		RunnerName:          cfg.GitLab.Name,
-		Profiles:            cfg.Profiles,
-		CloudInitConfigMaps: k.CloudInitConfigMaps,
-		JobTimeout:          k.JobTimeout,
-		CleanupMargin:       k.CleanupMargin,
-		RolloutInterval:     k.RolloutInterval,
-		Deadline:            pm.Deadline,
-		Log:                 log,
+	client, err := poolmgr.NewClient(poolmgr.ClientConfig{
+		Endpoint: pm.Endpoint,
+		TLS:      pm.TLS,
+		Deadline: pm.Deadline,
 	})
 	if err != nil {
-		return nil, fmt.Errorf("kubernetes pool backend: %w", err)
+		return nil, fmt.Errorf("pool manager client: %w", err)
 	}
-	return &poolClient{
-		Client:      backend,
-		setProfiles: backend.SetProfiles,
-		kube:        &kubeAccess{config: restConfig, client: clientset, namespace: namespace},
-	}, nil
+	return &poolClient{Client: client}, nil
 }
 
 // newClaimClient builds the claim pool backend: a Lease is a
@@ -177,9 +126,9 @@ func kubeRESTConfig(kubeconfig, kubeContext string) (*rest.Config, error) {
 	).ClientConfig()
 }
 
-// kubeNamespace is the Kubernetes namespace the Runner's Pools live in: the
-// configured one, else the namespace of the Runner's own pod, else the Runner
-// namespace of the Scheduler section.
+// kubeNamespace is the Kubernetes namespace of the Runner's claims and
+// Pools: the configured one, else the namespace of the Runner's own pod,
+// else the Runner namespace of the Scheduler section.
 func kubeNamespace(configured, runnerNamespace string, readFile func(string) ([]byte, error)) string {
 	if configured != "" {
 		return configured

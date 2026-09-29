@@ -17,6 +17,12 @@ func claimBackend(s *Settings) {
 //= type=test
 //# and from nothing else.
 
+//= docs/requirements/12-cluster-fleet.md#kube-allocation
+//= type=test
+//# Where the claim backend is configured, the Scheduler SHALL
+//# record the Host that the Bound claim names as the Placement without
+//# looking it up in the Inventory, and SC-034 SHALL NOT apply.
+
 // TestClaimedHostIsThePlacementWithoutAnInventory is the claim of
 // TestPlacementOnAHostOutsideTheInventoryReleasesTheLease on the claim
 // backend, with no Inventory at all: the Host the claim's status names

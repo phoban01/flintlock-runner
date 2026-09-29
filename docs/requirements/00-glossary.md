@@ -35,17 +35,17 @@ directory. It contains no requirements.
   from. It carries flintlock's guest agent, bash, git, curl, the CA
   certificates and `gitlab-runner-helper`, and configures the guest's
   network by DHCP.
-- **Pod Provider** — the `flr kubelet` process on each Host of a cluster
-  fleet, built on virtual kubelet. It registers the Host's Virtual Node,
-  realises each pod bound to it as one MicroVM through the local
-  `flintlockd`, relays pod exec to the guest and holds the Host's drain open
-  while claimed pods remain.
-- **Virtual Node** — the Kubernetes Node object a Pod Provider registers for
-  its Host, carrying the Host's MicroVM capacity. Every pod bound to it is a
-  MicroVM on that Host.
-- **Kubernetes pool backend** — the implementation of the `poolmgr.Client`
-  interface in which a Pool is a ReplicaSet of idle MicroVM pods and a Lease
-  is a claimed pod, used in place of the battery client in a cluster fleet.
+- **Pod Provider** — withdrawn with the Virtual Node design in #101. It was
+  the `flr kubelet` process on each Host of a cluster fleet, which
+  registered the Host's Virtual Node and ran each pod bound to it as one
+  MicroVM. battery-operator's Exec Agent takes its place. The term stays
+  because the Host Image requirements still name its port.
+- **Virtual Node** — withdrawn with the Virtual Node design in #101. It was
+  the Kubernetes Node object a Pod Provider registered for its Host.
+- **Kubernetes pool backend** — withdrawn with the Virtual Node design in
+  #101. It was the implementation of the `poolmgr.Client` interface in
+  which a Pool was a ReplicaSet of idle MicroVM pods. The claim backend
+  takes its place.
 - **Host Agent** — the DaemonSet pod on each Host of a cluster fleet, which
   contains the Host Services and publishes where they listen.
 - **Fleet Manifests** — the Kubernetes manifests in this repository that
@@ -55,13 +55,13 @@ directory. It contains no requirements.
   fleet that relays a Runner's exec request to `MicroVMExec` on the Host's
   `flintlockd`, after checking that the request carries a claim token of a
   Bound claim on the MicroVM, and reports the Host's readiness.
-  battery-operator's Manifests deploy it. It supersedes the Pod Provider.
+  battery-operator's Manifests deploy it. It replaces the Pod Provider.
 - **Inventory Controller** — battery-operator's controller that gives
   battery the Hosts that are ready and removes them when they are cordoned,
   deleted or not ready. This repository has none.
 - **Claim backend** — the implementation of the `poolmgr.Client` interface
   in which a Lease is a `MicroVMClaim` on a `Pool`, the resources of
-  battery-operator in `battery.liquidmetal-x.dev/v1alpha1`. It supersedes the
+  battery-operator in `battery.liquidmetal-x.dev/v1alpha1`. It replaces the
   Kubernetes pool backend.
 - **Holder** — the ServiceAccount that a `MicroVMClaim` names in
   `spec.serviceAccountName`: the one identity that may use the claimed

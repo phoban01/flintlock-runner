@@ -87,8 +87,7 @@ func duration(d time.Duration) *metav1.Duration {
 // nodeSelector selects the Nodes of the Profile's architecture that carry
 // every label of its Host selector. A Host selector key without a domain is
 // looked for under this project's, because those are the labels a Host's
-// Node carries; a key that names its own domain is used as it is. The Kubernetes
-// pool backend selects its Virtual Nodes the same way.
+// Node carries; a key that names its own domain is used as it is.
 func nodeSelector(profile config.Profile) map[string]string {
 	sel := map[string]string{}
 	if profile.Arch != "" {

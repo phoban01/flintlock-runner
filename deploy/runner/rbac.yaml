@@ -8,9 +8,6 @@
 # ServiceAccount, so a call the Runner makes outside these rules fails that
 # test rather than a deployment.
 #
-# role.yaml in this directory is the Virtual Node design's, and is not
-# deployed.
-#
 #= docs/requirements/12-cluster-fleet.md#cluster-least-privilege
 #/ The Fleet Manifests SHALL grant the Runner only the
 #/ permissions to manage `MicroVMClaim` and `Pool` resources and to create

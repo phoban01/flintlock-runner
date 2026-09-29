@@ -226,14 +226,11 @@ func (e *executor) resolveProfile(sec *prepareSection) error {
 	return nil
 }
 
-// jobInfo is the Scheduler's view of the Job. The timeout is the one
-// gitlab-runner itself enforces on the Job, so the claimed pod's active
-// deadline is made from the same number (KF-127).
+// jobInfo is the Scheduler's view of the Job.
 func (e *executor) jobInfo() scheduler.JobInfo {
 	return scheduler.JobInfo{
-		ID:      e.Build.ID,
-		Image:   e.ExpandValue(e.Build.Image.Name),
-		Timeout: e.Build.GetBuildTimeout(),
+		ID:    e.Build.ID,
+		Image: e.ExpandValue(e.Build.Image.Name),
 	}
 }
 
@@ -319,8 +316,8 @@ func (e *executor) startGuest(ctx context.Context, sec *prepareSection) error {
 	return e.makeDirs(ctx)
 }
 
-// transportKind is the Guest Transport the Job's Stages run over: the one
-// WithGuestTransport names for every Profile, else the Profile's own.
+// transportKind is the Guest Transport the Job's Stages run over: agent-exec
+// when WithAgentExec is set, else the Profile's own.
 func (e *executor) transportKind() transport.Kind {
 	if e.p.transport != "" {
 		return e.p.transport
@@ -328,28 +325,19 @@ func (e *executor) transportKind() transport.Kind {
 	return transport.Kind(e.profile.Transport.Kind)
 }
 
-//= docs/requirements/12-cluster-fleet.md#kube-allocation
-//# Where the Kubernetes pool backend is configured, the Executor
-//# SHALL use the `kube-exec` Guest Transport for every Profile
-
 //= docs/requirements/12-cluster-fleet.md#kube-exec-transport
-//# Where the `kube-exec` Guest Transport is configured, the Runner
-//# SHALL NOT open any connection to a Host.
+//# SHALL open no connection to a `flintlockd`.
 
 // guestTarget is what the transport of the Job's MicroVM is built from.
-// kube-exec names the claimed pod, whose name is the Lease id, and takes no
-// Host client: the Host Registry is not even asked, so no connection to a
-// Host is made or borrowed for the Job (KF-063). Every other transport
-// reaches the guest through the Placement's Host, on which it takes a Lease
-// for the life of the Job (HO-014).
+// agent-exec reaches the guest through the Exec Agent the claim names, and
+// the Host Registry is not even asked, so no connection to a flintlockd is
+// made or borrowed for the Job (KF-063). Every other transport reaches the
+// guest through the Placement's Host, on which it takes a Lease for the
+// life of the Job (HO-014).
 func (e *executor) guestTarget(ctx context.Context, a scheduler.Allocation) (transport.Target, error) {
 	target := transport.Target{
 		Kind:     e.transportKind(),
 		Deadline: e.p.deps.Timeouts.Transport,
-	}
-	if target.Kind == transport.KindKubeExec {
-		target.VMUID = a.Lease.ID
-		return target, nil
 	}
 	if target.Kind == transport.KindAgentExec {
 		return e.agentTarget(ctx, target, a)

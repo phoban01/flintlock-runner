@@ -13,8 +13,7 @@
 //	fleet drain         remove a Host from every Pool and wait for its Leases
 //	fleet teardown      delete Pools, stop services, remove the Inventory
 //	fleet emit-userdata print the launch-template user-data, gzip-compressed
-//	kubelet             run the Pod Provider of a cluster fleet on a Host
-//	agent               run the Exec Agent of a cluster fleet on a Host
+//	host-services       publish the addresses of this Host's Host Services on its Node
 package main
 
 import (
@@ -91,7 +90,6 @@ func newApp() *cli.App {
 			Usage:       "provision and operate the Host fleet",
 			Subcommands: fleetCommands(productionSeams()),
 		},
-		kubeletCommand(),
 		hostServicesCommand(),
 	}
 	return app

@@ -133,6 +133,21 @@ battery's daemon on the control node, pre-pulls
 images, writes an inventory and generates the runner config. No part of the
 liquidmetal ecosystem knows about EC2, so this layer is entirely ours.
 
+**Cluster fleet.** A fleet can also run from a Kubernetes cluster
+(`docs/requirements/12-cluster-fleet.md`). Hosts are Cluster API Machines
+of the Host Image. [battery-operator](https://github.com/phoban01/battery-operator)
+runs battery in the cluster and serves the `Pool` and `MicroVMClaim`
+resources. Its Exec Agent runs on every Host. The Runner uses the claim
+backend (`internal/poolmgr/claim`): it declares a `Pool` per profile and
+claims each microVM with a `MicroVMClaim`. It runs each stage over the
+`agent-exec` Guest Transport, through the Exec Agent of the Host the claim
+names, with a token bound to that claim. The Runner has no inventory and
+never dials a `flintlockd`. The Host Agent runs the host services and
+publishes their addresses on its Host's Node, where the Executor reads
+them. The first cluster design, with a virtual kubelet Pod Provider, a
+Virtual Node per Host and pools as ReplicaSets of microVM pods, was
+removed in #101.
+
 ## Why these choices
 
 **Libraries, not the binary, not a custom-executor driver.** Three options

@@ -74,12 +74,10 @@ What each side provides:
 | `host-agent/host-services-rbac.yaml`, `host-agent/host-services-admission-policy.yaml` | what the `host-services` container may do: annotate its own Host's Node with the Host Services. internal/hostservices' tests load these files unchanged |
 | `host-agent/config/` | `render.sh`, `prepare-cache.sh`, `prewarm.sh`, and `host-services.yaml.tmpl`, the configuration of `flr host-services` |
 | `host-agent/services/<service>/` | one kustomize Component per Host Service: containers, configuration templates, settings |
-| `host-agent/rbac.yaml`, `host-agent/admission-policy.yaml` | the Pod Provider's, from the Virtual Node design; not deployed, kept for `internal/kubelet`'s tests until that design is withdrawn |
 | `runner/` | the Runner's Deployment, ServiceAccount and configuration file `config.yaml` |
 | `runner/rbac.yaml` | what the Runner may do (KF-196). cmd/flr's end-to-end test of the claim backend applies it unchanged |
 | `runner/holder.yaml` | the Holder, the ServiceAccount every claim names; bound to nothing |
 | `runner/job-timeout.yaml` | the one place the job timeout is set (KF-081) |
-| `runner/role.yaml` | the Virtual Node design's Runner Role; not deployed, kept for `internal/poolmgr/kube`'s tests |
 | `capi/host-pool/` | the objects of one Host pool, with placeholders |
 | `capi/pools/<pool>/host-pool.yaml` | the settings of one Host pool |
 | `tests/` | the checks of `make manifests-check` and the overlays they build |
@@ -180,10 +178,12 @@ bound ServiceAccount token, projected into its container only.
 `host-agent/host-services-rbac.yaml` lets it patch Nodes, and
 `host-agent/host-services-admission-policy.yaml` narrows that to the Host
 Service annotations of its own Host's Node. The API server tells one Host
-from another by the node name in the token's user information. The policy
-replaces the Pod Provider's `host-agent/admission-policy.yaml`, which
-matches the same ServiceAccount and refuses any change to a Host's own
-Node, so a cluster runs one or the other, never both.
+from another by the node name in the token's user information.
+
+The Virtual Node design and its Pod Provider (`flr kubelet`) are gone
+(#101). Nothing here runs a pod on a Virtual Node, and nothing grants the
+Runner pod exec or ReplicaSets. battery-operator's Exec Agent and its
+admission policy take the Pod Provider's place on each Host.
 
 ## The Runner
 

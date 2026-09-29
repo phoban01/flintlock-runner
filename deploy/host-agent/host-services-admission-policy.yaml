@@ -17,11 +17,6 @@
 # Agent's ServiceAccount whose identity carries no node, a legacy Secret
 # token or a TokenRequest not bound to a pod, is refused outright.
 #
-# It matches the Host Agent's ServiceAccount, as the Pod Provider's
-# admission-policy.yaml in this directory does. The two are alternatives: the
-# Pod Provider's refuses any change to a Host's own Node, which this
-# container has to make. A fleet deploys one or the other.
-#
 # battery-operator's Exec Agent has a policy of its own for its own
 # ServiceAccount and the prefix `battery.liquidmetal-x.dev/`. The two match
 # different identities and different annotations, so both apply to the same

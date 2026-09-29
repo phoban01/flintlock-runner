@@ -7,7 +7,6 @@ import (
 	"net/url"
 	"path"
 	"regexp"
-	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -360,26 +359,14 @@ func (v *validator) profileOptional(f string, p *Profile, images map[string]int,
 	v.nonNegativeInt(f+".max_concurrency", p.MaxConcurrency)
 }
 
-//= docs/requirements/12-cluster-fleet.md#kube-allocation
-//# the Runner SHALL reject a configuration that names any other Guest Transport.
-
 // profileTransport checks a Profile's Guest Transport against the Pool
-// backend. The Kubernetes pool backend reaches every guest through its pod
-// and reaches no Host (KF-063), so kube-exec is the only transport it can
-// run, and a Profile that names exec or ssh there is refused rather than
-// quietly run over kube-exec. kube-exec is refused under battery, whose
-// MicroVMs are no pods. Under the claim backend the Executor runs every
-// Profile over agent-exec (KF-185), which relays exec alone, so ssh is
-// refused there (KF-195).
+// backend. Under the claim backend the Executor runs every Profile over
+// agent-exec (KF-185), which relays exec alone, so ssh is refused there
+// (KF-195).
 func (v *validator) profileTransport(f string, p *Profile, pm PoolManager) {
 	field := f + ".transport.kind"
-	kube := pm.IsKubernetes()
 	switch p.Transport.Kind {
 	case TransportExec, TransportSSH:
-		if kube {
-			v.errorf(field, "must be %s with pool_manager.backend %q, got %q", TransportKubeExec, PoolBackendKubernetes, p.Transport.Kind)
-			return
-		}
 		//= docs/requirements/12-cluster-fleet.md#agent-exec-transport
 		//# Where the claim backend is configured, the Runner SHALL
 		//# reject a configuration in which a Profile names the `ssh` Guest
@@ -393,14 +380,10 @@ func (v *validator) profileTransport(f string, p *Profile, pm PoolManager) {
 			v.required(f+".transport.ssh.private_key_file", p.Transport.SSH.PrivateKeyFile)
 			v.required(f+".transport.ssh.user", p.Transport.SSH.User)
 		}
-	case TransportKubeExec:
-		if !kube {
-			v.errorf(field, "%s needs pool_manager.backend %q", TransportKubeExec, PoolBackendKubernetes)
-		}
 	case "":
-		v.errorf(field, "is required (exec or ssh, or kube-exec with the kubernetes pool backend)")
+		v.errorf(field, "is required (exec or ssh)")
 	default:
-		v.errorf(field, "must be exec or ssh, or kube-exec with the kubernetes pool backend, got %q", p.Transport.Kind)
+		v.errorf(field, "must be exec or ssh, got %q", p.Transport.Kind)
 	}
 }
 
@@ -460,15 +443,10 @@ func (v *validator) poolSettings(f string, ps *PoolSettings) {
 
 func (v *validator) inventory(c *Config) {
 	hosts := c.Inventory.Hosts
-	// The Kubernetes pool backend reaches no Host (KF-063): its Hosts are
-	// the cluster's Virtual Nodes, so there is nothing to list, and a list
-	// would only name flintlockd endpoints the Runner must not dial.
-	if c.PoolManager.IsKubernetes() {
-		if len(hosts) > 0 {
-			v.errorf("inventory", "is not read with pool_manager.backend %q, whose Runner reaches no Host; remove it", PoolBackendKubernetes)
-		}
-		return
-	}
+	//= docs/requirements/12-cluster-fleet.md#kube-exec-transport
+	//# Where the claim backend is configured, the Runner SHALL read no
+	//# Inventory
+
 	// The claim backend takes each MicroVM's Host from its claim and from
 	// nothing else (KF-151), and reaches that Host's Exec Agent, never its
 	// flintlockd. A list would name endpoints nothing reads.
@@ -542,40 +520,26 @@ func (v *validator) inventory(c *Config) {
 
 func (v *validator) poolManager(c *Config) {
 	pm := &c.PoolManager
-	onlyKubernetes := func() {
-		if pm.Kubernetes != nil {
-			v.errorf("pool_manager.kubernetes", "is only read with pool_manager.backend %q", PoolBackendKubernetes)
-		}
-	}
-	onlyClaim := func() {
+	switch pm.Backend {
+	case "", PoolBackendBattery:
 		if pm.Claim != nil {
 			v.errorf("pool_manager.claim", "is only read with pool_manager.backend %q", PoolBackendClaim)
 		}
-	}
-	switch pm.Backend {
-	case "", PoolBackendBattery:
-		onlyKubernetes()
-		onlyClaim()
-	case PoolBackendKubernetes:
-		v.kubernetesPools(c)
-		onlyClaim()
 	case PoolBackendClaim:
 		v.claimPools(c)
-		onlyKubernetes()
 	default:
-		v.errorf("pool_manager.backend", "must be %q, %q or %q, got %q", PoolBackendBattery, PoolBackendKubernetes, PoolBackendClaim, pm.Backend)
+		v.errorf("pool_manager.backend", "must be %q or %q, got %q", PoolBackendBattery, PoolBackendClaim, pm.Backend)
 	}
 	//= docs/requirements/07-configuration.md#pool-manager-section
 	//# If the Pool Manager section is absent or has no endpoint, then the
 	//# Runner SHALL reject the configuration.
 	//
-	// The Kubernetes and claim pool backends have no battery endpoint to
-	// name; one that is given anyway is still checked, so that a typo does
-	// not pass silently.
+	// The claim pool backend has no battery endpoint to name; one that is
+	// given anyway is still checked, so that a typo does not pass silently.
 	switch {
 	case strings.TrimSpace(pm.Endpoint) != "":
 		v.hostPort("pool_manager.endpoint", pm.Endpoint)
-	case !pm.IsKubernetes() && !pm.IsClaim():
+	case !pm.IsClaim():
 		v.errorf("pool_manager.endpoint", "is required; the pool_manager section has to name the battery endpoint")
 	}
 	v.clientTLS("pool_manager.tls", pm.TLS)
@@ -595,50 +559,6 @@ var (
 	dnsLabel     = regexp.MustCompile(`^[a-z0-9]([-a-z0-9]{0,61}[a-z0-9])?$`)
 	dnsSubdomain = regexp.MustCompile(`^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$`)
 )
-
-// kubernetesPools checks the settings of the Kubernetes pool backend. The
-// section itself may be absent: every setting has a default, and an empty
-// kubeconfig path means the Runner's own pod (KF-080).
-func (v *validator) kubernetesPools(c *Config) {
-	k := c.PoolManager.Kubernetes
-	if k == nil {
-		return
-	}
-	const f = "pool_manager.kubernetes"
-	if k.Kubeconfig != "" {
-		v.absPath(f+".kubeconfig", k.Kubeconfig)
-	} else if k.Context != "" {
-		v.errorf(f+".context", "needs %s.kubeconfig; the in-cluster configuration has no contexts", f)
-	}
-	if k.Namespace != "" && !dnsLabel.MatchString(k.Namespace) {
-		v.errorf(f+".namespace", "must be a Kubernetes namespace name (an RFC 1123 label), got %q", k.Namespace)
-	}
-	v.positive(f+".job_timeout", k.JobTimeout)
-	// The active deadline of a pod is in whole seconds (KF-044).
-	if k.JobTimeout > 0 && k.JobTimeout < time.Second {
-		v.errorf(f+".job_timeout", "must be at least one second, got %s", k.JobTimeout)
-	}
-	v.positive(f+".cleanup_margin", k.CleanupMargin)
-	v.positive(f+".rollout_interval", k.RolloutInterval)
-	profiles := map[string]bool{}
-	for _, p := range c.Profiles {
-		profiles[p.Name] = true
-	}
-	names := make([]string, 0, len(k.CloudInitConfigMaps))
-	for name := range k.CloudInitConfigMaps {
-		names = append(names, name)
-	}
-	sort.Strings(names)
-	for _, name := range names {
-		field := fmt.Sprintf("%s.cloud_init_config_maps[%s]", f, name)
-		if !profiles[name] {
-			v.errorf(field, "names no profile")
-		}
-		if cm := k.CloudInitConfigMaps[name]; len(cm) > 253 || !dnsSubdomain.MatchString(cm) {
-			v.errorf(field, "must be a ConfigMap name (an RFC 1123 subdomain), got %q", cm)
-		}
-	}
-}
 
 // configMapKey is what a ConfigMap data key may be.
 var configMapKey = regexp.MustCompile(`^[-._a-zA-Z0-9]+$`)

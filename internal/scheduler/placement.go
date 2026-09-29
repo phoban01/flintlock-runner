@@ -22,10 +22,7 @@ func (s *impl) ResolvePlacement(ctx context.Context, p *Profile, claim *poolmgr.
 		return cached, nil
 	}
 	if claim.Host.Name != "" {
-		switch {
-		case s.set.PoolManager.IsKubernetes():
-			return s.placementFromVirtualNode(claim), nil
-		case s.set.PoolManager.IsClaim():
+		if s.set.PoolManager.IsClaim() {
 			return s.placementFromClaimStatus(claim), nil
 		}
 		return s.placementFromClaim(p, claim)
@@ -33,22 +30,13 @@ func (s *impl) ResolvePlacement(ctx context.Context, p *Profile, claim *poolmgr.
 	return s.placementFromLookup(ctx, p, claim)
 }
 
-//= docs/requirements/12-cluster-fleet.md#kube-allocation
-//# Where the Kubernetes pool backend is configured, the Scheduler
-//# SHALL record the claimed pod's Virtual Node as the Placement without
-//# looking it up in the Inventory, and SC-034 SHALL NOT apply.
-
-// placementFromVirtualNode records the Virtual Node a claimed pod is bound
-// to as its Placement. A cluster fleet has no Inventory to check it against,
-// and needs none: the Executor reaches the guest through the pod (KF-060)
-// and finds the Host Services on the Virtual Node (KF-062), so the name is
-// all a Job needs and there is no endpoint to compare it with.
-func (s *impl) placementFromVirtualNode(claim *poolmgr.Claim) Placement {
-	return Placement{Host: claim.Host.Name, Source: PlacementFromClaim, ResolvedAt: s.clk.Now()}
-}
-
 //= docs/requirements/12-cluster-fleet.md#battery-claims
 //# and from nothing else.
+
+//= docs/requirements/12-cluster-fleet.md#kube-allocation
+//# Where the claim backend is configured, the Scheduler SHALL
+//# record the Host that the Bound claim names as the Placement without
+//# looking it up in the Inventory, and SC-034 SHALL NOT apply.
 
 // placementFromClaimStatus records the Host a Bound MicroVMClaim names as
 // the Placement. The claim backend takes the Host from the claim's status

@@ -27,7 +27,7 @@ jobs:
         run: go build ./...
       - name: go vet
         run: go vet ./...
-      # KF-121: the Kubernetes pool backend is tested against a real
+      # KF-191: the claim backend is tested against a real
       # kube-apiserver and etcd. The tests skip without them on a developer's
       # machine; here they are downloaded and required, so CI never skips.
       - name: envtest binaries

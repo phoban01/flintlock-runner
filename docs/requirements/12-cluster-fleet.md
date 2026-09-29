@@ -1,44 +1,35 @@
 # Cluster fleet {#cluster-fleet}
 
-This document specifies how a fleet is run from a Kubernetes cluster, with
-every MicroVM visible to the cluster as a pod. Hosts are nodes of an existing
-workload cluster, created by a Cluster API MachineDeployment from the Host
-Image (`11-host-image.md`). On each Host a Pod Provider, built on virtual
-kubelet, registers a second Node, the Virtual Node, and realises every pod
-bound to it as one flintlock MicroVM through the `flintlockd` on that Host.
+This document specifies how a fleet is run from a Kubernetes cluster. Hosts
+are nodes of an existing workload cluster, created by a Cluster API
+MachineDeployment from the Host Image (`11-host-image.md`). battery is the
+scheduler and the authority over Pools. It runs in front of the Hosts'
+`flintlockd`s, behind the `Pool` and `MicroVMClaim` resources of
+battery-operator (`#battery-claims`). The Runner claims a MicroVM with a
+`MicroVMClaim`, and runs each Stage through the Exec Agent on the claim's
+Host (`#agent-exec-transport`). The Runner keeps its Scheduler and Executor
+unchanged above the `poolmgr.Client` interface; this document specifies a
+second implementation of that interface and a Guest Transport that reaches
+the guest through the Exec Agent.
 
-A Pool is then a ReplicaSet of idle MicroVM pods, and the Kubernetes API
-does the work that `04-pool-manager.md` asks of battery: the ReplicaSet
-controller keeps the Pool at size and replaces a claimed MicroVM at once,
-the scheduler places MicroVMs on Hosts against their real capacity, and a
-claim is a compare-and-swap on a pod label. The Runner keeps its Scheduler
-and Executor unchanged above the `poolmgr.Client` interface; this document
-specifies a second implementation of that interface and a Guest Transport
-that reaches the guest through the pod's exec subresource.
-
-Nothing here runs a Job in a container. The pod is the cluster's handle on a
-MicroVM: it carries the MicroVM's resource requests, its placement, its
-lifecycle and its claim state, so that quotas, metrics, drains and
-`kubectl get pods` all tell the truth about what a Host is doing.
+Nothing here runs a Job in a container. The Host Agent runs the Host
+Services on every Host, and the Runner runs as a Deployment off the Hosts.
 
 This mode is an alternative to `04-pool-manager.md`, `05-hosts.md` and
 `06-fleet.md`, which stay in force for fleets that are not run from a
 cluster. The table at the end maps each of them to its counterpart here.
 
-**Superseded on 2026-09-22.** The cluster fleet is moving from the Virtual
-Node design described first in this document to battery's claim resources,
-specified in the sections from `#battery-claims` onwards: battery stays the
-scheduler and the authority over Pools, the Runner claims a MicroVM through a
-`MicroVMClaim`, and a per-Host Exec Agent relays each Stage to `flintlockd`.
-The resources, the Exec Agent and the Inventory Controller ship in
-battery-operator v0.1.0 (`#battery-claims`).
-These sections are superseded by that design: Virtual Node, MicroVM pods,
-Pools, Allocation, Guest Transport, Drain, Verification, Least privilege
-(KF-110, KF-111), Hardening (KF-130 to KF-137) and Test doubles (KF-120 to
-KF-125). battery-operator's Manifests now run the Exec Agent in the Pod
-Provider's place (`#exec-agent`). Their code is still on `main`
-and still cites them, so they are withdrawn in the change that removes that
-code, once the claim design passes the harness, rather than now.
+**The Virtual Node design is withdrawn.** This document first specified a
+different design. On each Host a Pod Provider registered a Virtual Node and
+ran every pod bound to it as a MicroVM. A Pool was a ReplicaSet of idle
+MicroVM pods, and the Runner reached a guest through the pod's exec
+subresource, the `kube-exec` Guest Transport. On 2026-09-22 the cluster
+fleet moved to battery's claim resources, and #101 removed the Virtual Node
+design once the claim stack passed the harness. The sections Virtual Node,
+MicroVM pods, Pools, Allocation, Guest Transport, Drain, Verification and
+Test doubles keep the numbers of that design, withdrawn. Each withdrawn
+requirement names what replaced it. KF-063 and KF-126 are reworded for the
+claim design, which still needs them.
 
 ## Host pool {#host-pool}
 
@@ -58,204 +49,170 @@ code, once the claim design passes the harness, rather than now.
 
 A known gap: the MachineHealthCheck of KF-005 watches the Host's own Node,
 and a Host that cannot run MicroVMs, for want of KVM (HI-011) or of a thin
-pool device (HI-022), reports that on its Virtual Node instead (KF-016). Such
-a Host stays in the pool, advertising no ready capacity, until an operator
-replaces it. Closing the gap needs the Pod Provider to set a condition on
-the Host's Node, which KF-133 forbids today.
+pool device (HI-022), reports that through battery-operator's Exec Agent
+instead (battery-operator EA-031, EA-033). battery-operator's Inventory
+Controller then takes the Host out of battery's Hosts, but the Machine stays
+in the pool until an operator replaces it.
 
 One instance type per pool keeps capacity arithmetic trivial today and is
 what a snapshot compatibility class will need later. The number of Hosts is
-the replica count of the MachineDeployment. Because MicroVMs are now pods
-with requests, pending Pool pods are a real demand signal that an autoscaler
-could act on, but nothing in this document requires one.
+the replica count of the MachineDeployment.
 
 ## Virtual Node {#virtual-node}
 
-- **KF-010** The Pod Provider SHALL register one Virtual Node for its Host,
-  named after the Host's Node with the suffix `-microvms`, and SHALL renew
-  its node lease while it runs.
-- **KF-011** The Pod Provider SHALL set the Host's Node as the owner of the
-  Virtual Node, so that the Virtual Node is removed when the Host's Node is.
-- **KF-012** The Pod Provider SHALL advertise as the Virtual Node's capacity
-  the Host's CPU and memory minus the configured Host reserve, and a pod
-  limit equal to the configured maximum number of MicroVMs per Host.
-- **KF-013** The Pod Provider SHALL copy the architecture and the
-  `gitlab-runner.flintlock.dev` labels of the Host's Node to the Virtual
-  Node and SHALL add the label `gitlab-runner.flintlock.dev/virtual-node`
-  set to `true` and the label `gitlab-runner.flintlock.dev/host-node` set to
-  the name of the Host's Node.
-- **KF-014** The Pod Provider SHALL taint the Virtual Node with
-  `gitlab-runner.flintlock.dev/microvm=true:NoSchedule`, so that only pods
-  meant to be MicroVMs are bound to it.
-- **KF-015** The Pod Provider SHALL report the Virtual Node ready only while
-  the local `flintlockd` answers `ServerInfo` with the exec service enabled
-  and every enabled Host Service accepts connections on the bridge gateway
-  address.
-- **KF-016** If a unit of the Host Image reports a not ready reason, then the
-  Pod Provider SHALL report the Virtual Node not ready with that reason in
-  the condition's message.
-- **KF-017** The Pod Provider SHALL publish the address and port of each
-  enabled Host Service as annotations on the Virtual Node.
+- **KF-010** (withdrawn) The cluster fleet registers no Virtual Node.
+  battery-operator's Inventory Controller gives battery each Host under its
+  own Node's name (battery-operator IN-001, IN-003). It was implemented by
+  `flr kubelet`, removed in #101.
+- **KF-011** (withdrawn) There is no Virtual Node to own (KF-010). It was
+  implemented by `flr kubelet`, removed in #101.
+- **KF-012** (withdrawn) battery places MicroVMs against the capacity of
+  its Hosts, and no Node advertises MicroVM capacity. It was implemented by
+  `flr kubelet`, removed in #101.
+- **KF-013** (withdrawn) A Pool selects its Hosts by the labels of their own
+  Nodes (KF-150, battery-operator PO-010). It was implemented by `flr
+  kubelet`, removed in #101.
+- **KF-014** (withdrawn) No pod stands for a MicroVM, so no Node carries the
+  MicroVM taint. It was implemented by `flr kubelet`, removed in #101.
+- **KF-015** (withdrawn) battery-operator's Exec Agent reports its Host not
+  ready while `flintlockd` does not answer `ServerInfo` with the exec
+  service enabled (battery-operator EA-030). It checks no Host Service. It
+  was implemented by `flr kubelet`, removed in #101.
+- **KF-016** (withdrawn) battery-operator's Exec Agent reports the not ready
+  reasons of the Host Image units (battery-operator EA-033, EA-036). It was
+  implemented by `flr kubelet`, removed in #101.
+- **KF-017** (withdrawn) The Host Agent publishes the Host Services on its
+  Host's own Node (KF-194). It was implemented by `flr kubelet`, removed in
+  #101.
 - **KF-018** (withdrawn) battery-operator's Exec Agent takes the Pod
   Provider's place as the client of `flintlockd` on a Host, and reaches it
   over mutual TLS on the Host's address (battery-operator EA-001), not
   through the local endpoint of HI-042. It was implemented by
   `flr kubelet`, whose citation is removed.
 
-A Virtual Node per Host, rather than one for the fleet, is what lets the
-scheduler place MicroVMs: each Virtual Node has the real capacity of one
-machine, so bin-packing, spreading and selectors mean what they usually
-mean. The Host's own Node keeps only the Host reserve as allocatable
-(HI-061), which is where the Host Agent's pods run, so the two Nodes never
-promise the same core twice.
-
 ## MicroVM pods {#microvm-pods}
 
-- **KF-020** When a pod is bound to the Virtual Node, the Pod Provider SHALL
-  create one MicroVM for it through `flintlockd`, using the image of the
-  pod's only container as the root filesystem image, the container's CPU
-  and memory limits as the MicroVM's vCPU count and memory, and the pod's
-  `gitlab-runner.flintlock.dev` annotations for the kernel image, the
-  kernel command line and the hypervisor.
-- **KF-021** The Pod Provider SHALL label the MicroVM with the pod's UID,
-  namespace and name and SHALL set `allow_guest_agent` on it.
-- **KF-022** If a pod has more than one container, an init container, a
-  volume, a host namespace or a mounted service account token, then the Pod
-  Provider SHALL mark the pod failed with a reason naming the unsupported
-  field and SHALL NOT create a MicroVM for it.
-- **KF-023** Where the pod names a cloud-init ConfigMap in its annotations,
-  the Pod Provider SHALL pass that ConfigMap's user data to the MicroVM.
-- **KF-024** The Pod Provider SHALL report the pod running and ready only
-  when `flintlockd` reports the MicroVM created and a command run through
-  `MicroVMExec` in the guest succeeds.
-- **KF-025** The Pod Provider SHALL report the Host's internal address as
-  the pod's host address and the guest's bridge address as the pod's
-  address.
-- **KF-026** If the MicroVM fails or disappears from `flintlockd`, then the
-  Pod Provider SHALL mark its pod failed with the reason `flintlockd`
-  gives.
-- **KF-027** When a pod is deleted, the Pod Provider SHALL delete its
-  MicroVM and SHALL report the pod terminated only after `flintlockd`
-  no longer lists the MicroVM.
-- **KF-028** When starting, the Pod Provider SHALL adopt every MicroVM whose
-  labelled pod still exists and is bound to its Virtual Node, without
-  restarting it, and SHALL delete every MicroVM in its namespace whose pod
-  does not.
-- **KF-029** The Pod Provider SHALL NOT delete or restart a MicroVM because
-  the Pod Provider itself stops, restarts or loses its connection to the
-  Kubernetes API.
-- **KF-030** The Pod Provider SHALL serve the pod exec endpoint of the
-  kubelet API by relaying the streams to `MicroVMExec.ExecCommand` on the
-  local `flintlockd` and SHALL return the command's exit status.
-- **KF-031** The Pod Provider SHALL serve its kubelet API over TLS and SHALL
-  reject every request that does not authenticate with a client certificate
-  issued by the cluster's kubelet client certificate authority.
-- **KF-032** If a claimed pod's lease annotation is older than the
-  configured lease duration, then the Pod Provider SHALL delete that pod.
-
-The provider only has to support the pods this project creates, which is why
-KF-022 refuses everything else rather than approximating it. A MicroVM is a
-machine with its own root filesystem and kernel, not a sandbox around
-containers, so there is nowhere for a second container or a projected volume
-to go. KF-029 is the counterpart of HI-040: a job outlives a restart of
-every component between it and the cluster. KF-031 matters more than it
-looks, because the exec endpoint is a shell in every job on the Host.
-
-Pods on a Virtual Node have no cluster networking. Guests stay on the
-Host-local NAT'd bridge of `11-host-image.md`, which is all a CI job needs,
-and the address of KF-025 is informational.
+- **KF-020** (withdrawn) battery creates the MicroVMs of a Pool from the
+  Pool's spec, which the claim backend declares from the Profile (KF-150).
+  No pod stands for a MicroVM. It was implemented by `flr kubelet`, removed
+  in #101.
+- **KF-021** (withdrawn) The Runner takes a MicroVM's uid from its claim
+  (KF-151), not from labels. It was implemented by `flr kubelet`, removed in
+  #101.
+- **KF-022** (withdrawn) There is no MicroVM pod to refuse (KF-020). It was
+  implemented by `flr kubelet`, removed in #101.
+- **KF-023** (withdrawn) No pod names a cloud-init ConfigMap (KF-020). It
+  was implemented by `flr kubelet`, removed in #101.
+- **KF-024** (withdrawn) A claim is `Bound` only when battery has granted a
+  warm MicroVM to it (KF-150, battery-operator CL-002). It was implemented
+  by `flr kubelet`, removed in #101.
+- **KF-025** (withdrawn) The claim names the Host and the address of its
+  Exec Agent (KF-151). It was implemented by `flr kubelet`, removed in #101.
+- **KF-026** (withdrawn) battery-operator sets a claim `Expired` when battery
+  reports its MicroVM deleted (battery-operator CL-013), and the Scheduler
+  treats that as a lost Lease (KF-154). It was implemented by `flr kubelet`,
+  removed in #101.
+- **KF-027** (withdrawn) Deleting a claim releases its MicroVM to battery
+  (KF-153, battery-operator CL-020). It was implemented by `flr kubelet`,
+  removed in #101.
+- **KF-028** (withdrawn) battery-operator reconciles its claims with
+  battery's Leases when it starts (battery-operator CL-030). It was
+  implemented by `flr kubelet`, removed in #101.
+- **KF-029** (withdrawn) battery owns the MicroVMs, and the Exec Agent only
+  relays commands to them (battery-operator EA-020), so a restart of the
+  Exec Agent deletes none. It was implemented by `flr kubelet`, removed in
+  #101.
+- **KF-030** (withdrawn) battery-operator's Exec Agent relays each request
+  to `MicroVMExec.ExecCommand` (battery-operator EA-020), and the
+  `agent-exec` Guest Transport calls it (KF-185). It was implemented by
+  `flr kubelet`, removed in #101.
+- **KF-031** (withdrawn) battery-operator's Exec Agent serves its exec API
+  over TLS and authenticates every request with a TokenReview
+  (battery-operator EA-002, EA-010). It was implemented by `flr kubelet`,
+  removed in #101.
+- **KF-032** (withdrawn) battery expires a Lease that the Holder does not
+  renew, and the claim shows it (battery-operator CL-013, CL-032, KF-154).
+  It was implemented by `flr kubelet`, removed in #101.
 
 ## Pools {#kube-pools}
 
-- **KF-040** Where the Kubernetes pool backend is configured, the Scheduler
-  SHALL create or update one ReplicaSet per Profile in the Runner's
-  namespace, with the Pool size as its replica count and a pod template
-  derived from the Profile as KF-020 expects.
-- **KF-041** The Scheduler SHALL give every Pool pod a toleration for the
-  taint of KF-014 and a node selector built from the Profile's architecture
-  and Host selector and the label `gitlab-runner.flintlock.dev/virtual-node`.
-- **KF-042** The Scheduler SHALL give every Pool pod a topology spread
-  constraint over Virtual Nodes, so that a Pool's warm MicroVMs are spread
-  across Hosts.
-- **KF-043** The Scheduler SHALL label every Pool pod with the Runner name,
-  the Profile name and `gitlab-runner.flintlock.dev/state` set to `idle`,
-  and SHALL select the ReplicaSet's pods by all three.
-- **KF-044** When claiming from a Pool, the Scheduler SHALL choose a ready
-  idle pod of that Pool's current template and SHALL set its state label to
-  `claimed`, its lease annotation to the current time and its active
-  deadline to the Job timeout in one update conditioned on the pod's
-  resource version.
-- **KF-045** If the claim update is rejected because the pod changed, then
-  the Scheduler SHALL try another ready idle pod, and SHALL treat the Pool
-  as exhausted only when none is left.
-- **KF-046** The Scheduler SHALL return the claimed pod's name as the Lease
-  id and the pod's Virtual Node as the Placement.
-- **KF-047** When a Lease heartbeat is due, the Scheduler SHALL update the
-  pod's lease annotation.
-- **KF-048** When a Lease is released, the Scheduler SHALL delete the pod.
-- **KF-049** The Scheduler SHALL derive each Pool's available count from a
-  watch on the Pool's ready idle pods and SHALL wake Jobs waiting on an
-  exhausted Pool when that count rises.
-- **KF-050** When a Profile's pod template changes, the Scheduler SHALL
-  delete the idle pods of the previous template at no more than the
-  configured rate and SHALL NOT delete or modify a claimed pod.
-- **KF-051** When a Profile is removed by a configuration reload, the
-  Scheduler SHALL NOT delete its ReplicaSet and SHALL log that the Pool is
-  no longer referenced.
-- **KF-052** The Kubernetes pool backend SHALL implement the same
-  `poolmgr.Client` interface as the battery client, so that the Scheduler's
-  requirements in `03-scheduler.md` hold unchanged over either.
-
-Changing the state label takes the pod out of the ReplicaSet's selector. The
-ReplicaSet controller sees one pod too few and creates a replacement
-immediately, which is battery's immediate-on-lease replenishment with no
-code. The resource version makes the claim atomic: of two Runners racing for
-one pod exactly one update succeeds. The active deadline is the backstop for
-a Runner that dies without releasing, and KF-032 is the prompt path for the
-same failure.
+- **KF-040** (withdrawn) The claim backend declares one `Pool` resource per
+  Profile (KF-150, battery-operator PO-001). It was implemented by
+  `internal/poolmgr/kube`, removed in #101.
+- **KF-041** (withdrawn) The claim backend gives each Pool a node selector
+  from the Profile's architecture and Host selector, and battery-operator
+  places the Pool on the matching Hosts (battery-operator PO-010). It was
+  implemented by `internal/poolmgr/kube`, removed in #101.
+- **KF-042** (withdrawn) battery spreads a Pool's MicroVMs over the Pool's
+  Hosts. It was implemented by `internal/poolmgr/kube`, removed in #101.
+- **KF-043** (withdrawn) There are no Pool pods to label (KF-040). It was
+  implemented by `internal/poolmgr/kube`, removed in #101.
+- **KF-044** (withdrawn) The Scheduler claims a MicroVM with a
+  `MicroVMClaim` (KF-150), and battery grants each MicroVM to one claim
+  only. It was implemented by `internal/poolmgr/kube`, removed in #101.
+- **KF-045** (withdrawn) battery-operator retries a claim on an exhausted
+  Pool (battery-operator CL-003), and the Scheduler waits as SC-021 requires
+  (KF-155). It was implemented by `internal/poolmgr/kube`, removed in #101.
+- **KF-046** (withdrawn) The Lease id and the Host come from the Bound claim
+  (KF-151). It was implemented by `internal/poolmgr/kube`, removed in #101.
+- **KF-047** (withdrawn) The Scheduler renews a claim's Lease through its
+  `spec.renewTime` (KF-152). It was implemented by `internal/poolmgr/kube`,
+  removed in #101.
+- **KF-048** (withdrawn) The Scheduler deletes the claim when a Job ends
+  (KF-153). It was implemented by `internal/poolmgr/kube`, removed in #101.
+- **KF-049** (withdrawn) The claim backend takes each Pool's available count
+  from a watch on its `Pool` resources (battery-operator PO-020). It was
+  implemented by `internal/poolmgr/kube`, removed in #101.
+- **KF-050** (withdrawn) battery-operator sends a changed Pool spec to
+  battery (battery-operator PO-002), and battery replaces the Pool's
+  MicroVMs. It was implemented by `internal/poolmgr/kube`, removed in #101.
+- **KF-051** (withdrawn) The claim backend deletes no Pool on a
+  configuration reload; the Scheduler's rules for a removed Profile apply to
+  it unchanged (KF-156). It was implemented by `internal/poolmgr/kube`,
+  removed in #101.
+- **KF-052** (withdrawn) The claim backend implements the `poolmgr.Client`
+  interface (KF-156). It was implemented by `internal/poolmgr/kube`, removed
+  in #101.
 
 ## Allocation {#kube-allocation}
 
-- **KF-126** Where the Kubernetes pool backend is configured, the Scheduler
-  SHALL record the claimed pod's Virtual Node as the Placement without
+- **KF-126** Where the claim backend is configured, the Scheduler SHALL
+  record the Host that the Bound claim names as the Placement without
   looking it up in the Inventory, and SC-034 SHALL NOT apply.
-- **KF-127** When claiming for a Job, the Scheduler SHALL pass the Job's own
-  timeout to the Kubernetes pool backend, and the backend SHALL set the
-  active deadline of KF-044 to that timeout plus the configured cleanup
-  margin, using its configured default only for a Job that has none.
-- **KF-128** Where the Kubernetes pool backend is configured, the Executor
-  SHALL use the `kube-exec` Guest Transport for every Profile, and the
-  Runner SHALL reject a configuration that names any other Guest Transport.
+- **KF-127** (withdrawn) A claim has no active deadline: battery expires a
+  Lease that is not renewed, and the Scheduler renews it while the Job runs
+  (KF-152). It was implemented by `internal/scheduler` and
+  `internal/poolmgr/kube`, removed in #101.
+- **KF-128** (withdrawn) Under the claim backend the Executor runs every
+  Profile over the `agent-exec` Guest Transport (KF-185), and the Runner
+  refuses a Profile that names `ssh` (KF-195). It was implemented by
+  `internal/config` and `internal/executor`, removed in #101.
 
 A cluster fleet has no Inventory, so SC-034, which fails an allocation whose
 Host the Inventory does not know, would fail every one; KF-126 takes its
-place. The Virtual Node is enough to run the Job, because `kube-exec` reaches
-the guest through the pod and KF-062 finds the Host Services on the Virtual
-Node. KF-127 matters because the active deadline ends the pod: a Job that is
-allowed three hours must not have its MicroVM deleted at the two-hour
-default. The margin is there because the deadline must outlast the Job, not
-equal it: the claim is made before the Job's own clock starts, and a Job
-that times out still runs its `after_script` and uploads its failure
-artifacts in the same MicroVM.
+place. KF-151 already takes the Host from the claim and from nothing else.
+KF-126 says what that means for SC-034. It first said the same of the
+Virtual Node of a claimed pod.
 
 ## Guest Transport {#kube-exec-transport}
 
-- **KF-060** Where the `kube-exec` Guest Transport is configured, the
-  Executor SHALL run each Stage by opening the exec subresource of the
-  claimed pod through the Kubernetes API, with the Stage script on standard
-  input.
-- **KF-061** The `kube-exec` Guest Transport SHALL meet every requirement
-  that `02-executor.md` places on the `exec` Guest Transport for output
-  streaming, exit status, cancellation and timeouts.
-- **KF-062** The Executor SHALL read the Host Service addresses for a Job
-  from the annotations of the Virtual Node named in the Placement.
-- **KF-063** Where the `kube-exec` Guest Transport is configured, the Runner
-  SHALL NOT open any connection to a Host.
+- **KF-060** (withdrawn) The Executor runs each Stage through the Exec Agent
+  of the claim's Host (KF-185). It was implemented by the `kube-exec` Guest
+  Transport, removed in #101.
+- **KF-061** (withdrawn) The `agent-exec` Guest Transport meets the
+  requirements of the `exec` Guest Transport (KF-188). It was implemented by
+  the `kube-exec` Guest Transport, removed in #101.
+- **KF-062** (withdrawn) The Executor reads the Host Service addresses from
+  the Node of the Job's Host (KF-189). It was implemented by
+  `internal/executor`, removed in #101.
+- **KF-063** Where the claim backend is configured, the Runner SHALL read no
+  Inventory and SHALL open no connection to a `flintlockd`.
 
-With this transport the Runner needs no Inventory, no Host certificates and
-no route to the Hosts: its only dependency is the API server. Job output
-passes through the API server and the Pod Provider's kubelet endpoint, the
-same path the GitLab Kubernetes executor uses.
+KF-063 first said that the Runner of the `kube-exec` Guest Transport opens
+no connection to a Host. The claim design keeps the point: the Runner has no
+Inventory, no Host certificates and no route to any `flintlockd`. It
+reaches only the Exec Agent that each claim names, on the Host's internal
+address.
 
 ## Host Agent {#cluster-host-agent}
 
@@ -290,9 +247,9 @@ them, publishes where they are (KF-194), for the Executor to read
 nothing that reads them changes. An admission policy lets the Host Agent's
 identity change only these annotations, and only on its own Host's Node.
 
-Pre-pulling Profile images needs no requirement of its own any more: a Pool
-pod on every Host pulls its root filesystem and kernel images when it is
-created, and KF-042 puts one there.
+Pre-pulling Profile images needs no requirement of its own: battery creates
+a Pool's warm MicroVMs on its Hosts before any claim, and `flintlockd`
+pulls their images then.
 
 ## Runner {#cluster-runner}
 
@@ -306,54 +263,39 @@ created, and KF-042 puts one there.
 
 ## Drain {#cluster-drain}
 
-- **KF-090** When the Host's Node becomes unschedulable, the Pod Provider
-  SHALL mark the Virtual Node unschedulable and SHALL delete the idle pods
-  bound to it, so that their ReplicaSets replace them on other Hosts.
-- **KF-091** While a claimed pod is bound to the Virtual Node, the Pod
-  Provider SHALL prevent an eviction-based drain of the Host's Node from
-  completing.
-- **KF-092** When no claimed pod remains on an unschedulable Host, the Pod
-  Provider SHALL let the drain of the Host's Node complete.
-- **KF-093** If the configured drain timeout elapses while claimed pods
-  remain, then the Pod Provider SHALL let the drain complete and SHALL log
-  each pod it abandoned.
-- **KF-094** When the Host's Node becomes schedulable again, the Pod
-  Provider SHALL mark the Virtual Node schedulable.
-
-Draining a Host's Node does not touch the pods of its Virtual Node, which is
-a different Node object, so something has to tie the two together. The
-expected mechanism for KF-091 is a guard pod that the Pod Provider keeps on
-the Host's own Node while claimed pods exist, covered by a
-PodDisruptionBudget that allows no disruption; a drain cannot finish while
-it is there. Cordoning is the trigger because a MachineDeployment rollout or
-scale-down, a MachineHealthCheck remediation and an operator's
-`kubectl drain` all begin with it. Cluster API's pre-drain hook would do the
-same, but Machines live in the management cluster and the Pod Provider
-would need credentials for it.
+- **KF-090** (withdrawn) battery-operator's Inventory Controller removes a
+  cordoned Host from battery's Hosts (battery-operator IN-002), and battery
+  puts no new MicroVM there. It was implemented by `flr kubelet`, removed in
+  #101.
+- **KF-091** (withdrawn) battery-operator's Exec Agent holds a drain of its
+  Host's Node open while claims are Bound on the Host (battery-operator
+  EA-040, EA-041). It was implemented by `flr kubelet`, removed in #101.
+- **KF-092** (withdrawn) battery-operator's Exec Agent lets the drain
+  complete when no claim remains (battery-operator EA-040). It was
+  implemented by `flr kubelet`, removed in #101.
+- **KF-093** (withdrawn) battery-operator's Exec Agent lets the drain
+  complete when its drain timeout elapses (battery-operator EA-040). It was
+  implemented by `flr kubelet`, removed in #101.
+- **KF-094** (withdrawn) battery-operator's Inventory Controller gives the
+  Host back to battery when its Node is schedulable again (battery-operator
+  IN-001). It was implemented by `flr kubelet`, removed in #101.
 
 ## Verification {#cluster-verification}
 
-- **KF-100** Where the Kubernetes pool backend is configured, the
-  verification command SHALL create one verification pod bound by name to
-  each ready Virtual Node, run a trivial command in it through the
-  `kube-exec` Guest Transport, report the time from creation to readiness
-  per Host and delete the pod.
-- **KF-101** The verification command SHALL perform the Host Service checks
-  of FL-109 from inside each verification pod.
-- **KF-102** If a Virtual Node is not ready or its verification pod does not
-  become ready within the verification timeout, then the verification
-  command SHALL exit with a non-zero status naming the Host and the
-  reason.
+- **KF-100** (withdrawn) Verification of a cluster fleet is not yet
+  specified for the claim design. It was never implemented.
+- **KF-101** (withdrawn) See KF-100. It was never implemented.
+- **KF-102** (withdrawn) See KF-100. It was never implemented.
 
 ## Least privilege {#cluster-least-privilege}
 
-- **KF-110** The Runner SHALL operate with a Role in its own namespace
-  limited to managing ReplicaSets, reading, updating and deleting pods and
-  creating pod exec sessions, and with read access to Nodes.
-- **KF-111** The Pod Provider SHALL operate with permissions limited to its
-  own Virtual Node and node lease, the pods bound to that Virtual Node, the
-  ConfigMaps those pods name, reading its Host's Node and managing its guard
-  pod.
+- **KF-110** (withdrawn) KF-196 gives the Runner of the claim design its
+  permissions. It was implemented by `deploy/runner/role.yaml`, removed in
+  #101.
+- **KF-111** (withdrawn) battery-operator's Manifests grant its Exec Agent
+  its permissions, and its admission policy narrows them to its own Host
+  (battery-operator EA-051, EA-053, EA-067). It was implemented by
+  `flr kubelet` and `deploy/host-agent/rbac.yaml`, removed in #101.
 - **KF-112** The Fleet Manifests SHALL NOT grant any workload an AWS
   permission.
 - **KF-113** The Host Agent SHALL hold only the privileges it needs to bind
@@ -378,21 +320,24 @@ token with a TokenReview, which asks nothing of the Holder.
 
 ## Hardening {#cluster-hardening}
 
-- **KF-130** The Pod Provider SHALL authorize every kubelet API request with
-  a SubjectAccessReview of the requesting identity for the `nodes/proxy`
-  resource on its Virtual Node and the verb the request maps to, and SHALL
-  refuse the request unless the review allows it.
-- **KF-131** If the SubjectAccessReview of a request cannot be completed,
-  then the Pod Provider SHALL refuse the request.
-- **KF-132** The Fleet Manifests SHALL grant the Pod Provider permission to
-  create SubjectAccessReviews in addition to the permissions of KF-111.
-- **KF-133** The Fleet Manifests SHALL include a ValidatingAdmissionPolicy
-  that rejects any request by a Pod Provider to create, update, patch or
-  delete a Node other than its own Virtual Node, or a pod that is neither
-  bound to its own Virtual Node nor its own guard pod.
-- **KF-134** The Fleet Manifests SHALL give each Pod Provider an identity
-  that names its Host, so that the policy of KF-133 can tell one Host's Pod
-  Provider from another's.
+- **KF-130** (withdrawn) battery-operator's Exec Agent runs a command only
+  with a claim token of a Bound claim for that MicroVM (battery-operator
+  EA-010 to EA-013). There is no kubelet API to authorize. It was
+  implemented by `flr kubelet`, removed in #101.
+- **KF-131** (withdrawn) battery-operator's Exec Agent refuses a request
+  whose TokenReview or claim lookup cannot be completed (battery-operator
+  EA-014). It was implemented by `flr kubelet`, removed in #101.
+- **KF-132** (withdrawn) Nothing in the Fleet Manifests makes a
+  SubjectAccessReview any more (KF-130). It was implemented by
+  `deploy/host-agent/rbac.yaml`, removed in #101.
+- **KF-133** (withdrawn) battery-operator's Manifests include the admission
+  policy of its Exec Agent (battery-operator EA-051, EA-053), and the Host
+  Agent has one of its own for KF-194. It was implemented by
+  `deploy/host-agent/admission-policy.yaml`, removed in #101.
+- **KF-134** (withdrawn) battery-operator's Exec Agent confirms that its
+  identity names its own Host (battery-operator EA-050). It was implemented
+  by `flr kubelet` and `deploy/host-agent/admission-policy.yaml`, removed in
+  #101.
 - **KF-135** (withdrawn) No container of the Host Agent reaches
   `flintlockd` any more: battery-operator's Exec Agent does, from a
   DaemonSet of its own and over mutual TLS (battery-operator EA-001,
@@ -404,21 +349,6 @@ token with a TokenReview, which asks nothing of the Holder.
 - **KF-139** The Fleet Manifests SHALL run the `buildkitd` container of the
   Host Agent in the `container_engine_t` SELinux domain, and SHALL NOT name a
   domain for any other container.
-
-KF-031 checks who a client is; KF-130 checks what that client may do, as a
-real kubelet does. Without it any certificate from the kubelet client
-certificate authority, which in most clusters is the cluster's own, opens a
-shell in every Job on the Host.
-
-Kubernetes RBAC cannot express "only the pods bound to this node", so the
-Role behind KF-111 is necessarily cluster-wide and KF-111 is met by the code
-rather than by the grant. KF-133 moves that boundary into the API server,
-where a compromised Host can no longer cross it. The expected mechanism is a
-bound ServiceAccount token, whose user information carries the name of the
-node the Host Agent pod runs on
-(`authentication.kubernetes.io/node-name`), compared in the policy with the
-object's node; the Virtual Node's name is that node's name with the
-`-microvms` suffix of KF-010.
 
 KF-139 is the one exception to the container domain HI-066 assigns.
 Rootless `buildkitd` runs every `RUN` step of a Job's image build as a
@@ -446,31 +376,28 @@ it is not the threat this addresses.
 
 ## Test doubles {#cluster-test-doubles}
 
-- **KF-120** The Pod Provider SHALL be tested against a Kubernetes API
-  server test environment and the fake Host, with no kubelet, no KVM and no
-  AWS.
-- **KF-121** The Kubernetes pool backend SHALL be tested against a
-  Kubernetes API server test environment, with a test reconciler standing in
-  for the ReplicaSet controller where no controller manager runs.
-- **KF-122** The harness SHALL run every scenario of TD-051 over the
-  Kubernetes pool backend, the `kube-exec` Guest Transport, the Pod Provider
-  and the fake Host.
-- **KF-123** The harness SHALL include a scenario in which two Runners claim
-  from a Pool of one, and SHALL assert that exactly one obtains the pod.
-- **KF-124** The harness SHALL include a scenario in which a Host's Node is
-  cordoned while it runs a Job, and SHALL assert that the Job finishes, that
-  the idle pods leave the Host and that the drain completes afterwards.
-- **KF-125** The harness SHALL include a scenario in which the Pod Provider
-  restarts while a Job runs, and SHALL assert that the Job's MicroVM is
-  adopted and the Job finishes.
-- **KF-136** The Pod Provider's authorization SHALL be tested against a
-  Kubernetes API server test environment with one client identity that the
-  review allows and one that it refuses, and SHALL be shown to run nothing
-  for the second.
-- **KF-137** The Fleet Manifests SHALL include a test, run against a
-  Kubernetes API server test environment, in which the policy of KF-133
-  admits a Pod Provider's change to its own Host's Virtual Node and pods and
-  refuses the same change to another Host's.
+- **KF-120** (withdrawn) The `agent-exec` Guest Transport is tested against
+  a test double of battery-operator's Exec Agent (KF-190). Its tests were in
+  `internal/kubelet`, removed in #101.
+- **KF-121** (withdrawn) The claim backend is tested against a fake battery
+  that serves the claim resources (KF-191). Its tests were in
+  `internal/poolmgr/kube`, removed in #101.
+- **KF-122** (withdrawn) The harness runs every scenario of TD-051 over the
+  claim stack (KF-192). It was never implemented.
+- **KF-123** (withdrawn) battery, not the Runner, decides which claim gets a
+  MicroVM, and battery-operator's tests cover it (battery-operator TD-026).
+  Its tests were in `internal/poolmgr/kube`, removed in #101.
+- **KF-124** (withdrawn) battery-operator's tests cover the drain guard of
+  its Exec Agent (battery-operator EA-040, TD-025). Its tests were in
+  `internal/kubelet`, removed in #101.
+- **KF-125** (withdrawn) The harness restarts the Exec Agent while a Stage
+  runs (KF-193). Its tests were in `internal/kubelet`, removed in #101.
+- **KF-136** (withdrawn) battery-operator's e2e suite tests the TokenReview
+  of its Exec Agent (battery-operator TD-025). Its tests were in
+  `internal/kubelet`, removed in #101.
+- **KF-137** (withdrawn) battery-operator's e2e suite tests its admission
+  policies (battery-operator TD-025). Its tests were in `internal/kubelet`,
+  removed in #101.
 
 ## Battery claim resources {#battery-claims}
 
@@ -706,30 +633,30 @@ This section is not normative.
 
 | Elsewhere | Cluster fleet |
 |-----------|---------------|
-| Pool declaration, PL-010 to PL-017 | ReplicaSets, KF-040 to KF-043, KF-050, KF-051 |
-| Claim, heartbeat, release and lease expiry in `04-pool-manager.md` | KF-044 to KF-048, KF-032 |
-| Pool availability and events in `04-pool-manager.md` | pod watch, KF-049 |
-| Placement resolution in `03-scheduler.md`, SC-034 | the claimed pod's Virtual Node, KF-046, KF-126 |
-| Host client and Inventory, `05-hosts.md` | none; the Runner reaches no Host, KF-063 |
-| `exec` Guest Transport in `02-executor.md` | `kube-exec`, KF-060, KF-061 |
-| Discovery, FL-001 to FL-006, FL-116 | the Virtual Nodes |
-| KVM check, FL-117 | HI-011, KF-016 |
+| Pool declaration, PL-010 to PL-017 | `Pool` resources, KF-150, KF-156 |
+| Claim, heartbeat, release and lease expiry in `04-pool-manager.md` | `MicroVMClaim` resources, KF-150 to KF-155 |
+| Pool availability and events in `04-pool-manager.md` | a watch on the `Pool` resources, KF-155 |
+| Placement resolution in `03-scheduler.md`, SC-034 | the Host the Bound claim names, KF-151, KF-126 |
+| Host client and Inventory, `05-hosts.md` | none; the Runner reaches only the Exec Agents, KF-063 |
+| `exec` Guest Transport in `02-executor.md` | `agent-exec`, KF-185 to KF-188 |
+| Discovery, FL-001 to FL-006, FL-116 | battery-operator's Inventory Controller |
+| KVM check, FL-117 | HI-011, battery-operator's Exec Agent |
 | Remote execution, FL-010 to FL-014 | none; nothing is pushed to a Host |
 | Host provisioning, FL-020 to FL-027, FL-029, FL-030 | Host Image, `11-host-image.md` |
-| Pre-pull, FL-028 | Pool pods pull their own images |
+| Pre-pull, FL-028 | battery's warm MicroVMs pull their own images |
 | Host networking, FL-040 to FL-046 | HI-030 to HI-037 |
-| Pool Manager install, FL-051 to FL-055 | none; there is no Pool Manager daemon |
-| Inventory, FL-060 to FL-064 | none; Virtual Nodes carry capacity, KF-012 |
-| Verification, FL-070 to FL-073, FL-109 | KF-100 to KF-102 |
-| Drain, FL-080, FL-084 | KF-090 to KF-094 |
+| Pool Manager install, FL-051 to FL-055 | battery-operator's Manifests |
+| Inventory, FL-060 to FL-064 | none; battery-operator's Inventory Controller gives battery its Hosts |
+| Verification, FL-070 to FL-073, FL-109 | not yet specified for the claim design |
+| Drain, FL-080, FL-084 | battery-operator's Exec Agent and Inventory Controller |
 | Teardown, FL-081 to FL-083 | deleting the manifests and the MachineDeployment |
 | Launch template mode, FL-090 to FL-092 | the MachineDeployment, KF-001 to KF-005 |
 | Host services, FL-100 to FL-115 | KF-070 to KF-076, KF-194, HI-036 |
 | Certificate authority and Host mutual TLS, SE-023, FL-024 | battery-operator's Host certificates, its EA-060 to EA-068 |
-| IAM policy, SE-040 to SE-042 | KF-110 to KF-112 |
+| IAM policy, SE-040 to SE-042 | KF-112, KF-196 |
 
-No existing requirement is withdrawn by this document. Once a cluster fleet
-has passed the hardware tier, the battery client, the Host client, push
-provisioning and their requirements can be retired together, in the change
-that deletes the code, because a withdrawn requirement cannot keep its
-citations.
+This document withdraws no requirement of another document. Once a cluster
+fleet has passed the hardware tier, the battery client, the Host client,
+push provisioning and their requirements can be retired together, in the
+change that deletes the code, because a withdrawn requirement cannot keep
+its citations.

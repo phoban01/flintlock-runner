@@ -202,18 +202,16 @@ type Volume struct {
 // TransportKind names a Guest Transport implementation (EX-042).
 type TransportKind string
 
-// The Guest Transport implementations. Exec is the default, and kube-exec
-// the default and only choice with the Kubernetes pool backend (KF-128).
+// The Guest Transport implementations. Exec is the default, and the only
+// choice with the claim pool backend (KF-195).
 const (
-	TransportExec     TransportKind = "exec"
-	TransportSSH      TransportKind = "ssh"
-	TransportKubeExec TransportKind = "kube-exec"
+	TransportExec TransportKind = "exec"
+	TransportSSH  TransportKind = "ssh"
 )
 
 // Transport is a Profile's Guest Transport selection (EX-042).
 type Transport struct {
-	// Kind is exec or ssh; default exec. With the Kubernetes pool backend
-	// it is kube-exec, which is also its default there (KF-128).
+	// Kind is exec or ssh; default exec.
 	Kind TransportKind `yaml:"kind"`
 	// SSH is read only when Kind is ssh.
 	SSH SSHTransport `yaml:"ssh,omitempty"`
@@ -345,32 +343,25 @@ type InstalledVersions struct {
 type PoolBackend string
 
 // Pool backends. An empty backend means PoolBackendBattery, so that every
-// configuration written before the Kubernetes pool backend existed keeps its
+// configuration written before the backend selector existed keeps its
 // meaning.
 const (
 	// PoolBackendBattery is the battery Pool Manager over gRPC
 	// (04-pool-manager.md).
 	PoolBackendBattery PoolBackend = "battery"
-	// PoolBackendKubernetes keeps each Pool as a ReplicaSet of idle MicroVM
-	// pods (12-cluster-fleet.md, KF-040 to KF-052).
-	PoolBackendKubernetes PoolBackend = "kubernetes"
 	// PoolBackendClaim claims each MicroVM with a battery-operator
 	// MicroVMClaim (12-cluster-fleet.md, KF-150 to KF-156).
 	PoolBackendClaim PoolBackend = "claim"
 )
 
 // PoolManager is the Pool Manager section (CF-040). The endpoint is required
-// (CF-041) unless the Kubernetes or the claim pool backend is selected.
+// (CF-041) unless the claim pool backend is selected.
 type PoolManager struct {
 	// Backend selects the Pool backend; empty means battery. With the
-	// Kubernetes backend the endpoint and the TLS settings are unused and
-	// the Inventory may be empty, because the Runner reaches no Host
-	// (KF-063). With the claim backend they are unused too: the claim names
-	// the Host, and the Runner reaches only its Exec Agent (KF-151).
+	// claim backend the endpoint and the TLS settings are unused and the
+	// Inventory is empty: the claim names the Host, and the Runner reaches
+	// only its Exec Agent (KF-063, KF-151).
 	Backend PoolBackend `yaml:"backend,omitempty"`
-	// Kubernetes configures the Kubernetes pool backend. It is read only
-	// where Backend selects it.
-	Kubernetes *KubernetesPools `yaml:"kubernetes,omitempty"`
 	// Claim configures the claim pool backend. It is read only where
 	// Backend selects it.
 	Claim *ClaimPools `yaml:"claim,omitempty"`
@@ -397,9 +388,6 @@ type PoolManager struct {
 	// ReleaseRetryLimit bounds ReleaseVM retries (PL-043, SC-051).
 	ReleaseRetryLimit int `yaml:"release_retry_limit"`
 }
-
-// IsKubernetes reports whether the Kubernetes pool backend is selected.
-func (pm PoolManager) IsKubernetes() bool { return pm.Backend == PoolBackendKubernetes }
 
 // IsClaim reports whether the claim pool backend is selected.
 func (pm PoolManager) IsClaim() bool { return pm.Backend == PoolBackendClaim }
@@ -442,34 +430,6 @@ type ServingCAConfigMap struct {
 	// Key is the ConfigMap key that holds the PEM certificates. Default
 	// serving-ca.crt.
 	Key string `yaml:"key,omitempty"`
-}
-
-// KubernetesPools configures the Kubernetes pool backend (KF-040 to KF-052).
-type KubernetesPools struct {
-	// Kubeconfig is the path of a kubeconfig file. Empty means the
-	// in-cluster configuration of the Runner's own pod (KF-080).
-	Kubeconfig string `yaml:"kubeconfig,omitempty"`
-	// Context selects a context of the kubeconfig file; empty means its
-	// current context. It needs Kubeconfig.
-	Context string `yaml:"context,omitempty"`
-	// Namespace is the Kubernetes namespace the Runner keeps its ReplicaSets
-	// and pods in (KF-040). Empty means the namespace of the Runner's own
-	// pod in cluster, and the Runner namespace (CF-051) otherwise.
-	Namespace string `yaml:"namespace,omitempty"`
-	// JobTimeout is the active deadline set on a claimed pod when the claim
-	// does not carry the Job's own timeout (KF-044).
-	JobTimeout time.Duration `yaml:"job_timeout"`
-	// CleanupMargin is added to the Job's own timeout to make the claimed
-	// pod's active deadline, so that the MicroVM outlasts the Job (KF-127).
-	CleanupMargin time.Duration `yaml:"cleanup_margin"`
-	// RolloutInterval is the least time between two deletions of idle pods
-	// of a previous template, per Pool (KF-050).
-	RolloutInterval time.Duration `yaml:"rollout_interval"`
-	// CloudInitConfigMaps names, per Profile, the ConfigMap that holds the
-	// cloud-init user data of that Profile's MicroVMs (KF-023). The Runner's
-	// Role does not let it write ConfigMaps (KF-110), so they are supplied
-	// alongside the Fleet Manifests.
-	CloudInitConfigMaps map[string]string `yaml:"cloud_init_config_maps,omitempty"`
 }
 
 // Scheduler is the Scheduler section (CF-050).
