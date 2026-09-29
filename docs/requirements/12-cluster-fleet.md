@@ -521,19 +521,31 @@ and deletes it.
 - **KF-202** The Scheduler SHALL abort a Job under KF-201 no later than the
   Host unhealthy threshold times the sum of the Host health interval and
   the Host call deadline after the claim's Exec Agent stops answering.
+- **KF-203** If a claim that a Job holds has the condition `HostReady`
+  false, then the Scheduler SHALL abort the Job with the failure reason
+  `runner_system_failure` and delete the claim.
+- **KF-204** When the Scheduler aborts a Job under KF-203, the Scheduler
+  SHALL name the reason and the message of the claim's `HostReady`
+  condition in the Job's failure.
+- **KF-205** The Scheduler SHALL abort a Job under KF-203 no later than the
+  heartbeat interval of the claim's Pool plus the Pool Manager call
+  deadline after the claim's condition `HostReady` becomes false.
 
 These requirements take the place of SC-040 to SC-043 for a claim. The
 Runner of the claim design has no Inventory and reaches no `flintlockd`
 (KF-063), so it cannot probe Hosts. Without them, a Job whose Host goes bad
 fails only when its own timeout runs out, as `job_execution_timeout`.
 
-The Runner learns of a fault on a claim's Host in two ways:
+The Runner learns of a fault on a claim's Host in three ways:
 
 - A claim that goes `Expired`, or is deleted, ends the Job through KF-154
   at the next heartbeat.
 - The Exec Agent stops answering for the claim's MicroVM: the Host is
   down or cut off, `flintlockd` hangs, or the MicroVM is gone. KF-200 to
   KF-202 cover this.
+- battery-operator reports the claim's Host not ready while `flintlockd`
+  still answers, such as when its KVM device or thin pool has gone.
+  KF-203 to KF-205 cover this.
 
 battery-operator's Exec Agent names `GetMicroVM` as a client's liveness
 probe. It relays the call to the Host's `flintlockd` for the claim's
@@ -546,14 +558,19 @@ With the defaults, a threshold of 3, an interval of 10 seconds and a
 deadline of 10 seconds, a Job fails within 60 seconds of its Exec Agent
 going quiet.
 
-battery-operator does not mark a claim when its Host goes not ready. The
-Exec Agent reports the Host not ready on its Node, and the Inventory
-Controller then stops placing MicroVMs there, but a claim already Bound on
-the Host stays `Bound` (battery-operator#186). The Runner does not watch
-Nodes for it: that needs permissions beyond KF-196, and the probe already
-catches the faults that stop a Job. It misses only a Host that reports
-itself not ready while `flintlockd` still answers, such as one whose KVM
-device or thin pool has gone. A Job that is running there may still finish.
+battery-operator's Exec Agent reports its Host's readiness on its Node.
+The Claim Controller copies it to each Bound claim on that Host as the
+condition `HostReady`, and the claim stays `Bound` (battery-operator
+CL-050 to CL-053). The Runner reads the condition from the claim, so it
+needs no permission on Nodes beyond KF-196. The claim backend reads the
+claim at each heartbeat (KF-154), and battery-operator's Client Library
+reads it at each renewal (its CC-013). When either finds `HostReady`
+false, the heartbeat reports the Lease as lost with the condition's reason
+and message, and the claim backend deletes the claim. The Scheduler then
+aborts the Job as SC-061 requires, and the failure quotes that report.
+The Runner does not wait to see whether the Host becomes ready again. A
+claim with no `HostReady` condition, from a battery-operator older than
+the condition, never aborts a Job this way.
 
 ## Inventory {#battery-inventory}
 

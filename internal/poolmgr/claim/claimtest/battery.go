@@ -52,9 +52,10 @@ type MicroVMs interface {
 // claim from a warm MicroVM, or leaves it Pending with the reason
 // PoolExhausted when the Pool has none, or PoolNotFound when there is no
 // Pool. It extends a Bound claim's Lease each time the Holder renews it, and
-// expires a claim whose Lease lapses. A claimed MicroVM is deleted when its
-// claim is deleted or expires, and a new warm one takes its place, as
-// battery's replenishment does.
+// expires a claim whose Lease lapses. It sets each Bound claim's HostReady
+// condition from its Host, which is ready until a test says otherwise. A
+// claimed MicroVM is deleted when its claim is deleted or expires, and a
+// new warm one takes its place, as battery's replenishment does.
 //
 // It adds no finalizer to a claim, so a deleted claim is gone at once. It
 // runs no hook and never quarantines.
@@ -69,10 +70,13 @@ type Battery struct {
 	expire map[string]bool
 	// keep names the expiring claims whose MicroVMs stay until the claim
 	// is deleted (ExpireKeepingMicroVM).
-	keep    map[string]bool
-	nextID  int
-	onHost  map[int]int
-	pending map[string]string
+	keep map[string]bool
+	// notReady holds the HostReady condition of each Host a test reported
+	// not ready (SetHostNotReady), by Node name.
+	notReady map[string]metav1.Condition
+	nextID   int
+	onHost   map[int]int
+	pending  map[string]string
 }
 
 // fakePool is one Pool's MicroVMs.
@@ -104,6 +108,7 @@ func NewBattery(c client.Client, namespace string, hosts ...Host) *Battery {
 		held:      map[types.UID]heldVM{},
 		expire:    map[string]bool{},
 		keep:      map[string]bool{},
+		notReady:  map[string]metav1.Condition{},
 		onHost:    map[int]int{},
 		pending:   map[string]string{},
 	}
@@ -143,6 +148,29 @@ func (f *Battery) ExpireKeepingMicroVM(name string) {
 	defer f.mu.Unlock()
 	f.expire[name] = true
 	f.keep[name] = true
+}
+
+// SetHostNotReady reports the Host on the named Node as not ready, with
+// the reason and message of its Node report, as battery-operator's Exec
+// Agent does when KVM or the thin pool has gone. From the next reconcile,
+// every Bound claim on that Host carries the condition HostReady false
+// with that reason and message, and stays Bound, as battery-operator's
+// Claim Controller does. The Host's flintlockd and its Exec Agent go on
+// answering. SetHostReady undoes it.
+func (f *Battery) SetHostNotReady(node, reason, message string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.notReady[node] = metav1.Condition{
+		Type: batteryv1alpha1.ConditionHostReady, Status: metav1.ConditionFalse,
+		Reason: reason, Message: message,
+	}
+}
+
+// SetHostReady reports the Host on the named Node as ready again.
+func (f *Battery) SetHostReady(node string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	delete(f.notReady, node)
 }
 
 // Pending reports the reasons the fake has given for leaving claims
@@ -222,6 +250,28 @@ func (f *Battery) reconcileClaim(ctx context.Context, cl *batteryv1alpha1.MicroV
 		}
 	case batteryv1alpha1.MicroVMClaimBound:
 		f.renew(ctx, cl)
+		if cl.Status.Phase == batteryv1alpha1.MicroVMClaimBound {
+			f.markHost(ctx, cl)
+		}
+	}
+}
+
+// markHost sets a Bound claim's HostReady condition from the readiness of
+// its Host: false with the reason and message SetHostNotReady gave, and
+// true otherwise. It writes the claim only when the condition changes.
+func (f *Battery) markHost(ctx context.Context, cl *batteryv1alpha1.MicroVMClaim) {
+	if cl.Status.Host == nil {
+		return
+	}
+	cond, ok := f.notReady[cl.Status.Host.NodeName]
+	if !ok {
+		cond = metav1.Condition{
+			Type: batteryv1alpha1.ConditionHostReady, Status: metav1.ConditionTrue,
+			Reason: "Ready", Message: "the host is ready",
+		}
+	}
+	if meta.SetStatusCondition(&cl.Status.Conditions, cond) {
+		_ = f.c.Status().Update(ctx, cl)
 	}
 }
 
