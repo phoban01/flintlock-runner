@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/netip"
 	"os"
@@ -29,15 +30,22 @@ const followRunLoopMaxInterval = 2 * time.Second
 // gitlab-runner keeps its metrics listener in a local variable and logs the
 // address it was given, not the address it bound. The process's own file
 // descriptors are the only place that shows the bound port. /dev/fd lists
-// them on Linux and on macOS.
+// them on Linux and on macOS. Only the names are read: on macOS the listing
+// includes the descriptor that reads it, which is closed by the time a stat
+// of each entry would reach it, so os.ReadDir fails there (#114).
 func loopbackListeners() (map[netip.AddrPort]bool, error) {
-	entries, err := os.ReadDir("/dev/fd")
+	dir, err := os.Open("/dev/fd")
+	if err != nil {
+		return nil, fmt.Errorf("listing the process's file descriptors: %w", err)
+	}
+	names, err := dir.Readdirnames(-1)
+	_ = dir.Close()
 	if err != nil {
 		return nil, fmt.Errorf("listing the process's file descriptors: %w", err)
 	}
 	out := map[netip.AddrPort]bool{}
-	for _, e := range entries {
-		fd, err := strconv.Atoi(e.Name())
+	for _, name := range names {
+		fd, err := strconv.Atoi(name)
 		if err != nil || !isTCPListener(fd) {
 			continue
 		}
@@ -61,9 +69,21 @@ func isTCPListener(fd int) bool {
 	if err != nil || typ != syscall.SOCK_STREAM {
 		return false
 	}
-	// Linux answers 1 and macOS answers the option's bit.
 	accepting, err := syscall.GetsockoptInt(fd, syscall.SOL_SOCKET, syscall.SO_ACCEPTCONN)
-	return err == nil && accepting != 0
+	if err == nil {
+		return accepting != 0
+	}
+	if !errors.Is(err, syscall.ENOPROTOOPT) {
+		return false
+	}
+	// macOS does not answer SO_ACCEPTCONN (#114). A listener has a port of
+	// its own and no peer; a connected socket has a peer.
+	sa, err := syscall.Getsockname(fd)
+	if in4, ok := sa.(*syscall.SockaddrInet4); err != nil || !ok || in4.Port == 0 {
+		return false
+	}
+	_, err = syscall.Getpeername(fd)
+	return errors.Is(err, syscall.ENOTCONN)
 }
 
 // newListeners returns the listeners in now that are not in before, in
