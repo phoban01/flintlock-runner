@@ -271,8 +271,8 @@ type ProfileResolver interface {
 	ResolveProfile(job JobInfo) (*Profile, error)
 }
 
-// Allocator converts Reservations into Allocations and releases them (SC-020
-// to SC-034, SC-050 to SC-054).
+// Allocator converts Reservations into Allocations, checks their Leases and
+// releases them (SC-020 to SC-034, SC-050 to SC-054, SC-061).
 type Allocator interface {
 	// Allocate claims a warm MicroVM from the Profile's Pool (SC-020),
 	// retrying with backoff and waking on availability events until the
@@ -293,6 +293,14 @@ type Allocator interface {
 	// alive for the configured keep duration and then released as by
 	// Release. The Slot is returned immediately.
 	Retain(h Handle)
+
+	// CheckLease sends one heartbeat for the Lease of h at once, outside
+	// the keep-alive loop (SC-061). The Executor calls it when a Stage ends
+	// without an exit status. When the Lease is lost, it fails h with
+	// ErrLeaseLost, drops the Allocation with no release call, and returns
+	// h.Err(). It returns nil while the Lease is held, when the answer is
+	// unknown, and for an Allocation that has already ended.
+	CheckLease(ctx context.Context, h Handle) error
 }
 
 // HostHealth is the Scheduler's view of one Host (SC-040 to SC-042, OB-018).

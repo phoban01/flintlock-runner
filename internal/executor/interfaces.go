@@ -27,7 +27,8 @@ const PrepareSection = "flintlock_prepare"
 // Scheduler is the part of the scheduling component the Executor calls. It
 // is a consumer-side narrowing of scheduler.Scheduler: Acquire and Release
 // use Reserver (EX-003 to EX-005), Prepare uses ProfileResolver and Allocator
-// (EX-010 to EX-013), Cleanup uses Allocator (EX-030, EX-032, EX-033).
+// (EX-010 to EX-013), Run uses Allocator's CheckLease (SC-061), and Cleanup
+// uses Allocator (EX-030, EX-032, EX-033).
 type Scheduler interface {
 	scheduler.Reserver
 	scheduler.ProfileResolver

@@ -741,14 +741,6 @@ func stageCancelled(ctx context.Context) error {
 	return cause
 }
 
-// leaseChecker is the Scheduler's CheckLease. The Executor asserts it on
-// its Scheduler rather than name it in the Scheduler interface. A Scheduler
-// without it is never asked, and a Stage is then reported by its
-// transport's answer alone.
-type leaseChecker interface {
-	CheckLease(ctx context.Context, h scheduler.Handle) error
-}
-
 // noExitStatus reports whether a Stage ended without an exit status of its
 // own: the stream failed, or the guest agent reported the status -1 that
 // stands for a command it killed, as it does when the MicroVM is deleted
@@ -775,11 +767,7 @@ func (e *executor) leaseLost(ctx context.Context, stage common.BuildStage, r sta
 	if !noExitStatus(r) {
 		return nil
 	}
-	lc, ok := e.p.deps.Scheduler.(leaseChecker)
-	if !ok {
-		return nil
-	}
-	lost := lc.CheckLease(ctx, e.handle)
+	lost := e.p.deps.Scheduler.CheckLease(ctx, e.handle)
 	if lost == nil {
 		return nil
 	}
