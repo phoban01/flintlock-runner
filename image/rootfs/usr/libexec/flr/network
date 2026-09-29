@@ -53,7 +53,7 @@ fi
 #/ The Host Image SHALL drop traffic from the user ids that run the
 #/ Host Services, which it reads from the Host configuration file with
 #/ defaults when none are set, to the instance metadata service address and
-#/ to the Host's own kubelet, Pod Provider, `flintlockd` and metrics ports.
+#/ to the Host's own kubelet, Exec Agent, `flintlockd` and metrics ports.
 # The last three rules of the output chain, with the ids flr-host-config
 # read into FLR_HOST_SERVICE_UIDS. The ports are the control ports of
 # HI-034 and flintlockd's own, once each.
@@ -110,7 +110,7 @@ $(if [ -n "$FLR_HOST_SERVICE_PORTS" ]; then
   fi)
 		#= docs/requirements/11-host-image.md#image-networking
 		#/ The Host Image SHALL drop traffic from the guest subnet to the
-		#/ Host's own kubelet, Pod Provider and metrics ports.
+		#/ Host's own kubelet, Exec Agent and metrics ports.
 		iifname "$bridge" tcp dport { ${FLR_HOST_CONTROL_PORTS//,/, } } drop
 		#= docs/requirements/11-host-image.md#image-networking
 		#/ The Host Image SHALL drop traffic from the guest subnet to every

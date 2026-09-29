@@ -90,9 +90,9 @@ HI-065 exists because, with HI-066, the Host Agent's containers run in the
 ordinary container domain, which may read and write only files labelled for
 containers: without it the Host Agent cannot read the bridge gateway the
 Host Image writes at boot, nor keep its caches, and fails on every enforcing
-Host, and the Pod Provider cannot read the not ready reasons of HI-011 and
-HI-022, which it treats as not ready, so no Virtual Node would ever become
-ready. Labelling those paths for containers is the narrow fix. Running
+Host, and battery-operator's Exec Agent cannot read the not ready reasons
+of HI-011 and HI-022, which it treats as not ready, so no Host would ever
+become ready. Labelling those paths for containers is the narrow fix. Running
 the Host Agent as a super-privileged container would work too, and would
 remove SELinux from between the Host Services and the Host entirely.
 
@@ -143,7 +143,7 @@ cold. HI-023 restates the fix of pull request #43 as a requirement.
 - **HI-033** The Host Image SHALL drop traffic from the guest subnet to the
   EC2 instance metadata service address.
 - **HI-034** The Host Image SHALL drop traffic from the guest subnet to the
-  Host's own kubelet, Pod Provider and metrics ports.
+  Host's own kubelet, Exec Agent and metrics ports.
 - **HI-035** The Host Image SHALL drop traffic from the guest subnet to every
   protected CIDR listed in the Host configuration file.
 - **HI-036** The Host Image SHALL allow traffic from the guest subnet to the
@@ -155,7 +155,7 @@ cold. HI-023 restates the fix of pull request #43 as a requirement.
 - **HI-064** The Host Image SHALL drop traffic from the user ids that run the
   Host Services, which it reads from the Host configuration file with
   defaults when none are set, to the instance metadata service address and
-  to the Host's own kubelet, Pod Provider, `flintlockd` and metrics ports.
+  to the Host's own kubelet, Exec Agent, `flintlockd` and metrics ports.
 - **HI-075** The Host Image SHALL forward traffic from the guest subnet only
   out of the Host's primary interface, and SHALL drop traffic from the guest
   subnet to every other interface of the Host.
@@ -345,8 +345,8 @@ MicroVMs.
   digest and one label per hypervisor carrying its pinned version.
 - **HI-061** The Host Image SHALL configure the kubelet to reserve all CPU
   and memory beyond the configured Host reserve, so that the Host's Node
-  offers only the Host reserve to pods and the Virtual Node of KF-012 offers
-  the rest to MicroVMs.
+  offers only the Host reserve to pods and leaves the rest to the MicroVMs
+  that battery places on the Host.
 - **HI-062** The Host Image SHALL disable automatic bootc updates, so that
   an operating system update is applied only to a drained Host.
 - **HI-074** The Host Image SHALL register its kubelet with the label

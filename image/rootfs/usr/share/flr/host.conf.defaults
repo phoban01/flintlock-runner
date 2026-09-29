@@ -25,7 +25,7 @@ THIN_POOL_DEVICE=
 PROTECTED_CIDRS=
 
 # The Host reserve: what the Host's own Node offers to pods. Everything
-# beyond it belongs to MicroVMs on the Virtual Node.
+# beyond it belongs to the MicroVMs that battery places on the Host.
 HOST_RESERVE_VCPU=2
 HOST_RESERVE_MEMORY_MB=4096
 
@@ -35,7 +35,7 @@ HOST_SERVICE_PORTS=1234,3000,5000,3128
 
 # The Host's own ports guests may never reach: flintlockd's gRPC and HTTP
 # endpoints, the kubelet (10250 and its health, read-only and proxy ports),
-# the Pod Provider's kubelet endpoint (10260), the Exec Agent's exec API
+# 10260, which the withdrawn Pod Provider used, the Exec Agent's exec API
 # (10270) and the metrics listeners.
 HOST_CONTROL_PORTS=9090,8090,10248,10250,10255,10256,10260,10270,9252,1338
 

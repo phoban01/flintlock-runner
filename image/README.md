@@ -283,8 +283,8 @@ meta skuid { <ids> } oifname "lo" tcp dport { <HOST_CONTROL_PORTS>, 9090 } count
 ```
 
 Every address of the Host, the bridge gateway and the primary address
-included, is reached over `lo`, so the last rule closes the kubelet, the Pod
-Provider, `flintlockd` and the metrics ports on all of them. Nothing else is
+included, is reached over `lo`, so the last rule closes the kubelet, the Exec
+Agent, `flintlockd` and the metrics ports on all of them. Nothing else is
 taken from the Host Services: they still reach the internet, each other on
 the gateway's Host Service ports, and nginx still reaches Athens on
 `127.0.0.1:3999`. `flintlockd`'s port is added even when
@@ -305,8 +305,8 @@ that happens to run as one of them is held to the same rules.
 configured list and invalid values, and where it can make an unprivileged
 user and network namespace with nftables (a developer machine, not the image
 build), loads them and makes connections as the Host Services' ids: to the
-metadata service, v4 and v6, and the kubelet, Pod Provider and metrics
-ports, dropped; to `127.0.0.1:3999`, the gateway's registry mirror port and
+metadata service, v4 and v6, and the kubelet, Exec Agent, `flintlockd` and
+metrics ports, dropped; to `127.0.0.1:3999`, the gateway's registry mirror port and
 an internet address, let through. On a booted Host,
 `nft list chain inet flr output` shows the counters.
 
@@ -345,9 +345,8 @@ A unit that refuses to let `flintlockd` start says why in a file:
   directory is on `/run`, so a reboot starts clean.
 - An empty or absent directory means no unit has anything to report. It does
   not by itself mean `flintlockd` is healthy.
-- The Pod Provider reports every file as the Virtual Node's not ready
-  message (KF-016), for example joined as `<unit>: <reason>`. It should
-  read the directory on each status update rather than watch it once.
+- battery-operator's Exec Agent reports every file in its Host's Node
+  report (battery-operator EA-033).
 
 | File | First words of the reason | When |
 |------|---------------------------|------|

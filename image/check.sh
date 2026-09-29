@@ -500,8 +500,8 @@ expect "the IPv6 metadata service is dropped" has "$nftf" 'iifname "flbr0" ip6 d
 #= docs/requirements/11-host-image.md#image-networking
 #= type=test
 #/ The Host Image SHALL drop traffic from the guest subnet to the
-#/ Host's own kubelet, Pod Provider and metrics ports.
-expect "the kubelet, Pod Provider, Exec Agent, flintlockd and metrics ports are dropped" \
+#/ Host's own kubelet, Exec Agent and metrics ports.
+expect "the kubelet, Exec Agent, flintlockd and metrics ports are dropped" \
   has "$nftf" 'iifname "flbr0" tcp dport \{ 9090, 8090, 10248, 10250, 10255, 10256, 10260, 10270, 9252, 1338 \} drop'
 
 #= docs/requirements/11-host-image.md#image-networking
@@ -563,7 +563,7 @@ esac
 #/ The Host Image SHALL drop traffic from the user ids that run the
 #/ Host Services, which it reads from the Host configuration file with
 #/ defaults when none are set, to the instance metadata service address and
-#/ to the Host's own kubelet, Pod Provider, `flintlockd` and metrics ports.
+#/ to the Host's own kubelet, Exec Agent, `flintlockd` and metrics ports.
 # The rules, rendered from the installed scripts for the default ids, a
 # configured list and values that are no list of ids. That the kernel
 # enforces them cannot be shown here, as for HI-070.
@@ -755,8 +755,8 @@ expect "kubeadm's drop-in still starts the kubelet the way 20-flr.conf repeats" 
 #= type=test
 #/ The Host Image SHALL configure the kubelet to reserve all CPU
 #/ and memory beyond the configured Host reserve, so that the Host's Node
-#/ offers only the Host reserve to pods and the Virtual Node of KF-012 offers
-#/ the rest to MicroVMs.
+#/ offers only the Host reserve to pods and leaves the rest to the MicroVMs
+#/ that battery places on the Host.
 # 96 CPUs and 376 GiB with a Host reserve of 4 CPUs and 8192 MiB.
 expect "all but the Host reserve is reserved" has "$kenv" -- "--system-reserved=cpu=92000m,memory=$((394264576 - 8192 * 1024))Ki\$"
 expect "a machine smaller than the reserve reserves nothing" \
