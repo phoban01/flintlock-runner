@@ -1,11 +1,8 @@
 package main
 
 import (
-	"bytes"
 	"context"
-	"errors"
 	"fmt"
-	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -13,64 +10,24 @@ import (
 	"time"
 
 	"gitlab.com/gitlab-org/gitlab-runner/common/spec"
-	authenticationv1 "k8s.io/api/authentication/v1"
-	corev1 "k8s.io/api/core/v1"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
-	"k8s.io/apimachinery/pkg/util/yaml"
-	"k8s.io/client-go/kubernetes"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	batteryv1alpha1 "github.com/phoban01/battery-operator/api/v1alpha1"
 
-	"github.com/phoban01/flintlock-runner/internal/flintlock"
-	hostfake "github.com/phoban01/flintlock-runner/internal/flintlock/fake"
 	"github.com/phoban01/flintlock-runner/internal/kubelabels"
-	"github.com/phoban01/flintlock-runner/internal/poolmgr/claim/claimtest"
+	"github.com/phoban01/flintlock-runner/internal/testing/claimstack"
 	"github.com/phoban01/flintlock-runner/internal/testing/fakeexecagent"
 	"github.com/phoban01/flintlock-runner/internal/testing/fakegitlab"
 )
 
-// The names deploy/runner gives the Runner's namespace, its identity and
-// the Holder, and battery-operator's namespace and serving CA ConfigMap,
-// which deploy/runner/rbac.yaml names too.
-const (
-	claimRunnerNamespace = "flintlock-system"
-	claimRunnerAccount   = "flintlock-runner"
-	claimHolderAccount   = "flintlock-runner-holder"
-	operatorNamespace    = "battery-operator-system"
-	servingCAConfigMap   = "flintlockd-ca"
-	claimHostNode        = "host-a"
-)
+// claimHostNode is the Node of the stack's one Host.
+const claimHostNode = "host-a"
 
-// applyManifest creates every object of the YAML file path, unchanged.
-func applyManifest(ctx context.Context, t *testing.T, c client.Client, path string) {
-	t.Helper()
-	data, err := os.ReadFile(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	dec := yaml.NewYAMLOrJSONDecoder(bytes.NewReader(data), 4096)
-	for {
-		obj := &unstructured.Unstructured{}
-		if err := dec.Decode(&obj.Object); errors.Is(err, io.EOF) {
-			return
-		} else if err != nil {
-			t.Fatalf("%s: %v", path, err)
-		}
-		if len(obj.Object) == 0 {
-			continue
-		}
-		if err := c.Create(ctx, obj); err != nil {
-			t.Fatalf("%s: creating %s %s: %v", path, obj.GetKind(), obj.GetName(), err)
-		}
-	}
-}
-
-// claimStack is the claim design in the test process: an API server with
-// battery-operator's CRDs and deploy/runner's identities and permissions,
-// the fake battery binding claims on one fake Host, the test double of
-// battery-operator's Exec Agent in front of that Host, and the fake GitLab.
+// claimStack is the claim design in the test process (claimstack.Stack):
+// an API server with battery-operator's CRDs and deploy/runner's identities
+// and permissions, the fake battery binding claims on one fake Host, the
+// test double of battery-operator's Exec Agent in front of that Host, and
+// the fake GitLab.
 type claimStack struct {
 	kube     client.Client
 	agent    *fakeexecagent.Agent
@@ -83,105 +40,26 @@ type claimStack struct {
 // with deploy/runner/config.yaml's Holder and serving CA.
 func startClaimStack(t *testing.T) (*claimStack, string) {
 	t.Helper()
-	env, note, err := claimtest.Start()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if env == nil {
-		t.Skip(note)
-	}
-	t.Cleanup(func() { _ = env.Stop() })
-	ctx, cancel := context.WithCancel(context.Background())
-	t.Cleanup(cancel)
 	dir := t.TempDir()
-	admin := env.Client
-	clientset, err := kubernetes.NewForConfig(env.Config)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	for _, ns := range []string{claimRunnerNamespace, operatorNamespace} {
-		if err := admin.Create(ctx, &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: ns}}); err != nil {
-			t.Fatal(err)
-		}
-	}
-	for _, f := range []string{"serviceaccount.yaml", "holder.yaml", "rbac.yaml"} {
-		applyManifest(ctx, t, admin, filepath.Join("..", "..", "deploy", "runner", f))
-	}
-
-	// The Host: its Node, with the Host Services the Host Agent publishes
-	// (KF-194); the fake flintlockd; and the Exec Agent in front of it,
-	// serving a certificate of the CA that battery-operator publishes.
-	if err := admin.Create(ctx, &corev1.Node{ObjectMeta: metav1.ObjectMeta{
-		Name:        claimHostNode,
-		Annotations: map[string]string{kubelabels.HostServiceAnnotation("buildkit"): "10.200.0.1:1234"},
-	}}); err != nil {
-		t.Fatal(err)
-	}
-	certs, err := hostfake.WriteTestCerts(filepath.Join(dir, "certs"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	ca, err := os.ReadFile(certs.CAFile)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := admin.Create(ctx, &corev1.ConfigMap{
-		ObjectMeta: metav1.ObjectMeta{Namespace: operatorNamespace, Name: servingCAConfigMap},
-		Data:       map[string]string{"serving-ca.crt": string(ca)},
-	}); err != nil {
-		t.Fatal(err)
-	}
-	host := hostfake.New(flintlock.FakeHostConfig{Name: claimHostNode, ExecEnabled: true, Version: "v0.9.0", SandboxRoot: filepath.Join(dir, "sandboxes")})
-	t.Cleanup(func() { _ = host.Close() })
-	agent, err := fakeexecagent.Start(fakeexecagent.Config{
-		Node: claimHostNode, CertFile: certs.ServerCertFile, KeyFile: certs.ServerKeyFile,
-		Upstream: host.Client(), Authorizer: fakeexecagent.Reviewer{Kube: admin},
+	// The Host publishes a Host Service on its Node, as the Host Agent does
+	// (KF-194).
+	stack, note, err := claimstack.Start(context.Background(), claimstack.Options{
+		Dir:       dir,
+		DeployDir: filepath.Join("..", "..", "deploy", "runner"),
+		Hosts: []claimstack.Host{{
+			Name:        claimHostNode,
+			Annotations: map[string]string{kubelabels.HostServiceAnnotation("buildkit"): "10.200.0.1:1234"},
+		}},
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { _ = agent.Close() })
-
-	battery := claimtest.NewBattery(admin, claimRunnerNamespace,
-		claimtest.Host{NodeName: claimHostNode, AgentAddress: agent.Addr(), MicroVMs: host.Client()})
-	done := make(chan struct{})
-	go func() { defer close(done); battery.Run(ctx) }()
-	t.Cleanup(func() { cancel(); <-done })
-
-	// The Runner's kubeconfig: a token of its own ServiceAccount, which has
-	// deploy/runner/rbac.yaml's permissions and no others.
-	expiry := int64(3600)
-	tok, err := clientset.CoreV1().ServiceAccounts(claimRunnerNamespace).CreateToken(ctx, claimRunnerAccount,
-		&authenticationv1.TokenRequest{Spec: authenticationv1.TokenRequestSpec{ExpirationSeconds: &expiry}}, metav1.CreateOptions{})
-	if err != nil {
-		t.Fatal(err)
+	if stack == nil {
+		t.Skip(note)
 	}
-	caFile := filepath.Join(dir, "apiserver-ca.crt")
-	if err := os.WriteFile(caFile, env.Config.CAData, 0o600); err != nil {
-		t.Fatal(err)
-	}
-	kubeconfig := filepath.Join(dir, "kubeconfig")
-	if err := os.WriteFile(kubeconfig, fmt.Appendf(nil, `apiVersion: v1
-kind: Config
-current-context: runner
-clusters:
-  - name: envtest
-    cluster:
-      server: %s
-      certificate-authority: %s
-contexts:
-  - name: runner
-    context:
-      cluster: envtest
-      user: runner
-users:
-  - name: runner
-    user:
-      token: %s
-`, env.Config.Host, caFile, tok.Status.Token), 0o600); err != nil {
-		t.Fatal(err)
-	}
+	t.Cleanup(func() { _ = stack.Stop() })
+	kubeconfig := stack.Kubeconfig
+	claimRunnerNamespace, claimHolderAccount := claimstack.RunnerNamespace, claimstack.HolderAccount
 
 	gl := fakegitlab.New(fakegitlab.Options{RunnerToken: testRunnerToken, LongPollTimeout: 500 * time.Millisecond})
 	if err := gl.Start(); err != nil {
@@ -189,7 +67,7 @@ users:
 	}
 	t.Cleanup(gl.Close)
 
-	s := &claimStack{kube: admin, agent: agent, gitlab: gl, buildDir: filepath.Join(dir, "guest", "builds")}
+	s := &claimStack{kube: stack.Admin, agent: stack.Agent(claimHostNode), gitlab: gl, buildDir: filepath.Join(dir, "guest", "builds")}
 	cfg := fmt.Sprintf(`
 gitlab:
   url: %s
@@ -321,10 +199,10 @@ func TestRunRunsAJobOverTheClaimBackend(t *testing.T) {
 	ctx := context.Background()
 	waitFor(t, 20*time.Second, "the job's claim to be deleted", func() bool {
 		claims := &batteryv1alpha1.MicroVMClaimList{}
-		return s.kube.List(ctx, claims, client.InNamespace(claimRunnerNamespace)) == nil && len(claims.Items) == 0
+		return s.kube.List(ctx, claims, client.InNamespace(claimstack.RunnerNamespace)) == nil && len(claims.Items) == 0
 	})
 	pools := &batteryv1alpha1.PoolList{}
-	if err := s.kube.List(ctx, pools, client.InNamespace(claimRunnerNamespace)); err != nil || len(pools.Items) != 1 {
+	if err := s.kube.List(ctx, pools, client.InNamespace(claimstack.RunnerNamespace)); err != nil || len(pools.Items) != 1 {
 		t.Errorf("the Runner's Pools = %d (%v), want the one of its Profile", len(pools.Items), err)
 	}
 

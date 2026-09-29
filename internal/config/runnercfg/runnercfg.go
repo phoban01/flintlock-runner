@@ -19,10 +19,14 @@ import (
 	"gitlab.com/gitlab-org/gitlab-runner/cache/cacheconfig"
 	"gitlab.com/gitlab-org/gitlab-runner/common"
 
-	// Registers the "s3" cache adapter under gitlab-runner's cache factory.
-	// Without it the Type this package sets would find no factory and every
-	// `cache:` step would silently fall back to the no-op adapter (CF-081).
+	// Register the "s3" and "s3v2" cache adapters under gitlab-runner's
+	// cache factory. The Type this package sets is "s3", and gitlab-runner
+	// turns it into "s3v2" for each Job unless the Job sets
+	// FF_USE_LEGACY_S3_CACHE_ADAPTER. Without a factory for the type in
+	// use, every `cache:` step silently falls back to the no-op adapter
+	// (CF-081).
 	_ "gitlab.com/gitlab-org/gitlab-runner/cache/s3"
+	_ "gitlab.com/gitlab-org/gitlab-runner/cache/s3v2"
 
 	"github.com/phoban01/flintlock-runner/internal/config"
 )

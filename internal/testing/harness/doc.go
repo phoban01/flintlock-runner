@@ -20,6 +20,22 @@
 // real Pool Manager endpoint to use instead of the fake one. OptionsFromEnv
 // reads them; nothing else in the package looks at the environment.
 //
+// Options.Backend selects the stack the Runner runs over. The zero value is
+// the battery stack above. BackendClaim is the claim stack (KF-192), from
+// internal/testing/claimstack: an API server from envtest with
+// battery-operator's CRDs and deploy/runner's permissions, the fake battery
+// binding claims, and the test double of battery-operator's Exec Agent in
+// front of each fake Host. The Runner there has no Inventory and no Pool
+// Manager endpoint: it claims MicroVMs as its own ServiceAccount and runs
+// each Stage over agent-exec. The same scenarios run on both stacks. On
+// the claim stack Shutdown checks for MicroVMClaims instead of Leases.
+//
+// Options.HelperBinary puts a stand-in for gitlab-runner-helper
+// (helperstub) at the Profile's helper path, for the artifact and cache
+// scenarios. Options.Cache adds a distributed cache on the fake object
+// store, over TLS, with a credentials endpoint on loopback for the
+// Runner's instance credentials.
+//
 // The fake Host runs every command as a local process on the machine the
 // harness runs on, rooted in the MicroVM's sandbox directory but not
 // confined to it. gitlab-runner's generated scripts use absolute paths for

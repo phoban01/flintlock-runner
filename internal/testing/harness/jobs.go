@@ -13,6 +13,14 @@ import (
 	"github.com/phoban01/flintlock-runner/internal/testing/fakegitlab"
 )
 
+//= docs/requirements/10-test-doubles.md#end-to-end-harness
+//# The harness SHALL cover a successful Job, a script failure with
+//# its exit code, cancellation with `after_script`, a Job timeout, a wait on
+//# an exhausted Pool, a Host becoming unhealthy during a Job, a Lease
+//# expiring during a Job, an unknown Job Image, artifact upload and
+//# dependency download, cache restore and save, and Host Service environment
+//# injection.
+
 // Job is a CI Job as a scenario describes it. BuildJob turns it into the
 // spec.Job payload the fake GitLab hands out.
 type Job struct {
@@ -29,6 +37,12 @@ type Job struct {
 	// Variables are added to the Job's variables, after the ones the
 	// harness sets, so they can override them.
 	Variables map[string]string
+	// Artifacts are the Job's `artifacts:`, Dependencies the Jobs whose
+	// artifacts it downloads, and Cache its `cache:`. Each runs
+	// gitlab-runner-helper in the guest (Options.HelperBinary).
+	Artifacts    []spec.Artifact
+	Dependencies []spec.Dependency
+	Cache        []spec.Cache
 }
 
 // defaultJobTimeout is the Job timeout when Job.Timeout is zero.
@@ -38,7 +52,7 @@ const defaultJobTimeout = 10 * time.Minute
 // script and after_script Steps, the Job timeout, a GitLab-like set of
 // predefined variables and GIT_STRATEGY=none, so that get_sources makes the
 // project directory without cloning a repository that does not exist. The
-// Job carries no artifacts and no cache, which need gitlab-runner-helper.
+// Job carries artifacts, dependencies and a cache only where j names them.
 func BuildJob(id int64, j Job) *spec.Job {
 	name := j.Name
 	if name == "" {
@@ -112,10 +126,13 @@ func BuildJob(id int64, j Job) *spec.Job {
 			Sha:     vars["CI_COMMIT_SHA"],
 			RefType: spec.RefTypeBranch,
 		},
-		RunnerInfo: spec.RunnerInfo{Timeout: secs},
-		Steps:      steps,
-		Image:      spec.Image{Name: j.Image},
-		Variables:  variables,
+		RunnerInfo:   spec.RunnerInfo{Timeout: secs},
+		Steps:        steps,
+		Image:        spec.Image{Name: j.Image},
+		Variables:    variables,
+		Artifacts:    append(spec.Artifacts(nil), j.Artifacts...),
+		Dependencies: append(spec.Dependencies(nil), j.Dependencies...),
+		Cache:        append(spec.Caches(nil), j.Cache...),
 	}
 }
 

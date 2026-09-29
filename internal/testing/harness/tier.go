@@ -48,3 +48,14 @@ func fakeTier(lookup func(string) (string, bool)) Options {
 	opts.KernelImage, opts.RootFSImage = "", ""
 	return opts
 }
+
+// ClaimTier returns the Options for running scenarios on the claim stack
+// (KF-192): FakeTier's, on the claim backend, with no Pool Manager
+// endpoint. A Stack from them needs the envtest binaries; New skips the
+// test without them, unless FLINTLOCK_RUNNER_REQUIRE_ENVTEST is 1.
+func ClaimTier() Options {
+	opts := FakeTier()
+	opts.PoolManagerEndpoint = ""
+	opts.Backend = BackendClaim
+	return opts
+}

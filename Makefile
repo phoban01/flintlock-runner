@@ -86,11 +86,14 @@ coverage-gate:
 ## e2e: run the end-to-end scenarios against the real binary and the fakes (TD-050; build tag e2e)
 # The scenarios are behind the e2e build tag so that `go test ./...` stays
 # fast. FLINTLOCK_RUNNER_E2E_INVENTORY selects the hardware tier (TD-052) and
-# FLINTLOCK_RUNNER_E2E_POOL_MANAGER a real Pool Manager (TD-053).
+# FLINTLOCK_RUNNER_E2E_POOL_MANAGER a real Pool Manager (TD-053). The claim
+# stack's scenarios (KF-192) need a kube-apiserver and etcd: they are
+# downloaded first and required, so this target never skips them.
 e2e:
 	$(GO) build -o $(BIN)/flr ./cmd/flr
+	KUBEBUILDER_ASSETS="$$($(MAKE) -s envtest)" FLINTLOCK_RUNNER_REQUIRE_ENVTEST=1 \
 	FLINTLOCK_RUNNER_E2E_BINARY=$(abspath $(BIN))/flr \
-		$(GO) test -race -tags e2e -count=1 -timeout 15m $(E2E_FLAGS) ./internal/testing/harness/...
+		$(GO) test -race -tags e2e -count=1 -timeout 30m $(E2E_FLAGS) ./internal/testing/harness/...
 
 ## demo: run jobs through the real runner on a local fake stack, no KVM needed (DEMO_ARGS='-keep', '-jobs 3', "-script 'exit 3'")
 demo:

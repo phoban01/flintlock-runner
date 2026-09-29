@@ -95,9 +95,14 @@ type Call struct {
 // Agent is a running test double of one Host's Exec Agent.
 type Agent struct {
 	cfg  Config
-	lis  net.Listener
-	srv  *grpc.Server
-	done chan struct{}
+	cert tls.Certificate
+	// addr is where the Agent serves. Restart serves there again.
+	addr string
+
+	// srvMu guards srv and done, which Restart replaces.
+	srvMu sync.Mutex
+	srv   *grpc.Server
+	done  chan struct{}
 
 	mu    sync.Mutex
 	calls []Call
@@ -126,24 +131,32 @@ func Start(cfg Config) (*Agent, error) {
 	if err != nil {
 		return nil, fmt.Errorf("fakeexecagent: listening: %w", err)
 	}
-	a := &Agent{cfg: cfg, lis: lis, done: make(chan struct{})}
-	a.srv = grpc.NewServer(
-		grpc.Creds(credentials.NewTLS(&tls.Config{Certificates: []tls.Certificate{cert}, MinVersion: tls.VersionTLS12})),
+	a := &Agent{cfg: cfg, cert: cert, addr: lis.Addr().String()}
+	a.serve(lis)
+	return a, nil
+}
+
+// serve starts a gRPC server on lis and makes it the Agent's. The caller
+// holds srvMu, or has not shared the Agent yet.
+func (a *Agent) serve(lis net.Listener) {
+	srv := grpc.NewServer(
+		grpc.Creds(credentials.NewTLS(&tls.Config{Certificates: []tls.Certificate{a.cert}, MinVersion: tls.VersionTLS12})),
 		// The Runner keeps its connections alive with pings (HO-002).
 		grpc.KeepaliveEnforcementPolicy(keepalive.EnforcementPolicy{MinTime: time.Second, PermitWithoutStream: true}),
 	)
-	mvmv1.RegisterMicroVMServer(a.srv, &microVMService{a: a})
-	execv1.RegisterMicroVMExecServer(a.srv, &execService{a: a})
+	mvmv1.RegisterMicroVMServer(srv, &microVMService{a: a})
+	execv1.RegisterMicroVMExecServer(srv, &execService{a: a})
+	done := make(chan struct{})
 	go func() {
-		defer close(a.done)
-		_ = a.srv.Serve(lis)
+		defer close(done)
+		_ = srv.Serve(lis)
 	}()
-	return a, nil
+	a.srv, a.done = srv, done
 }
 
 // Addr is the `address:port` the Agent serves on, which a claim's status
 // gives as its agent address.
-func (a *Agent) Addr() string { return a.lis.Addr().String() }
+func (a *Agent) Addr() string { return a.addr }
 
 // Node is the name of the Agent's Host's Node.
 func (a *Agent) Node() string { return a.cfg.Node }
@@ -158,8 +171,32 @@ func (a *Agent) Calls() []Call {
 // Close stops the Agent at once: every open exchange ends without its exit
 // status, as it does when a real Exec Agent restarts.
 func (a *Agent) Close() error {
+	a.srvMu.Lock()
+	defer a.srvMu.Unlock()
 	a.srv.Stop()
 	<-a.done
+	return nil
+}
+
+//= docs/requirements/12-cluster-fleet.md#claim-test-doubles
+//# The harness SHALL include a scenario in which the Exec Agent
+//# restarts while a Stage runs
+
+// Restart stops the Agent as Close does, so that every open exchange ends
+// without its exit status, and then serves again on the same address with
+// the same configuration, as a real Exec Agent does when its pod restarts on
+// the Host. The record of calls is kept. It is the fault of the harness's
+// scenario in which the Exec Agent restarts while a Stage runs (KF-193).
+func (a *Agent) Restart() error {
+	a.srvMu.Lock()
+	defer a.srvMu.Unlock()
+	a.srv.Stop()
+	<-a.done
+	lis, err := net.Listen("tcp", a.addr)
+	if err != nil {
+		return fmt.Errorf("fakeexecagent: listening again on %s: %w", a.addr, err)
+	}
+	a.serve(lis)
 	return nil
 }
 

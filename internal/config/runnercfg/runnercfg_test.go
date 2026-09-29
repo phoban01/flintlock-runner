@@ -306,6 +306,19 @@ func TestDistributedCacheMapping(t *testing.T) {
 		if name := fmt.Sprintf("%T", adapter); !strings.HasPrefix(name, "*s3.") {
 			t.Errorf("cache adapter = %s, want gitlab-runner's S3 adapter; `cache:` would not reach the bucket", name)
 		}
+
+		// A Job's build turns the type "s3" into "s3v2" unless the Job sets
+		// FF_USE_LEGACY_S3_CACHE_ADAPTER, so that is the factory a Job
+		// actually looks up. The end-to-end harness found it missing.
+		if _, err := cache.Factories().Find(cc.Type + "v2"); err != nil {
+			t.Fatalf("gitlab-runner has no cache factory for %q, the adapter a Job uses by default: %v", cc.Type+"v2", err)
+		}
+		cc2 := *cc
+		cc2.Type += "v2"
+		adapter = cache.GetAdapter(&cc2, time.Minute, "shorttok", "42", "cache-key", false)
+		if name := fmt.Sprintf("%T", adapter); !strings.HasPrefix(name, "*s3v2.") {
+			t.Errorf("cache adapter = %s, want gitlab-runner's s3v2 adapter; `cache:` would not reach the bucket", name)
+		}
 	})
 
 	t.Run("an S3-compatible endpoint becomes the server address", func(t *testing.T) {
