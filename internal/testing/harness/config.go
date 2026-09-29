@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
-	"net"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -59,10 +58,6 @@ func (s *Stack) buildConfig() (*config.Config, error) {
 		if s.opts.RootFSImage != "" {
 			rootfs = s.opts.RootFSImage
 		}
-	}
-	metrics, err := freeLoopbackAddr()
-	if err != nil {
-		return nil, err
 	}
 	disabled := false
 	services := &disabled
@@ -132,9 +127,12 @@ func (s *Stack) buildConfig() (*config.Config, error) {
 			CacheVolume:    config.CacheVolume{Directory: filepath.Join(s.Root, "host-services")},
 		},
 		Observability: config.Observability{
-			LogFormat:     config.LogText,
-			LogLevel:      "info",
-			ListenAddress: metrics,
+			LogFormat: config.LogText,
+			LogLevel:  "info",
+			// Port 0: the Runner binds a port the kernel picks, and logs it
+			// (ObservabilityAddr). No port is chosen ahead of its bind, so
+			// no other process can take it in between (#109).
+			ListenAddress: "127.0.0.1:0",
 		},
 		StateDir: s.stateDir(),
 	}
@@ -203,20 +201,4 @@ func (s *Stack) writeConfig() error {
 	}
 	s.Config = loaded
 	return nil
-}
-
-// freeLoopbackAddr returns a loopback address with a port that was free a
-// moment ago, for the Runner's metrics listener. The port is released
-// before the Runner binds it; on a busy machine another process could take
-// it in between, which would fail the Runner's startup visibly.
-func freeLoopbackAddr() (string, error) {
-	lis, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		return "", fmt.Errorf("harness: finding a free port: %w", err)
-	}
-	addr := lis.Addr().String()
-	if err := lis.Close(); err != nil {
-		return "", fmt.Errorf("harness: finding a free port: %w", err)
-	}
-	return addr, nil
 }

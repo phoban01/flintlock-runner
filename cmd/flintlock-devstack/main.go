@@ -347,7 +347,11 @@ func keep(ctx context.Context, s *harness.Stack, u *ui, o *options) {
 	for _, h := range s.Inventory {
 		u.line(fmt.Sprintf("    Host %-10s %s   basic auth token %s", h.Name, h.Endpoint, string(h.Token)))
 	}
-	u.line("    runner metrics  http://" + s.Config.Observability.ListenAddress + "/metrics")
+	if addr, err := s.ObservabilityAddr(); err != nil {
+		u.line("    runner metrics  unknown: " + err.Error())
+	} else {
+		u.line("    runner metrics  http://" + addr + "/metrics")
+	}
 	u.line("    fakes' log      " + filepath.Join(s.Root, fakesLog))
 	u.line("    try             flr --config " + s.ConfigPath + " config show")
 	if !isTerminal(os.Stdin) {

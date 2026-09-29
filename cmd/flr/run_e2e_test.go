@@ -4,9 +4,11 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"sync"
 	"syscall"
@@ -364,6 +366,21 @@ func TestRunRunsAJobEndToEnd(t *testing.T) {
 		t.Errorf("job handed to system_id %q, state directory holds %q", got, want)
 	}
 
+	// The observability address is port 0 in the configuration. The
+	// Runner logs the port it bound, and serves gitlab-runner's own
+	// metrics and debug paths on it, next to /healthz (#109).
+	base := "http://" + observabilityAddr(t, out.String())
+	for path, want := range map[string]string{
+		"/metrics":             "gitlab_runner_concurrent",
+		"/debug/process/state": "",
+		"/healthz":             "ok",
+	} {
+		waitFor(t, 10*time.Second, path+" on the observability address", func() bool {
+			code, body := get(t, base+path)
+			return code == http.StatusOK && strings.Contains(body, want)
+		})
+	}
+
 	if err := cmd.Process.Signal(syscall.SIGTERM); err != nil {
 		t.Fatal(err)
 	}
@@ -378,6 +395,17 @@ func TestRunRunsAJobEndToEnd(t *testing.T) {
 	waitFor(t, 10*time.Second, "every lease to be released", func() bool {
 		return len(s.pm.Leases()) == 0
 	})
+}
+
+// observabilityAddr returns the address the Runner's log says its
+// observability server listens on.
+func observabilityAddr(t *testing.T, log string) string {
+	t.Helper()
+	m := regexp.MustCompile(`msg="observability server listening" address=(\S+)`).FindStringSubmatch(log)
+	if m == nil {
+		t.Fatalf("the runner did not log its observability address:\n%s", log)
+	}
+	return m[1]
 }
 
 // bashPath is the absolute path of bash on this machine. The fake Host runs
