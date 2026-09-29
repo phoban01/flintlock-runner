@@ -3,12 +3,25 @@
 # the ConfigMap flintlock-host-agent-config into the configuration files of
 # `flr host-services` and of every enabled Host Service, for this Host.
 #
-# The Host's own settings come from /run/flr/host.env, which the Host Image's
-# flr-host-config unit writes at every boot from the Host configuration file
-# (HI-050) and the image defaults (HI-051). The one that matters most is
-# FLR_GATEWAY, the guest bridge gateway address, the first address of the
-# guest subnet: every Host Service binds to it and to nothing else (KF-071).
-# The file is parsed, never sourced.
+# The Host's own settings come from /run/battery/host.env, which the
+# battery-operator Host Image's battery-host-config unit writes at every
+# boot from the Host configuration file and the image defaults. Three of
+# them matter here:
+#
+#   BATTERY_GATEWAY                the guest bridge gateway address, the
+#                                  first address of the guest subnet: every
+#                                  Host Service binds to it and to nothing
+#                                  else (KF-071)
+#   BATTERY_GATEWAY_SERVICE_PORTS  the ports on the gateway the Host opens
+#                                  to guests
+#   BATTERY_GATEWAY_SERVICE_UIDS   the user ids whose traffic to the
+#                                  metadata service and the Host's control
+#                                  ports the Host drops
+#
+# The last two have to include every port and user id of host-pool.conf,
+# which lists those of the Host Services. When the Host leaves one out,
+# this script fails, and so no Host Service starts (KF-199). The file is
+# parsed, never sourced.
 #
 # The templates are plain files with @NAME@ placeholders and whole lines of
 # the form @BLOCK:name@ that this script expands. Whatever is not a template
@@ -17,12 +30,12 @@
 #
 # Environment, for the tests in deploy/tests/checks.yaml:
 #   FLR_TEMPLATES  the ConfigMap's mount (default /etc/flr/templates)
-#   FLR_HOST_ENV   the Host Image's host.env (default /run/flr/host.env)
+#   FLR_HOST_ENV   the Host Image's host.env (default /run/battery/host.env)
 #   FLR_OUT        where the rendered files go (default /etc/flr/rendered)
 set -eu
 
 templates=${FLR_TEMPLATES:-/etc/flr/templates}
-host_env=${FLR_HOST_ENV:-/run/flr/host.env}
+host_env=${FLR_HOST_ENV:-/run/battery/host.env}
 out=${FLR_OUT:-/etc/flr/rendered}
 
 die() {
@@ -43,9 +56,62 @@ is_ipv4() {
   echo "$1" | grep -Eq '^(25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])(\.(25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])){3}$'
 }
 
-[ -r "$host_env" ] || die "$host_env is missing: flr-host-config has not run on this Host"
-gateway=$(get "$host_env" FLR_GATEWAY)
-is_ipv4 "$gateway" || die "FLR_GATEWAY '$gateway' in $host_env is not an IPv4 address"
+# covers LIST ITEM succeeds when the comma-separated list of ids and ranges
+# LOW-HIGH includes ITEM, an id or a range: an id when it is in the list or
+# in one of its ranges, a range when one range of the list holds all of it.
+covers() {
+  case $2 in
+  *-*)
+    lo=${2%-*}
+    hi=${2#*-}
+    ;;
+  *)
+    lo=$2
+    hi=$2
+    ;;
+  esac
+  if ! is_uint "$lo" || ! is_uint "$hi"; then return 1; fi
+  for c in $(echo "$1" | tr ',' ' '); do
+    case $c in
+    *-*)
+      clo=${c%-*}
+      chi=${c#*-}
+      ;;
+    *)
+      clo=$c
+      chi=$c
+      ;;
+    esac
+    if ! is_uint "$clo" || ! is_uint "$chi"; then continue; fi
+    if [ "$clo" -le "$lo" ] && [ "$hi" -le "$chi" ]; then
+      return 0
+    fi
+  done
+  return 1
+}
+
+[ -r "$host_env" ] || die "$host_env is missing: battery-host-config has not run on this Host"
+gateway=$(get "$host_env" BATTERY_GATEWAY)
+is_ipv4 "$gateway" || die "BATTERY_GATEWAY '$gateway' in $host_env is not an IPv4 address"
+
+# ---- the Host's gateway service ports and user ids (KF-199) ----
+pool_conf=$templates/host-pool.conf
+[ -r "$pool_conf" ] || die "host-pool.conf is missing from the ConfigMap"
+want_ports=$(get "$pool_conf" GATEWAY_SERVICE_PORTS)
+want_uids=$(get "$pool_conf" GATEWAY_SERVICE_UIDS)
+if [ -z "$want_ports" ] || [ -z "$want_uids" ]; then die "host-pool.conf names no GATEWAY_SERVICE_PORTS or GATEWAY_SERVICE_UIDS"; fi
+host_ports=$(get "$host_env" BATTERY_GATEWAY_SERVICE_PORTS)
+host_uids=$(get "$host_env" BATTERY_GATEWAY_SERVICE_UIDS)
+for p in $(echo "$want_ports" | tr ',' ' '); do
+  case ,$host_ports, in
+  *,"$p",*) ;;
+  *) die "the Host's GATEWAY_SERVICE_PORTS '$host_ports' leave out $p: set GATEWAY_SERVICE_PORTS=$want_ports in the Host pool's host.conf (deploy/README.md, \"Host pools\")" ;;
+  esac
+done
+for u in $(echo "$want_uids" | tr ',' ' '); do
+  covers "$host_uids" "$u" ||
+    die "the Host's GATEWAY_SERVICE_UIDS '$host_uids' leave out $u: set GATEWAY_SERVICE_UIDS=$want_uids in the Host pool's host.conf (deploy/README.md, \"Host pools\")"
+done
 
 mkdir -p "$out"
 

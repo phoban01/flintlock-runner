@@ -132,52 +132,6 @@ jobs:
           # shellcheck disable=SC2086
           SKIP_REPORT=1 hack/duvet-coverage.sh $ids
 
-  # The Host Image (docs/requirements/11-host-image.md): lint its sources,
-  # build it for x86_64 with podman, which runs the check stage of HI-008
-  # inside the built image, then check its OCI labels. The runner has no
-  # /dev/kvm access configured and no AWS credentials, which is HI-007. The
-  # build is slow, so it runs only when the image or this workflow changed.
-  image:
-    name: host image build and check stage
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
-        with:
-          fetch-depth: 0
-      - name: did the image change
-        id: changed
-        env:
-          EVENT: ${{ github.event_name }}
-          BASE: ${{ github.base_ref }}
-          BEFORE: ${{ github.event.before }}
-        run: |
-          if [ "$EVENT" = pull_request ]; then
-            range="origin/$BASE...HEAD"
-          elif git cat-file -e "$BEFORE^{commit}" 2>/dev/null; then
-            range="$BEFORE..HEAD"
-          else
-            range=""
-          fi
-          if [ -z "$range" ] || git diff --name-only "$range" | grep -qE '^(image/|\.github/workflows/ci\.yml$)'; then
-            echo "build=true" >>"$GITHUB_OUTPUT"
-          else
-            echo "image/ is unchanged in $range; skipping the build"
-            echo "build=false" >>"$GITHUB_OUTPUT"
-          fi
-      - name: lint the image sources
-        if: steps.changed.outputs.build == 'true'
-        run: |
-          command -v shellcheck >/dev/null || { sudo apt-get update -qq && sudo apt-get install -y -qq shellcheck; }
-          FLINTLOCK_RUNNER_REQUIRE_SHELLCHECK=1 make image-lint
-      - name: build the image, check stage included
-        if: steps.changed.outputs.build == 'true'
-        run: |
-          podman --version
-          make image CONTAINER_ENGINE=podman
-      - name: run the checks again and compare the labels
-        if: steps.changed.outputs.build == 'true'
-        run: make image-check CONTAINER_ENGINE=podman
-
   # The Guest Image (docs/requirements/13-guest-image.md): lint its scripts,
   # then build the kernel and root filesystem images for linux/amd64 and
   # linux/arm64, check stages included, and push nothing. The platform that
@@ -226,11 +180,11 @@ jobs:
         run: make guest-images GUEST_PLATFORMS=linux/amd64,linux/arm64
 
   # The Fleet Manifests (docs/requirements/12-cluster-fleet.md): render
-  # deploy/ and deploy/capi with the pinned kustomize, validate every object
-  # with kubeconform against the Kubernetes 1.35 schemas and the Cluster API
-  # and CAPA CRD schemas, and run the targeted checks of
-  # deploy/tests/checks.yaml, which load the rendered configurations with
-  # the flr binary and run the Host Agent's scripts against a sample Host.
+  # deploy/ with the pinned kustomize, validate every object with
+  # kubeconform against the Kubernetes 1.35 schemas, and run the targeted
+  # checks of deploy/tests/checks.yaml, which load the rendered
+  # configurations with the flr binary and run the Host Agent's scripts
+  # against a sample Host.
   manifests:
     name: fleet manifests render and schema check
     runs-on: ubuntu-latest

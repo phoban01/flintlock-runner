@@ -1,9 +1,9 @@
 name: release
 
 # A tag vX.Y.Z-rc.N publishes a release candidate as a GitHub pre-release; a
-# tag vX.Y.Z publishes a release. Either publishes the flr image, the Host
-# Image, the Guest Image and the two manifests assets as well as the
-# archives.
+# tag vX.Y.Z publishes a release. Either publishes the flr image, the Guest
+# Image and the manifests asset as well as the archives. battery-operator
+# publishes the Host Image that the Hosts boot from.
 # docs/RELEASING.md is the procedure. The same workflow dry-runs all of the
 # packaging, pushing nothing, on any pull request that changes it.
 on:
@@ -31,7 +31,6 @@ env:
   GORELEASER_VERSION: v2.18.1
   KUSTOMIZE_VERSION: v5.8.1
   FLR_REPOSITORY: ghcr.io/phoban01/flintlock-runner/flr
-  HOST_REPOSITORY: ghcr.io/phoban01/flintlock-runner/host
   # The Guest Image goes to GUEST_PREFIX/guest-kernel and
   # GUEST_PREFIX/guest-rootfs.
   GUEST_PREFIX: ghcr.io/phoban01/flintlock-runner
@@ -95,99 +94,6 @@ jobs:
       - run: go test -race ./...
       - name: end-to-end harness
         run: make e2e
-
-  # The Host Image (KF-142), built exactly as CI's image job builds it: `make
-  # image` runs the check stage inside the build, and `make image-check` runs
-  # it again and compares the labels. On a tag it is pushed to ghcr.io as
-  # VERSION and VERSION-k8s-<KUBERNETES_VERSION of image/versions.env>. On a
-  # pull request it is pushed to a registry that lives only inside this job,
-  # so that the push and the tag checks run too, and nothing leaves the
-  # runner. The job runs on pull requests as well as tags, hence the
-  # condition: on a tag it waits for the tests, on a pull request there are
-  # none to wait for. It holds packages: write because on a tag it pushes;
-  # on a pull request it logs in nowhere.
-  host-image:
-    name: host image
-    needs: [tag, verify]
-    if: >-
-      !cancelled() &&
-      (!startsWith(github.ref, 'refs/tags/') || needs.verify.result == 'success')
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      packages: write
-    services:
-      registry:
-        image: docker.io/library/registry:3.0.0@sha256:6c5666b861f3505b116bb9aa9b25175e71210414bd010d92035ff64018f9457e
-        ports: ["5000:5000"]
-    outputs:
-      digest: ${{ steps.push.outputs.digest }}
-    env:
-      HOST_IMAGE: localhost/flintlock-runner-host:release
-    steps:
-      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
-      - name: where the image goes
-        id: target
-        run: |
-          if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
-            {
-              echo "repository=$HOST_REPOSITORY"
-              echo "version=${GITHUB_REF_NAME#v}"
-              echo "tls_verify=true"
-            } >>"$GITHUB_OUTPUT"
-          else
-            # A version of the release form, so that the tag checks apply
-            # exactly as on a tag.
-            {
-              echo "repository=localhost:5000/flintlock-runner/host"
-              echo "version=0.0.0-rc.${GITHUB_RUN_NUMBER}"
-              echo "tls_verify=false"
-            } >>"$GITHUB_OUTPUT"
-          fi
-      - name: tools
-        run: |
-          podman --version
-          skopeo --version
-      - name: build the image, check stage included
-        run: make image CONTAINER_ENGINE=podman HOST_IMAGE="$HOST_IMAGE"
-      - name: run the checks again and compare the labels
-        run: make image-check CONTAINER_ENGINE=podman HOST_IMAGE="$HOST_IMAGE"
-      - name: log in to ghcr.io
-        if: startsWith(github.ref, 'refs/tags/')
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: printf '%s' "$GITHUB_TOKEN" | podman login ghcr.io --username "$GITHUB_ACTOR" --password-stdin
-      # Nothing of this version may exist yet, the flr image included, so a
-      # re-run of a half-published release fails here instead of moving a
-      # tag (KF-145). Cut the next candidate instead. The guest images job
-      # checks its own tags, since it pushes at the same time as this one.
-      - name: no tag of this version exists yet
-        if: startsWith(github.ref, 'refs/tags/')
-        env:
-          VERSION: ${{ steps.target.outputs.version }}
-        run: |
-          k8s=$(sed -n 's/^KUBERNETES_VERSION=//p' image/versions.env)
-          hack/release/check-tags.sh absent \
-            "$FLR_REPOSITORY:$VERSION" \
-            "$HOST_REPOSITORY:$VERSION" \
-            "$HOST_REPOSITORY:$VERSION-k8s-$k8s"
-      - name: push
-        id: push
-        env:
-          CONTAINER_ENGINE: podman
-          REPOSITORY: ${{ steps.target.outputs.repository }}
-          VERSION: ${{ steps.target.outputs.version }}
-          REGISTRY_TLS_VERIFY: ${{ steps.target.outputs.tls_verify }}
-        run: |
-          hack/release/push-host-image.sh "$HOST_IMAGE" "$REPOSITORY" "$VERSION" host.ref
-          ref=$(cat host.ref)
-          echo "digest=${ref#*@}" >>"$GITHUB_OUTPUT"
-      - name: only this version's tags, on the pushed digest
-        env:
-          REPOSITORY: ${{ steps.target.outputs.repository }}
-          VERSION: ${{ steps.target.outputs.version }}
-          REGISTRY_TLS_VERIFY: ${{ steps.target.outputs.tls_verify }}
-        run: hack/release/check-tags.sh published --version "$VERSION" --host "$(cat host.ref)"
 
   # The Guest Image (GI-040): the kernel and root filesystem images a Profile
   # names, each built for linux/amd64 and linux/arm64 with its check stage,
@@ -263,12 +169,12 @@ jobs:
           hack/release/check-guest-images.sh --version "$VERSION" "${refs[@]}"
 
   # Publish a tag: the archives and the flr image with goreleaser, then the
-  # manifests assets, rendered against the digests just pushed. goreleaser
+  # manifests asset, rendered against the digests just pushed. goreleaser
   # leaves the GitHub release a draft (.goreleaser.yaml), and the last step
   # publishes it, so a release is never visible without its manifests.
   release:
     name: publish
-    needs: [tag, verify, host-image, guest-images]
+    needs: [tag, verify, guest-images]
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -319,14 +225,13 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       - name: the published images by digest
         env:
-          HOST_DIGEST: ${{ needs.host-image.outputs.digest }}
           GUEST_KERNEL_REF: ${{ needs.guest-images.outputs.kernel }}
           GUEST_ROOTFS_REF: ${{ needs.guest-images.outputs.rootfs }}
         run: |
           version=${GITHUB_REF_NAME#v}
           flr_digest=$(jq -r --arg name "$FLR_REPOSITORY:$version" \
             '[.[] | select(.type == "Docker Image" and .name == $name) | .extra.Digest] | unique | .[]' dist/artifacts.json)
-          for d in "$flr_digest" "$HOST_DIGEST" "${GUEST_KERNEL_REF#*@}" "${GUEST_ROOTFS_REF#*@}"; do
+          for d in "$flr_digest" "${GUEST_KERNEL_REF#*@}" "${GUEST_ROOTFS_REF#*@}"; do
             if ! [[ $d =~ ^sha256:[0-9a-f]{64}$ ]]; then
               echo "::error::not one digest: \"$d\""
               exit 1
@@ -335,14 +240,13 @@ jobs:
           {
             echo "VERSION=$version"
             echo "FLR_REF=$FLR_REPOSITORY@$flr_digest"
-            echo "HOST_REF=$HOST_REPOSITORY@$HOST_DIGEST"
             echo "GUEST_KERNEL_REF=$GUEST_KERNEL_REF"
             echo "GUEST_ROOTFS_REF=$GUEST_ROOTFS_REF"
           } >>"$GITHUB_ENV"
       - name: the flr image as published
         run: hack/release/check-flr-image.sh --version "$VERSION" --platforms linux/amd64,linux/arm64 --pull "$FLR_REF"
       - name: only this version's tags, on the pushed digests
-        run: hack/release/check-tags.sh published --version "$VERSION" --flr "$FLR_REF" --host "$HOST_REF"
+        run: hack/release/check-tags.sh published --version "$VERSION" --flr "$FLR_REF"
       - name: the Guest Image as published
         run: hack/release/check-guest-images.sh --version "$VERSION" "$GUEST_KERNEL_REF" "$GUEST_ROOTFS_REF"
       # images.txt lists every tag this release pushed with its digest. The
@@ -350,25 +254,21 @@ jobs:
       # Profiles, so it is written first.
       - name: list the published images
         run: |
-          k8s=$(sed -n 's/^KUBERNETES_VERSION=//p' image/versions.env)
           mkdir -p dist/manifests
           {
             echo "$FLR_REPOSITORY:$VERSION $FLR_REF"
-            echo "$HOST_REPOSITORY:$VERSION $HOST_REF"
-            echo "$HOST_REPOSITORY:$VERSION-k8s-$k8s $HOST_REF"
             echo "$GUEST_PREFIX/guest-kernel:$VERSION $GUEST_KERNEL_REF"
             echo "$GUEST_PREFIX/guest-rootfs:$VERSION $GUEST_ROOTFS_REF"
           } >dist/manifests/images.txt
-      - name: render the manifests assets
-        run: hack/release/render-manifests.sh --flr "$FLR_REF" --host "$HOST_REF" --images dist/manifests/images.txt --out dist/manifests
+      - name: render the manifests asset
+        run: hack/release/render-manifests.sh --flr "$FLR_REF" --images dist/manifests/images.txt --out dist/manifests
       - name: attach the manifests and publish the release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          (cd dist/manifests && sha256sum flintlock-runner-fleet.yaml flintlock-runner-capi.yaml images.txt) >>dist/checksums.txt
+          (cd dist/manifests && sha256sum flintlock-runner-fleet.yaml images.txt) >>dist/checksums.txt
           gh release upload "$GITHUB_REF_NAME" --clobber \
             dist/manifests/flintlock-runner-fleet.yaml \
-            dist/manifests/flintlock-runner-capi.yaml \
             dist/manifests/images.txt \
             dist/checksums.txt
           gh release edit "$GITHUB_REF_NAME" --draft=false
@@ -390,21 +290,14 @@ jobs:
 
   # On a pull request that changes the packaging, build everything a release
   # builds and run every check a release runs, without publishing: the
-  # archives, the flr image for both platforms, and the manifests assets
-  # rendered against real digests. The flr image goes to a registry that
-  # lives only inside this job, and the Host Image job above does the same
-  # for the Host Image, so the digests are of real pushes; the rendered
-  # assets name them under ghcr.io, where they do not exist, and are kept
-  # only as a workflow artifact for review. On a pull request, tag and verify
-  # are skipped, and a skip passes down through host-image, so the condition
-  # needs !cancelled() to run the job at all.
+  # archives, the flr image for both platforms, and the manifests asset
+  # rendered against a real digest. The flr image goes to a registry that
+  # lives only inside this job, so its digest is of a real push; the
+  # rendered asset names it under ghcr.io, where it does not exist, and is
+  # kept only as a workflow artifact for review.
   dry-run:
     name: packaging dry run
-    needs: host-image
-    if: >-
-      !cancelled() &&
-      !startsWith(github.ref, 'refs/tags/') &&
-      needs.host-image.result == 'success'
+    if: "!startsWith(github.ref, 'refs/tags/')"
     runs-on: ubuntu-latest
     services:
       registry:
@@ -473,9 +366,7 @@ jobs:
       # digests for guest-kernel and guest-rootfs: the digests of their own
       # names, which no registry holds. The render writes them into the
       # Runner's Profiles as a release writes the pushed ones.
-      - name: render the manifests assets
-        env:
-          HOST_DIGEST: ${{ needs.host-image.outputs.digest }}
+      - name: render the manifests asset
         run: |
           if [ ! -f deploy/kustomization.yaml ]; then
             echo "::warning::deploy/kustomization.yaml does not exist yet, so there are no Fleet Manifests to render; a release would fail here"
@@ -484,7 +375,6 @@ jobs:
           mkdir -p dist/manifests
           {
             echo "$FLR_REPOSITORY:$VERSION $FLR_REPOSITORY@$FLR_DIGEST"
-            echo "$HOST_REPOSITORY:$VERSION $HOST_REPOSITORY@$HOST_DIGEST"
             for name in guest-kernel guest-rootfs; do
               echo "$GUEST_PREFIX/$name:$VERSION $GUEST_PREFIX/$name@sha256:$(printf '%s' "dry-run $name" | sha256sum | cut -d' ' -f1)"
             done
@@ -492,10 +382,9 @@ jobs:
           cat dist/manifests/images.txt
           hack/release/render-manifests.sh \
             --flr "$FLR_REPOSITORY@$FLR_DIGEST" \
-            --host "$HOST_REPOSITORY@$HOST_DIGEST" \
             --images dist/manifests/images.txt \
             --out dist/manifests
-      - name: keep the rendered assets
+      - name: keep the rendered asset
         if: hashFiles('dist/manifests/*.yaml') != ''
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:

@@ -23,6 +23,7 @@ configMapGenerator:
       - config/prepare-cache.sh
       - config/prewarm.sh
       - config/host-services.yaml.tmpl
+      - config/host-pool.conf
     options:
       labels:
         app.kubernetes.io/name: flintlock-host-agent

@@ -169,7 +169,7 @@ func TestPublishUnderTheShippedPolicy(t *testing.T) {
 	apply(t, admin, "host-services-admission-policy.yaml")
 	for _, name := range []string{"host-a", "host-b"} {
 		if _, err := admin.CoreV1().Nodes().Create(ctx, &corev1.Node{ObjectMeta: metav1.ObjectMeta{
-			Name: name, Labels: map[string]string{"gitlab-runner.flintlock.dev/host": "true"},
+			Name: name, Labels: map[string]string{"battery.liquidmetal-x.dev/host": "true"},
 			Annotations: map[string]string{"example.com/unrelated": "kept"},
 		}}, metav1.CreateOptions{}); err != nil {
 			t.Fatal(err)
@@ -223,7 +223,7 @@ func TestPublishUnderTheShippedPolicy(t *testing.T) {
 		t.Errorf("publishing on another Host's Node = %v, want a policy denial", err)
 	}
 	for what, patch := range map[string]string{
-		"a label":            `{"metadata":{"labels":{"gitlab-runner.flintlock.dev/host":"false"}}}`,
+		"a label":            `{"metadata":{"labels":{"battery.liquidmetal-x.dev/host":"false"}}}`,
 		"another annotation": `{"metadata":{"annotations":{"example.com/unrelated":"changed"}}}`,
 		"a new annotation":   `{"metadata":{"annotations":{"gitlab-runner.flintlock.dev/other":"x"}}}`,
 		"its spec":           `{"spec":{"unschedulable":true}}`,

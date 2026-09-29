@@ -46,18 +46,6 @@ list_tags() {
 	skopeo_cmd list-tags "$(tls_flag tls-verify)" "docker://$1" | jq -r '.Tags[]'
 }
 
-# kubernetes_version: KUBERNETES_VERSION from image/versions.env, the one
-# place it is pinned.
-kubernetes_version() {
-	local versions=${VERSIONS_ENV:-image/versions.env} v
-	v=$(sed -n 's/^KUBERNETES_VERSION=//p' "$versions")
-	if ! [[ $v =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-		echo "no KUBERNETES_VERSION=vX.Y.Z in $versions (got \"$v\")" >&2
-		return 1
-	fi
-	printf '%s\n' "$v"
-}
-
 # The one form of a release version: 1.2.3 or 1.2.3-rc.4, without the v of
 # the git tag, as goreleaser's .Version has it.
 # shellcheck disable=SC2034 # used by the scripts that source this file

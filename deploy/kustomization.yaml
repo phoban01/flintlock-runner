@@ -3,9 +3,10 @@
 #
 #   kustomize build deploy/ | kubectl apply -f -
 #
-# The Cluster API objects that make the Hosts go to the management cluster
-# instead, from deploy/capi/. deploy/README.md says what an operator supplies
-# before either applies.
+# The Hosts are not here. battery-operator's Cluster API templates make them
+# from its Host Image, in the management cluster (deploy/README.md, "Host
+# pools"). deploy/README.md says what an operator supplies before this
+# applies.
 #
 # This renders the Host Agent with the Host Services, and the Runner on the
 # claim backend. battery-operator v0.1.0's Manifests go to the same cluster

@@ -55,15 +55,16 @@ spec:
       terminationGracePeriodSeconds: 10800
       #= docs/requirements/12-cluster-fleet.md#cluster-runner
       #/ The Fleet Manifests SHALL NOT schedule the Runner onto Hosts.
-      # Hosts carry the label of HI-060; the Runner requires a node without
-      # it. There is also no toleration below for the Host taint of KF-002,
-      # so the taint keeps it off as well.
+      # Hosts carry the Host label, battery.liquidmetal-x.dev/host
+      # (battery-operator HI-074, HP-020); the Runner requires a node
+      # without it. There is also no toleration below for the Host taint
+      # (battery-operator HP-021), so the taint keeps it off as well.
       affinity:
         nodeAffinity:
           requiredDuringSchedulingIgnoredDuringExecution:
             nodeSelectorTerms:
               - matchExpressions:
-                  - key: gitlab-runner.flintlock.dev/host
+                  - key: battery.liquidmetal-x.dev/host
                     operator: DoesNotExist
                   - key: kubernetes.io/os
                     operator: In

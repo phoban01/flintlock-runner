@@ -3,7 +3,7 @@ kind: Deployment
 metadata:
   name: flr
   annotations:
-    gitlab-runner.flintlock.dev/host-image: ghcr.io/phoban01/flintlock-runner/host:dev
+    gitlab-runner.flintlock.dev/runner-image: ghcr.io/phoban01/flintlock-runner/flr:dev
 spec:
   selector:
     matchLabels: {app: flr}

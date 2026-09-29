@@ -135,7 +135,8 @@ liquidmetal ecosystem knows about EC2, so this layer is entirely ours.
 
 **Cluster fleet.** A fleet can also run from a Kubernetes cluster
 (`docs/requirements/12-cluster-fleet.md`). Hosts are Cluster API Machines
-of the Host Image. [battery-operator](https://github.com/phoban01/battery-operator)
+of battery-operator's reference Host Image, made by its Cluster API
+templates. [battery-operator](https://github.com/phoban01/battery-operator)
 runs battery in the cluster and serves the `Pool` and `MicroVMClaim`
 resources. Its Exec Agent runs on every Host. The Runner uses the claim
 backend (`internal/poolmgr/claim`): it declares a `Pool` per profile and
@@ -144,9 +145,11 @@ claims each microVM with a `MicroVMClaim`. It runs each stage over the
 names, with a token bound to that claim. The Runner has no inventory and
 never dials a `flintlockd`. The Host Agent runs the host services and
 publishes their addresses on its Host's Node, where the Executor reads
-them. The first cluster design, with a virtual kubelet Pod Provider, a
-Virtual Node per Host and pools as ReplicaSets of microVM pods, was
-removed in #101.
+them, and keeps their cache in a volume of its own pod. The first cluster
+design, with a virtual kubelet Pod Provider, a Virtual Node per Host and
+pools as ReplicaSets of microVM pods, was removed in #101. The Host Image
+and the Cluster API host pools that this repository first built moved to
+battery-operator (its ADR 0007), and #107 removed them here.
 
 ## Why these choices
 

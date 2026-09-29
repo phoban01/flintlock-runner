@@ -7,6 +7,12 @@
 #/ tolerates the Host taint, selects the Host label and contains the Host
 #/ Services of FL-100.
 #
+# The Host label and the Host taint are battery-operator's: its Host Image
+# and its Cluster API templates register every Host with the label
+# battery.liquidmetal-x.dev/host=true and the taint
+# battery.liquidmetal-x.dev/host=true:NoSchedule (its HI-074, HP-020 and
+# HP-021).
+#
 # The Exec Agent is not in the Host Agent: battery-operator's Manifests run
 # it, as a DaemonSet of their own (deploy/README.md, "The Exec Agent").
 #
@@ -19,15 +25,11 @@
 # Least privilege (KF-113). Nothing here is privileged, and no container
 # adds a capability except the two noted where they are added: CAP_CHOWN
 # for the cache preparation and CAP_SETUID/CAP_SETGID for rootless
-# buildkitd. The host mounts are, each justified where it is declared:
-#
-#   /run/flr/host.env                    read-only, render only
-#   /var/lib/flintlock-runner/cache      read-write, cache preparation and
-#                                        the Host Services, each its own
-#                                        subdirectory
-#
-# The Host Image labels both for the container domain (HI-065): the first
-# container_ro_file_t, the cache container_file_t, at s0.
+# buildkitd. The one host mount is /run/battery/host.env, read-only, for
+# the render init container. battery-operator's Host Image labels it
+# container_ro_file_t at s0, so that a container may read it (its HI-065).
+# The Host Service cache is an emptyDir of the pod (KF-197), which the
+# kubelet labels for the pod itself.
 #
 # No container of the Host Agent reaches flintlockd.
 apiVersion: apps/v1
@@ -57,9 +59,9 @@ spec:
       # projected volume host-services-token.
       automountServiceAccountToken: false
       nodeSelector:
-        gitlab-runner.flintlock.dev/host: "true"
+        battery.liquidmetal-x.dev/host: "true"
       tolerations:
-        - key: gitlab-runner.flintlock.dev/host
+        - key: battery.liquidmetal-x.dev/host
           operator: Equal
           value: "true"
           effect: NoSchedule
@@ -68,8 +70,8 @@ spec:
       #/ SHALL bind every Host Service only to the guest bridge gateway address.
       # The Host's network namespace is where the guest bridge and its
       # gateway address are. Each service's configuration names the gateway
-      # address, which render.sh reads from the Host Image's
-      # /run/flr/host.env.
+      # address, which render.sh reads from BATTERY_GATEWAY in the Host
+      # Image's /run/battery/host.env.
       hostNetwork: true
       dnsPolicy: ClusterFirstWithHostNet
       hostPID: false
@@ -80,24 +82,31 @@ spec:
         runAsNonRoot: true
         seccompProfile:
           type: RuntimeDefault
-        # SELinux (HI-065). The containers keep the ordinary container
-        # domain, container_t, except buildkitd, which names
+        # SELinux. battery-operator's Host Image runs every unprivileged
+        # container confined (its HI-066). The containers keep the ordinary
+        # container domain, container_t, except buildkitd, which names
         # container_engine_t and repeats this level (KF-139, in
-        # services/buildkit); only the MCS level is fixed here. A pod otherwise
-        # gets two random categories each time it starts, and what the Host
-        # Services write into the cache directory carries them, so the next
-        # Host Agent pod, with other categories, could neither read its
-        # predecessor's caches nor hand them over in prepare-cache. With a
-        # fixed pair every Host Agent pod reads what the last one wrote,
-        # and a pod with random categories still cannot. The Host Image
-        # labels the host paths below at s0, which every level dominates;
-        # see "SELinux" in image/README.md.
+        # services/buildkit); only the MCS level is fixed here. The kubelet
+        # labels the cache emptyDir with the pod's level, and a container
+        # that names a type but no level gets random categories of its own,
+        # which could not use the cache. With one fixed level for the pod,
+        # every container, buildkitd included, uses the cache.
         seLinuxOptions:
           level: "s0:c311,c827"
       initContainers:
+        #= docs/requirements/12-cluster-fleet.md#cluster-host-agent
+        #/ If the Host's gateway service ports or gateway service user ids
+        #/ leave out any that the Fleet Manifests provide, then the Host Agent
+        #/ SHALL NOT start the Host Services.
         # Renders the host-services container's and the Host Services'
         # configuration for this Host, bridge gateway address included
-        # (render.sh).
+        # (render.sh). It first compares BATTERY_GATEWAY_SERVICE_PORTS and
+        # BATTERY_GATEWAY_SERVICE_UIDS of host.env with host-pool.conf, and
+        # fails when the Host leaves one out: the Host Image would then
+        # drop a Host Service's port for guests, or let a Host Service's user
+        # id reach the metadata service and the Host's control ports. An init
+        # container that fails keeps every container of the pod from
+        # starting.
         - name: render
           image: busybox:1.37.0@sha256:9db7b59979c38555a39def84a31fb98b5296952f9e3afd4f6f11f05b07adfab0
           command: [/bin/sh, /etc/flr/templates/render.sh]
@@ -121,15 +130,10 @@ spec:
             - name: rendered
               mountPath: /etc/flr/rendered
             - name: host-env
-              mountPath: /run/flr/host.env
+              mountPath: /run/battery/host.env
               readOnly: true
-        #= docs/requirements/12-cluster-fleet.md#cluster-host-agent
-        #/ The Host Agent SHALL keep all Host Service storage in the Host
-        #/ Service cache directory of HI-024, so that it outlives the pod and a
-        #/ reboot of the Host.
-        # Creates each enabled Host Service's directory under the cache
-        # directory and hands it to that service's user id
-        # (prepare-cache.sh).
+        # Creates each enabled Host Service's directory in the cache volume
+        # and hands it to that service's user id (prepare-cache.sh).
         - name: prepare-cache
           image: busybox:1.37.0@sha256:9db7b59979c38555a39def84a31fb98b5296952f9e3afd4f6f11f05b07adfab0
           command: [/bin/sh, /etc/flr/templates/prepare-cache.sh]
@@ -137,11 +141,11 @@ spec:
           #/ The Host Agent SHALL hold only the privileges it needs to bind
           #/ to the bridge gateway in the Host's network namespace and to write the
           #/ cache directory.
-          # Root, because root owns the Host Image's cache directory, and
-          # CAP_CHOWN alone, to give each service its directory. A hostPath
-          # is never re-owned by the kubelet, and fsGroup does not apply to
-          # it, so nothing short of this lets the non-root services write
-          # there.
+          # Root, because root owns the root of the cache volume, and
+          # CAP_CHOWN alone, to give each service its directory. The Host
+          # Services run as different user ids, and fsGroup would give every
+          # one of them the others' directories, so nothing short of this
+          # gives each non-root service a directory of its own.
           securityContext:
             runAsNonRoot: false
             runAsUser: 0
@@ -175,10 +179,10 @@ spec:
         # listen on the Host's Node, for the Runner to read (KF-189), from
         # the configuration render.sh makes for this Host. It serves nothing
         # and reaches only the API server. Its user id, 10003, is none of the
-        # Host Services' (HI-064). It is not the flr image's own, 65532,
-        # because that is the Exec Agent's, the one user id the Host Image
-        # admits to flintlockd (HI-070). The binary is mode 0555, so any
-        # user id runs it.
+        # Host Services' gateway service user ids (host-pool.conf). It is not
+        # the flr image's own, 65532, because that is the Exec Agent's, the
+        # one user id the Host Image admits to flintlockd (battery-operator
+        # HI-070). The binary is mode 0555, so any user id runs it.
         - name: host-services
           image: ghcr.io/phoban01/flintlock-runner/flr:dev
           args: [host-services, --host-services-config, /etc/flr/rendered/host-services.yaml]
@@ -223,12 +227,13 @@ spec:
             medium: Memory
             sizeLimit: 1Mi
         # Host mount: the Host Image's derived settings, written by
-        # flr-host-config at every boot. Read by render only, for the bridge
-        # gateway address. A Host without it has not configured itself, and
-        # the pod does not start.
+        # battery-host-config at every boot. Read by render only, for the
+        # bridge gateway address and the gateway service ports and user ids.
+        # A Host without it has not configured itself, and the pod does not
+        # start.
         - name: host-env
           hostPath:
-            path: /run/flr/host.env
+            path: /run/battery/host.env
             type: File
         # The API credentials of the host-services container, in place of
         # the automounted ones, which the pod turns off: the three sources
@@ -256,11 +261,17 @@ spec:
                     - path: namespace
                       fieldRef:
                         fieldPath: metadata.namespace
-        # Host mount: the Host Service cache directory of HI-024 on the
-        # Host's instance store, so the caches outlive the pod and a reboot
-        # (KF-072). type Directory: the Host Image makes it, and a Host where
-        # it is missing does not get a fresh directory on its root volume.
+        #= docs/requirements/12-cluster-fleet.md#cluster-host-agent
+        #/ The Host Agent SHALL keep all Host Service storage in one
+        #/ `emptyDir` volume of its pod, on the Node's disk rather than in
+        #/ memory.
+        # The Host Service cache. It lives as long as the pod: a container
+        # that restarts keeps it, and a new pod, after a rollout or an
+        # eviction, starts with an empty cache. It is on the Node's disk, in
+        # the kubelet's directory under /var, and counts against the Node's
+        # ephemeral storage. buildkitd keeps its use under its garbage
+        # collection limit, and the HTTP cache under the size of each
+        # upstream; zot and Athens have no size limit. deploy/README.md,
+        # "The Host Service cache", says why this is not a hostPath.
         - name: cache
-          hostPath:
-            path: /var/lib/flintlock-runner/cache
-            type: Directory
+          emptyDir: {}
