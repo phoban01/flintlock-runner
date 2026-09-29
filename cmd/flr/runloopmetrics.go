@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/netip"
 	"os"
@@ -68,9 +69,21 @@ func isTCPListener(fd int) bool {
 	if err != nil || typ != syscall.SOCK_STREAM {
 		return false
 	}
-	// Linux answers 1 and macOS answers the option's bit.
 	accepting, err := syscall.GetsockoptInt(fd, syscall.SOL_SOCKET, syscall.SO_ACCEPTCONN)
-	return err == nil && accepting != 0
+	if err == nil {
+		return accepting != 0
+	}
+	if !errors.Is(err, syscall.ENOPROTOOPT) {
+		return false
+	}
+	// macOS does not answer SO_ACCEPTCONN (#114). A listener has a port of
+	// its own and no peer; a connected socket has a peer.
+	sa, err := syscall.Getsockname(fd)
+	if in4, ok := sa.(*syscall.SockaddrInet4); err != nil || !ok || in4.Port == 0 {
+		return false
+	}
+	_, err = syscall.Getpeername(fd)
+	return errors.Is(err, syscall.ENOTCONN)
 }
 
 // newListeners returns the listeners in now that are not in before, in
