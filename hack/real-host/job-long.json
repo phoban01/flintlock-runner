@@ -1,0 +1,38 @@
+{
+  "id": 1,
+  "token": "glcbt-real-host-1",
+  "allow_git_fetch": false,
+  "job_info": {
+    "name": "real-host-long",
+    "stage": "test",
+    "project_id": 1,
+    "project_name": "real-host"
+  },
+  "git_info": {
+    "repo_url": "https://gitlab.example.com/flintlock-runner/real-host.git",
+    "ref": "main",
+    "sha": "0000000000000000000000000000000000000000",
+    "ref_type": "branch"
+  },
+  "runner_info": {
+    "timeout": 900
+  },
+  "image": {
+    "name": "flr-arm64"
+  },
+  "variables": [
+    { "key": "GIT_STRATEGY", "value": "none", "public": true },
+    { "key": "CI_JOB_ID", "value": "1", "public": true }
+  ],
+  "steps": [
+    {
+      "name": "script",
+      "script": [
+        "for i in $(seq 1 600); do echo \"tick $i\"; sleep 1; done"
+      ],
+      "timeout": 900,
+      "when": "on_success",
+      "allow_failure": false
+    }
+  ]
+}
