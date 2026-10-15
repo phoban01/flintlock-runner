@@ -6,10 +6,23 @@ root filesystem image, both OCI images that a Profile names and that
 [docs/requirements/13-guest-image.md](../docs/requirements/13-guest-image.md)
 (GI-001 to GI-040).
 
-Both images start from battery-operator's real hosts trial images
-(`hack/real-hosts/images` in battery-operator v0.1.0). The network setup
-and the empty machine ID come from that trial's guest networking
+Both images start from battery-operator's guest images
+(`guestimage/`, first in its `hack/real-hosts/images`). The network setup
+and the empty machine ID come from its real hosts trial's guest networking
 (phoban01/battery-operator#163).
+
+## Which guest images
+
+Use these images for every Pool that flintlock-runner claims. Their root
+filesystem holds what a GitLab CI Job needs: bash, git, curl, the CA
+certificates and `gitlab-runner-helper`.
+
+battery-operator publishes a smaller pair,
+`ghcr.io/phoban01/battery-operator/guest-kernel` and `guest-rootfs`
+([guestimage/README.md](https://github.com/phoban01/battery-operator/blob/main/guestimage/README.md)),
+with only the guest agent. Those suit a Pool that runs no Jobs, such as
+battery-operator's demo. A Job on them fails, because they have no
+`gitlab-runner-helper` and no git. The kernel is the same in both projects.
 
 ## What each image carries, and why
 
