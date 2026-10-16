@@ -7,6 +7,7 @@
 #
 #   run.sh               images deploy job services
 #   run.sh <step>...     only those: images deploy job services
+#                        cache-demo build-demo kind
 #                        fault-flintlockd fault-flintlockd-hang
 #                        fault-exec-agent-hang fault-not-ready clean
 #
@@ -43,10 +44,12 @@ if [[ -n "${KUBEADM_HOST}" ]]; then
 	SSH_OPTS="${SSH_OPTS:--F ${KUBEADM_HOST}/.state/ssh_config}"
 fi
 
-# Where the Guest Image comes from. GUEST=release takes the guest-kernel
-# and guest-rootfs digests from RELEASE's images.txt; flintlockd pulls them
-# from ghcr.io. GUEST=build builds them from guest/ and pushes them to the
-# Host's registry on REGISTRY, which flintlockd pulls from over plain HTTP.
+# Where the Guest Image comes from. GUEST=release takes the guest-kernel,
+# guest-rootfs, guest-rootfs-docker and guest-rootfs-kind digests from
+# RELEASE's images.txt; flintlockd pulls them from ghcr.io. A release with
+# no Docker or kind image leaves out their Profiles. GUEST=build builds all
+# four from guest/ and pushes them to the Host's registry on REGISTRY, which
+# flintlockd pulls from over plain HTTP.
 GUEST="${GUEST:-release}"
 RELEASE="${RELEASE:-v1.0.0-rc.9}"
 RELEASE_REPO="${RELEASE_REPO:-phoban01/flintlock-runner}"
@@ -55,8 +58,16 @@ REGISTRY="${REGISTRY:-127.0.0.1:5000}"
 # into the registry.
 CTR_NS="flr-real-host"
 NS=flintlock-system
-# The Runner's one Profile and its Pool (runner-config.yaml).
+# The Pools of the Runner's Profiles (runner-config.yaml): the default
+# Profile's, and the Docker and kind Profiles'.
 POOL=real-host-arm64
+DOCKER_POOL=real-host-docker
+KIND_POOL=real-host-kind
+# The Profiles of runner-config.yaml that deploy keeps: arm64 (the default
+# Profile, for job and services), docker (for cache-demo and build-demo)
+# and kind. On a Mac, keep one at a time (runner-config.yaml says why);
+# deploy deletes the Pools of the others.
+PROFILES="${PROFILES:-arm64}"
 # The fake GitLab's runner token. It opens nothing but the fake.
 RUNNER_TOKEN=glrt-real-host
 # How long a job step waits for its Job, in seconds.
@@ -65,6 +76,10 @@ JOB_WAIT="${JOB_WAIT:-900}"
 # seconds. With the Runner's defaults the bounds are 60 s (KF-202) and
 # 20 s after the claim's HostReady turns false (KF-205).
 FAULT_WAIT="${FAULT_WAIT:-180}"
+# How long a job step waits for a MicroVM to claim, in seconds. A Pool whose
+# MicroVM missed battery's wait for its guest agent refills only at its next
+# reseed, minutes later.
+POOL_WAIT="${POOL_WAIT:-180}"
 # The not ready reason file the fault-not-ready step writes on the Host.
 NOT_READY_FILE=/run/battery/not-ready.d/flr-real-host
 
@@ -210,6 +225,9 @@ release_guest() {
 	[[ "${kernel}" == *@sha256:* && "${rootfs}" == *@sha256:* ]] ||
 		die "${RELEASE}'s images.txt names no guest-kernel or guest-rootfs digest"
 	printf 'KERNEL_IMAGE=%s\nROOTFS_IMAGE=%s\n' "${kernel}" "${rootfs}"
+	# Releases before the Docker and kind images name neither.
+	printf 'DOCKER_ROOTFS_IMAGE=%s\n' "$(awk '$1 ~ /\/guest-rootfs-docker:/ { print $2 }' "${dir}/images.txt")"
+	printf 'KIND_ROOTFS_IMAGE=%s\n' "$(awk '$1 ~ /\/guest-rootfs-kind:/ { print $2 }' "${dir}/images.txt")"
 }
 
 step_images() {
@@ -237,6 +255,8 @@ step_images() {
 		log "Pushing the Guest Image to the Host's registry on ${REGISTRY}"
 		guest="KERNEL_IMAGE=$(push_to_registry localhost/flr-guest-kernel:dev guest-kernel "${arch}")"
 		guest+=$'\n'"ROOTFS_IMAGE=$(push_to_registry localhost/flr-guest-rootfs:dev guest-rootfs "${arch}")"
+		guest+=$'\n'"DOCKER_ROOTFS_IMAGE=$(push_to_registry localhost/flr-guest-rootfs-docker:dev guest-rootfs-docker "${arch}")"
+		guest+=$'\n'"KIND_ROOTFS_IMAGE=$(push_to_registry localhost/flr-guest-rootfs-kind:dev guest-rootfs-kind "${arch}")"
 		# The import was only the way into the registry; flintlockd pulls
 		# into its own namespace.
 		host_root sh -c "ctr -n ${CTR_NS} images ls -q | xargs -r ctr -n ${CTR_NS} images rm >/dev/null; ctr -n ${CTR_NS} content prune references >/dev/null 2>&1 || true"
@@ -263,12 +283,29 @@ load_images() {
 # GitLab, and the fake GitLab. deploy/README.md's order: battery-operator is
 # there already.
 
+# profile_kept NAME succeeds when deploy keeps the Profile NAME of
+# runner-config.yaml: PROFILES names it, and images.env names its root
+# filesystem image.
+profile_kept() {
+	[[ " ${PROFILES} " == *" $1 "* ]] || return 1
+	case $1 in
+	docker) [[ -n "${DOCKER_ROOTFS_IMAGE:-}" ]] ;;
+	kind) [[ -n "${KIND_ROOTFS_IMAGE:-}" ]] ;;
+	*) return 0 ;;
+	esac
+}
+
 # overlay writes the kustomize overlay of deploy/ that run.sh applies,
 # under .state, and prints its directory.
 overlay() {
 	local dir="${STATE_DIR}/overlay"
 	mkdir -p "${dir}"
-	sed -e "s#KERNEL_IMAGE#${KERNEL_IMAGE}#" -e "s#ROOTFS_IMAGE#${ROOTFS_IMAGE}#" \
+	local drop=() p
+	for p in arm64 docker kind; do
+		profile_kept "${p}" || drop+=(-e "/# BEGIN profile ${p}/,/# END profile ${p}/d")
+	done
+	sed "${drop[@]}" -e "s#: KERNEL_IMAGE\$#: ${KERNEL_IMAGE}#" -e "s#: ROOTFS_IMAGE\$#: ${ROOTFS_IMAGE}#" \
+		-e "s#: DOCKER_ROOTFS_IMAGE\$#: ${DOCKER_ROOTFS_IMAGE:-}#" -e "s#: KIND_ROOTFS_IMAGE\$#: ${KIND_ROOTFS_IMAGE:-}#" \
 		"${HERE}/runner-config.yaml" >"${dir}/config.yaml"
 	cat >"${dir}/kustomization.yaml" <<-EOF
 		# Written by hack/real-host/run.sh; do not edit.
@@ -311,8 +348,10 @@ host_ready() {
 	kubectl get node "${NODE_NAME}" -o jsonpath='{.metadata.annotations.battery\.liquidmetal-x\.dev/exec-agent-ready}'
 }
 
+# pool_ready [POOL] prints the Ready status of POOL, by default the default
+# Profile's.
 pool_ready() {
-	kubectl -n "${NS}" get pool "${POOL}" -o jsonpath='{.status.conditions[?(@.type=="Ready")].status}' 2>/dev/null || true
+	kubectl -n "${NS}" get pool "${1:-${POOL}}" -o jsonpath='{.status.conditions[?(@.type=="Ready")].status}' 2>/dev/null || true
 }
 
 # wait_until SECONDS CMD... runs CMD every 5 s until it succeeds, for at
@@ -327,14 +366,14 @@ wait_until() {
 	"$@"
 }
 
-is_pool_ready() { [[ "$(pool_ready)" == True ]]; }
+is_pool_ready() { [[ "$(pool_ready "$@")" == True ]]; }
 is_host_ready() { [[ "$(host_ready)" == true ]]; }
 
-# has_available succeeds while the Pool has a MicroVM ready to claim and
-# none provisioning.
+# has_available [POOL] succeeds while POOL, by default the default
+# Profile's, has a MicroVM ready to claim and none provisioning.
 has_available() {
 	local s
-	s="$(kubectl -n "${NS}" get pool "${POOL}" -o jsonpath='{.status.available}/{.status.provisioning}' 2>/dev/null || true)"
+	s="$(kubectl -n "${NS}" get pool "${1:-${POOL}}" -o jsonpath='{.status.available}/{.status.provisioning}' 2>/dev/null || true)"
 	[[ "${s%/*}" =~ ^[1-9] && "${s#*/}" =~ ^0?$ ]]
 }
 
@@ -369,17 +408,33 @@ step_deploy() {
 	}
 	kubectl -n "${NS}" rollout status deployment/flintlock-runner --timeout=300s
 
-	log "Waiting for the Runner's Pool ${POOL} to be Ready"
-	wait_until 600 is_pool_ready || {
-		kubectl -n "${NS}" get pool "${POOL}" -o yaml >&2 || true
-		die "the Pool ${POOL} is not Ready"
-	}
+	# The Runner never deletes a Pool, so the Pools of the Profiles that
+	# PROFILES leaves out go here. Their MicroVMs would take the Host's
+	# memory and slow every boot.
+	local p kept=()
+	for p in arm64 docker kind; do
+		if profile_kept "${p}"; then
+			kept+=("real-host-${p}")
+		else
+			kubectl -n "${NS}" delete pool "real-host-${p}" --ignore-not-found --wait=true --timeout=300s >/dev/null
+		fi
+	done
+	[[ ${#kept[@]} -gt 0 ]] || die "PROFILES=${PROFILES} keeps no Profile of runner-config.yaml"
+	# The Pool's Ready condition can say AtSize while nothing is available
+	# (battery-operator#223), so this waits for a MicroVM itself.
+	for p in "${kept[@]}"; do
+		log "Waiting for the Pool ${p} to have a MicroVM available"
+		wait_until 900 has_available "${p}" || {
+			kubectl -n "${NS}" get pool "${p}" -o yaml >&2 || true
+			die "the Pool ${p} has no MicroVM available"
+		}
+	done
 	kubectl -n "${NS}" get pools,pods -o wide
 	log "The Host Services on ${NODE_NAME}'s Node"
 	kubectl get node "${NODE_NAME}" -o json |
 		grep -o '"host-service.gitlab-runner.flintlock.dev/[a-z_]*": "[^"]*"' >&2 ||
 		die "the Host Agent published no Host Service on ${NODE_NAME}"
-	pass "the Host Agent and the Runner are up, and the Pool ${POOL} is Ready"
+	pass "the Host Agent and the Runner are up, and the Pools ${kept[*]} have a MicroVM available"
 }
 
 # ---------------------------------------------------------------------------
@@ -420,15 +475,17 @@ wait_claims_gone() {
 	echo "${after}"
 }
 
-# run_job FILE NAME queues FILE, records the claims while the Job runs,
+# run_job FILE NAME [POOL] queues FILE once POOL, by default the default
+# Profile's, has a MicroVM available, records the claims while the Job runs,
 # waits for the Job to end and its claim to go, and writes the run's log.
-# It sets JOB_ID, JOB_STATUS, JOB_TRACE, CLAIMS_SEEN and CLAIMS_AFTER.
+# It sets JOB_ID, JOB_STATUS, JOB_SECONDS, JOB_TRACE, CLAIMS_SEEN and
+# CLAIMS_AFTER.
 run_job() {
-	local file=$1 name=$2 claims seen="${STATE_DIR}/claims-while-running.txt" start out
+	local file=$1 name=$2 pool=${3:-${POOL}} claims seen="${STATE_DIR}/claims-while-running.txt" start out
 	mkdir -p "${STATE_DIR}"
 	: >"${seen}"
-	wait_until 180 has_available ||
-		die "the Pool ${POOL} has no available MicroVM: $(kubectl -n "${NS}" get pool "${POOL}" -o jsonpath='{.status}')"
+	wait_until "${POOL_WAIT}" has_available "${pool}" ||
+		die "the Pool ${pool} has no available MicroVM: $(kubectl -n "${NS}" get pool "${pool}" -o jsonpath='{.status}')"
 	log "Queueing $(basename "${file}") on the fake GitLab"
 	JOB_ID="$(queue "${file}")"
 	log "Job ${JOB_ID} is queued; watching its claim until it ends (at most ${JOB_WAIT}s)"
@@ -445,13 +502,14 @@ run_job() {
 		finished "${JOB_STATUS}" && break
 		sleep 2
 	done
-	log "Job ${JOB_ID} is ${JOB_STATUS:-unknown} after $((SECONDS - start))s; waiting for its claim to go"
+	JOB_SECONDS=$((SECONDS - start))
+	log "Job ${JOB_ID} is ${JOB_STATUS:-unknown} after ${JOB_SECONDS}s; waiting for its claim to go"
 	CLAIMS_AFTER="$(wait_claims_gone)"
 	CLAIMS_SEEN="$(cat "${seen}")"
 	JOB_TRACE="$(fake "jobs/${JOB_ID}/trace" || true)"
 	out="${STATE_DIR}/run-${name}-$(date -u +%Y%m%dT%H%M%SZ).log"
 	{
-		echo "job ${JOB_ID}: ${JOB_STATUS:-unknown}, $((SECONDS - start))s from queued"
+		echo "job ${JOB_ID}: ${JOB_STATUS:-unknown}, ${JOB_SECONDS}s from queued to the end"
 		echo "--- trace ---"
 		printf '%s\n' "${JOB_TRACE}"
 		echo "--- kubectl get microvmclaims -A, while the Job ran ---"
@@ -542,6 +600,89 @@ step_services() {
 }
 
 # ---------------------------------------------------------------------------
+# The Docker and kind images: docs/docker-and-kind.md's example Jobs, on
+# the Profiles flr/docker and flr/kind. Each Job prints its timings as
+# TIMING <what> <seconds> lines, and when its services started in the guest
+# as BOOT <unit> <ms> lines, counted from the start of the kernel. Each step
+# adds them to .state/timings.txt and reports the AVC denials on the Host.
+
+# need_profile NAME fails unless PROFILES names the Profile NAME and the
+# images step found its image. Pass the PROFILES that deploy had.
+need_profile() {
+	load_images
+	profile_kept "$1" ||
+		die "the ${1} Profile is not deployed: run deploy with PROFILES=${1}, after images with GUEST=build or a RELEASE that has its image"
+}
+
+# trace_lines prints the Job's log as the Job wrote it: without the time,
+# the stream tag and the colours that GitLab's trace format adds.
+trace_lines() {
+	sed -E 's/^[0-9-]+T[0-9:.]+Z [0-9]+[OE]\+? ?//; s/\x1b\[[0-9;]*m//g; s/\r$//' <<<"${JOB_TRACE}"
+}
+
+# record NAME writes the Job's duration and its TIMING and BOOT lines to
+# .state/timings.txt and prints them, then the Host's AVC denials since boot.
+record() {
+	local name=$1 lines
+	lines="$(trace_lines | grep -E '^(TIMING|BOOT) [a-z-]+ [0-9.]+( ms)?$' || true)"
+	{
+		echo "${name} job ${JOB_ID}: ${JOB_STATUS}, ${JOB_SECONDS}s from queued to the end"
+		printf '%s\n' "${lines}" | sed 's/^/  /'
+	} | tee -a "${STATE_DIR}/timings.txt" >&2
+	log "AVC denials on ${NODE_NAME} since boot"
+	avc_denials >&2
+	log "SELinux on ${NODE_NAME} is $(host_run getenforce)"
+}
+
+# expect_trace PATTERN WHAT fails unless the Job's trace has PATTERN.
+expect_trace() {
+	trace_lines | grep -qE -- "$1" || die "job ${JOB_ID}'s trace shows no $2"
+}
+
+# The checks every Job on the Docker image makes of the guest.
+check_docker_guest() {
+	expect_trace 'storage driver overlay2, cgroup v2 \(systemd\), registry mirrors \[http://[0-9.]+:5000/?\]' \
+		"Docker Engine on overlay2 and cgroup v2 with the Host's registry mirror"
+	expect_trace '^iptables v[0-9.]+ \(legacy\)$' "iptables on its legacy backend"
+	expect_trace '^-A POSTROUTING -s 172\.17\.0\.0/16 ! -o docker0 -j MASQUERADE$' "Docker Engine's NAT rule"
+	expect_trace '^BOOT docker [1-9][0-9]* ms$' "the time Docker Engine started"
+}
+
+step_cache-demo() {
+	need_profile docker
+	run_job "${HERE}/job-cache-demo.json" cache-demo "${DOCKER_POOL}"
+	check_job_passed
+	check_docker_guest
+	expect_trace '^TIMING docker-pull [0-9.]+$' "timed docker pull"
+	expect_trace '^TIMING go-mod-download [0-9.]+$' "timed module download"
+	record cache-demo
+	pass "job ${JOB_ID} pulled an image through the registry mirror and Go modules through GOPROXY on the Docker image"
+}
+
+step_build-demo() {
+	need_profile docker
+	run_job "${HERE}/job-build-demo.json" build-demo "${DOCKER_POOL}"
+	check_job_passed
+	check_docker_guest
+	expect_trace '^TIMING buildx-build [0-9.]+$' "timed buildx build"
+	expect_trace '^hello from a flintlock-runner MicroVM$' "output of the image it built"
+	record build-demo
+	pass "job ${JOB_ID} built with Go, built an image on the Host's buildkitd and ran it, on the Docker image"
+}
+
+step_kind() {
+	need_profile kind
+	run_job "${HERE}/job-kind.json" kind "${KIND_POOL}"
+	check_job_passed
+	check_docker_guest
+	expect_trace 'Kubernetes control plane.* is running at https://127\.0\.0\.1:[0-9]+' "kubectl cluster-info"
+	expect_trace '^pod/nginx condition met$' "nginx Ready"
+	expect_trace '^flr-control-plane +Ready ' "kind node Ready"
+	record kind
+	pass "job ${JOB_ID} made a kind cluster, ran nginx in it and saw it Ready, on the kind image"
+}
+
+# ---------------------------------------------------------------------------
 # Faults: a Job that runs for ten minutes, a fault on the Host while it
 # runs, and the Job failing as runner_system_failure soon after (KF-200 to
 # KF-205).
@@ -555,7 +696,7 @@ fault() {
 	# The Pool's Ready condition can say AtSize while nothing is available
 	# (battery-operator#223), so this looks for a MicroVM itself.
 	wait_until 120 has_available ||
-		die "the Pool ${POOL} has no available MicroVM: $(kubectl -n "${NS}" get pool "${POOL}" -o jsonpath='{.status}')"
+		die "the Pool ${pool} has no available MicroVM: $(kubectl -n "${NS}" get pool "${pool}" -o jsonpath='{.status}')"
 	log "Queueing job-long.json on the fake GitLab"
 	id="$(queue "${HERE}/job-long.json")"
 	log "Job ${id} is queued; waiting for its script to run"
@@ -685,8 +826,8 @@ main() {
 	keep_awake
 	for s in "${steps[@]}"; do
 		case "${s}" in
-		images | deploy | job | services | fault-flintlockd | fault-flintlockd-hang | fault-exec-agent-hang | fault-not-ready | clean) "step_${s}" ;;
-		*) die "unknown step ${s}: images deploy job services fault-flintlockd fault-flintlockd-hang fault-exec-agent-hang fault-not-ready clean" ;;
+		images | deploy | job | services | cache-demo | build-demo | kind | fault-flintlockd | fault-flintlockd-hang | fault-exec-agent-hang | fault-not-ready | clean) "step_${s}" ;;
+		*) die "unknown step ${s}: images deploy job services cache-demo build-demo kind fault-flintlockd fault-flintlockd-hang fault-exec-agent-hang fault-not-ready clean" ;;
 		esac
 	done
 }

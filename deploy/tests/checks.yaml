@@ -764,10 +764,11 @@ checks:
       # (KF-143); anywhere else would fail the release render. The one
       # exception is the Guest Image in the Runner's Profiles
       # (deploy/runner/config.yaml), which kustomize does not rewrite: the
-      # Release writes its guest-kernel and guest-rootfs digests there from
+      # Release writes its guest-kernel, guest-rootfs, guest-rootfs-docker and
+      # guest-rootfs-kind digests there from
       # its images.txt (hack/release/render-manifests.sh, KF-143), and an
       # operator who applies deploy/ from source pins them (CF-027).
       stray=$(grep -hn 'ghcr\.io/phoban01/flintlock-runner/' "$fleet" "$runner" |
         grep -Ev '^[0-9]+: +(- )?image: ghcr\.io/phoban01/flintlock-runner/[a-z0-9._-]+(:[A-Za-z0-9._-]+|@sha256:[0-9a-f]{64})$' |
-        grep -Ev '^[0-9]+: +rootfs: ghcr\.io/phoban01/flintlock-runner/guest-rootfs(:[A-Za-z0-9._-]+|@sha256:[0-9a-f]{64})$' || true)
+        grep -Ev '^[0-9]+: +rootfs: ghcr\.io/phoban01/flintlock-runner/guest-rootfs(-docker|-kind)?(:[A-Za-z0-9._-]+|@sha256:[0-9a-f]{64})$' || true)
       [ -z "$stray" ] || fail "project image references outside image fields: $stray"

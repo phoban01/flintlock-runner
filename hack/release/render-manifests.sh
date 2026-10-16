@@ -10,12 +10,12 @@
 # `kustomize edit set image`, then runs check-manifests.sh over the result,
 # so an asset with a tag reference in it is never written.
 #
-# The Runner's Profiles name the Guest Image, guest-kernel and guest-rootfs,
-# inside its configuration file, where kustomize's image transformer does
-# not reach. With --images, the render first copies the kustomization root
-# and writes the digests of the release's images.txt over every reference
-# to those two images in the copy, so that the configuration's ConfigMap
-# is generated with them.
+# The Runner's Profiles name the Guest Image, guest-kernel, guest-rootfs,
+# guest-rootfs-docker and guest-rootfs-kind, inside its configuration file,
+# where kustomize's image transformer does not reach. With --images, the
+# render first copies the kustomization root and writes the digests of the
+# release's images.txt over every reference to those four images in the
+# copy, so that the configuration's ConfigMap is generated with them.
 #
 # The Hosts boot battery-operator's Host Image, and battery-operator's
 # Cluster API templates make them, so this project publishes neither.
@@ -25,8 +25,9 @@
 #
 #   --flr          the published flr image, by digest
 #   --images       the release's images.txt: one line per pushed tag, the
-#                  tag and then the same image by digest. The guest-kernel
-#                  and guest-rootfs digests are taken from it
+#                  tag and then the same image by digest. The guest-kernel,
+#                  guest-rootfs, guest-rootfs-docker and guest-rootfs-kind
+#                  digests are taken from it
 #   --deploy       the kustomization root, default deploy
 #   --out          where the file goes, default dist
 #
@@ -69,7 +70,7 @@ fi
 # digest. Every image of this project is listed here.
 prefix=ghcr.io/phoban01/flintlock-runner
 flr_name=$prefix/flr
-guest_names=("$prefix/guest-kernel" "$prefix/guest-rootfs")
+guest_names=("$prefix/guest-kernel" "$prefix/guest-rootfs" "$prefix/guest-rootfs-docker" "$prefix/guest-rootfs-kind")
 if [ "${flr%@*}" != "$flr_name" ]; then
 	echo "render-manifests: --flr must be in $flr_name, not ${flr%@*}" >&2
 	exit 2

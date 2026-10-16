@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # Lint the Guest Image's sources without building them: every download is
 # checked against a recorded sha256, and every base image is pinned by
-# digest. `make guest-lint` runs it after shellcheck. Every failure is
-# reported before it exits non-zero.
+# digest, or is an image of the same build. `make guest-lint` runs it
+# after shellcheck. Every failure is reported before it exits non-zero.
 #
 # usage: guest/lint.sh [GUEST_DIR]
 set -uo pipefail
@@ -17,7 +17,10 @@ fail() {
 # code FILE: FILE without its comment lines.
 code() { grep -vE '^[[:space:]]*#' "$1"; }
 
-sources=("$dir"/kernel/Containerfile "$dir"/rootfs/Containerfile "$dir"/rootfs/*.sh "$dir"/kernel/*.sh)
+sources=("$dir"/*/Containerfile "$dir"/*/*.sh)
+# The images guest/build.sh builds first and passes to the later builds as
+# named build contexts: the layered images start FROM them.
+built_here=(guest-rootfs guest-rootfs-docker)
 
 #= docs/requirements/13-guest-image.md#guest-build
 #= type=test
@@ -66,9 +69,13 @@ for f in "$dir"/*/Containerfile; do
 			if [[ ${image#*@sha256:} =~ ^[0-9a-f]{64}$ ]]; then ok "$rel: ${image%@*} is pinned by digest"; else fail "$rel: $image has a malformed digest"; fi
 			;;
 		*)
-			# A stage of the same file is not a base image.
+			# A stage of the same file is not a base image, and nor is an
+			# image that guest/build.sh builds earlier in the same build and
+			# passes as a named build context.
 			if code "$f" | grep -qiE "^FROM .* AS $image\$"; then
 				ok "$rel: FROM stage $image"
+			elif [[ " ${built_here[*]} " == *" $image "* ]]; then
+				ok "$rel: FROM $image, built earlier in the same build"
 			else
 				fail "$rel: $image is not pinned by digest"
 			fi

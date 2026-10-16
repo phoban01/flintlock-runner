@@ -1,0 +1,60 @@
+{
+  "id": 1,
+  "token": "glcbt-real-host-1",
+  "allow_git_fetch": false,
+  "job_info": {
+    "name": "verify:build-demo",
+    "stage": "verify",
+    "project_id": 1,
+    "project_name": "real-host"
+  },
+  "git_info": {
+    "repo_url": "https://gitlab.example.com/flintlock-runner/real-host.git",
+    "ref": "main",
+    "sha": "0000000000000000000000000000000000000000",
+    "ref_type": "branch"
+  },
+  "runner_info": {
+    "timeout": 900
+  },
+  "image": {
+    "name": "flr/docker"
+  },
+  "variables": [
+    {
+      "key": "GIT_STRATEGY",
+      "value": "none",
+      "public": true
+    },
+    {
+      "key": "CI_JOB_ID",
+      "value": "1",
+      "public": true
+    }
+  ],
+  "steps": [
+    {
+      "name": "script",
+      "script": [
+        "cat /usr/share/flr-guest/versions.env",
+        "env | grep -E '^(BUILDKIT_HOST|GOPROXY|GOFLAGS|CI_REGISTRY_MIRROR)=' | sort",
+        "cat /etc/docker/daemon.json",
+        "TIMEFORMAT='TIMING docker-info %R'; time docker info --format 'docker info: storage driver {{.Driver}}, cgroup v{{.CgroupVersion}} ({{.CgroupDriver}}), registry mirrors {{.RegistryConfig.Mirrors}}'",
+        "iptables --version",
+        "iptables -t nat -S POSTROUTING",
+        "mkdir -p /tmp/builddemo && cd /tmp/builddemo",
+        "printf 'package main\\n\\nimport \"fmt\"\\n\\nfunc main() { fmt.Println(\"hello from a flintlock-runner MicroVM\") }\\n' >main.go",
+        "go mod init example.com/builddemo",
+        "TIMEFORMAT='TIMING go-build %R'; time CGO_ENABLED=0 go build -trimpath -o hello .",
+        "printf 'FROM docker.io/library/alpine:3.22\\nRUN apk add --no-cache ca-certificates\\nCOPY hello /usr/local/bin/hello\\nENTRYPOINT [\"/usr/local/bin/hello\"]\\n' >Dockerfile",
+        "docker buildx create --name flr --driver remote \"$BUILDKIT_HOST\" --use",
+        "TIMEFORMAT='TIMING buildx-build %R'; time docker buildx build --load -t builddemo:latest .",
+        "docker run --rm builddemo:latest",
+        "for u in guest-agent flr-registry-mirror containerd docker; do echo \"BOOT $u $(( $(systemctl show -p ActiveEnterTimestampMonotonic --value $u.service) / 1000 )) ms\"; done"
+      ],
+      "timeout": 900,
+      "when": "on_success",
+      "allow_failure": false
+    }
+  ]
+}

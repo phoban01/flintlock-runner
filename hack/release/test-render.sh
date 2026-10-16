@@ -68,7 +68,14 @@ expect_fail "a missing kustomization is refused" "has no kustomization.yaml" \
 kernel=ghcr.io/phoban01/flintlock-runner/guest-kernel@sha256:1111111111111111111111111111111111111111111111111111111111111111
 rootfs=ghcr.io/phoban01/flintlock-runner/guest-rootfs@sha256:2222222222222222222222222222222222222222222222222222222222222222
 if grep -q "image: $kernel\$" "$fleet" && grep -q "rootfs: $rootfs\$" "$fleet"; then pass "the Guest Image by the digests of images.txt"; else fail "the Guest Image by the digests of images.txt"; fi
-if grep -q 'guest-[a-z]*:REPLACE' "$fleet"; then fail "no :REPLACE left in the fleet"; else pass "no :REPLACE left in the fleet"; fi
+# The Docker and kind images too, each by its own digest: the guest-rootfs
+# replacement must not take the longer names for its own.
+docker=ghcr.io/phoban01/flintlock-runner/guest-rootfs-docker@sha256:4444444444444444444444444444444444444444444444444444444444444444
+kind=ghcr.io/phoban01/flintlock-runner/guest-rootfs-kind@sha256:5555555555555555555555555555555555555555555555555555555555555555
+if grep -q "rootfs: $docker\$" "$fleet" && grep -q "rootfs: $kind\$" "$fleet"; then pass "the Docker and kind images by the digests of images.txt"; else fail "the Docker and kind images by the digests of images.txt"; fi
+n=$(grep -c "image: $kernel\$" "$fleet" || true)
+if [ "$n" = 3 ]; then pass "every Profile's kernel by the digest of images.txt"; else fail "the kernel by digest in $n of 3 Profiles"; fi
+if grep -q 'guest-[a-z-]*:REPLACE' "$fleet"; then fail "no :REPLACE left in the fleet"; else pass "no :REPLACE left in the fleet"; fi
 if grep -q 'guest-kernel:REPLACE' "$here/testdata/deploy/config.yaml"; then pass "the source is not changed"; else fail "the source is not changed"; fi
 
 # Without images.txt the Guest Image keeps its tag, and the render refuses
@@ -82,6 +89,9 @@ expect_fail "images.txt with two guest-kernel digests is refused" "not one" \
 grep -v guest-rootfs "$here/testdata/images.txt" >"$work/no-rootfs.txt"
 expect_fail "images.txt without guest-rootfs is refused" "guest-rootfs, not one" \
 	"$here/render-manifests.sh" --flr "$flr" --images "$work/no-rootfs.txt" --deploy "$here/testdata/deploy" --out "$work/x"
+grep -v guest-rootfs-kind "$here/testdata/images.txt" >"$work/no-kind.txt"
+expect_fail "images.txt without guest-rootfs-kind is refused" "guest-rootfs-kind, not one" \
+	"$here/render-manifests.sh" --flr "$flr" --images "$work/no-kind.txt" --deploy "$here/testdata/deploy" --out "$work/x"
 
 # check-manifests on its own.
 printf 'image: %s\n' "$flr" >"$work/good.yaml"

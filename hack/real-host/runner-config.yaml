@@ -1,11 +1,12 @@
 # The Runner's configuration for a run on a real Host (README.md). run.sh
 # puts it in place of deploy/runner/config.yaml, and writes the Guest Image
-# references in place of KERNEL_IMAGE and ROOTFS_IMAGE. It differs from
-# deploy/runner/config.yaml in three ways:
+# references in place of KERNEL_IMAGE, ROOTFS_IMAGE, DOCKER_ROOTFS_IMAGE and
+# KIND_ROOTFS_IMAGE. It differs from deploy/runner/config.yaml in three ways:
 #
 #   - GitLab is the fake GitLab in the cluster, over plain HTTP.
-#   - The only Profile is real-host-arm64, and it is the default: the run
-#     has one arm64 Host, so no Host could fill an amd64 Pool.
+#   - The Profiles are arm64, and real-host-arm64 is the default: the run
+#     has one arm64 Host, so no Host could fill an amd64 Pool. The Docker
+#     and kind Profiles have less memory than deploy/runner/config.yaml's.
 #   - The Guest Image is by digest, from a release's images.txt or from
 #     the Host's own registry (GUEST in run.sh).
 #
@@ -31,8 +32,16 @@ pool_manager:
       key: serving-ca.crt
 
 profiles:
-  # As deploy/runner/config.yaml's lima-arm64: one MicroVM at a time. The
-  # Host has 4 vCPUs and 8 GiB, and keeps 2 vCPUs and 4 GiB for itself.
+  # run.sh keeps the Profiles that PROFILES names, between their BEGIN and
+  # END lines, and drops the rest. The Host has 4 vCPUs and 8 GiB, and keeps
+  # 2 vCPUs and 4 GiB for itself. Under nested virtualization on a Mac, a
+  # guest that boots beside another often misses battery's 30 s wait for
+  # its guest agent, so a run keeps one Profile at a time.
+  #
+  # The kernel's console is quiet: each line it writes to the serial port
+  # costs the guest time under nested virtualization.
+  #
+  # BEGIN profile arm64: as deploy/runner/config.yaml's lima-arm64.
   - name: real-host-arm64
     default: true
     arch: arm64
@@ -42,9 +51,48 @@ profiles:
     kernel:
       image: KERNEL_IMAGE
       filename: boot/vmlinux
+      cmdline:
+        loglevel: 1
+        systemd.show_status: no
     rootfs: ROOTFS_IMAGE
     pool:
       size: 1
+  # END profile arm64
+  # BEGIN profile docker: as deploy/runner/config.yaml's docker Profile,
+  # smaller. run.sh drops it when images.env names no DOCKER_ROOTFS_IMAGE,
+  # as for a release before the Docker image.
+  - name: real-host-docker
+    arch: arm64
+    vcpu: 2
+    memory_mb: 2048
+    images: [flr/docker]
+    kernel:
+      image: KERNEL_IMAGE
+      filename: boot/vmlinux
+      cmdline:
+        loglevel: 1
+        systemd.show_status: no
+    rootfs: DOCKER_ROOTFS_IMAGE
+    pool:
+      size: 1
+  # END profile docker
+  # BEGIN profile kind: as deploy/runner/config.yaml's kind Profile,
+  # smaller. run.sh drops it when images.env names no KIND_ROOTFS_IMAGE.
+  - name: real-host-kind
+    arch: arm64
+    vcpu: 2
+    memory_mb: 2048
+    images: [flr/kind]
+    kernel:
+      image: KERNEL_IMAGE
+      filename: boot/vmlinux
+      cmdline:
+        loglevel: 1
+        systemd.show_status: no
+    rootfs: KIND_ROOTFS_IMAGE
+    pool:
+      size: 1
+  # END profile kind
 
 host_services:
   buildkit:

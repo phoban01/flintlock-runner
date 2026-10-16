@@ -1,11 +1,12 @@
 #!/usr/bin/env bash
-# Check the Guest Image as a release pushed it (GI-040).
+# Check the Guest Image as a release pushed it (GI-040, GI-041).
 #
 # usage: check-guest-images.sh --version V REPO@DIGEST...
 #
-# For each image, kernel and root filesystem: REPO:V names DIGEST; DIGEST is
-# one image index with exactly linux/amd64 and linux/arm64; and every tag of
-# REPO is a full release version, so none is latest or moves.
+# For each image, the kernel, root filesystem, Docker and kind images:
+# REPO:V names DIGEST; DIGEST is one image index with exactly linux/amd64
+# and linux/arm64; and every tag of REPO is a full release version, so none
+# is latest or moves.
 #
 # SKOPEO and REGISTRY_TLS_VERIFY are as for registry.sh.
 set -euo pipefail
@@ -37,6 +38,12 @@ fi
 #/ root filesystem image to the project's container registry, each as one
 #/ image index for `linux/amd64` and `linux/arm64`, tagged with the release
 #/ version.
+#
+#= docs/requirements/13-guest-image.md#guest-release
+#= type=test
+#/ The Release SHALL publish the Guest Image's Docker image and
+#/ kind image to the project's container registry, each as one image index
+#/ for `linux/amd64` and `linux/arm64`, tagged with the release version.
 #
 #= docs/requirements/13-guest-image.md#guest-build
 #= type=test
@@ -77,8 +84,9 @@ for ref in "$@"; do
 	done <<<"$tags"
 done
 
-# Both images, the kernel and the root filesystem.
-if [ "$(printf '%s\n' "${names[@]}" | sort | xargs)" != "guest-kernel guest-rootfs" ]; then
-	fail "want guest-kernel and guest-rootfs, got: ${names[*]}"
+# All four images: the kernel, the root filesystem, and the Docker and kind
+# images.
+if [ "$(printf '%s\n' "${names[@]}" | sort | xargs)" != "guest-kernel guest-rootfs guest-rootfs-docker guest-rootfs-kind" ]; then
+	fail "want guest-kernel, guest-rootfs, guest-rootfs-docker and guest-rootfs-kind, got: ${names[*]}"
 fi
 exit "$status"

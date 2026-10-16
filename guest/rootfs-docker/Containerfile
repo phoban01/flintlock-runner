@@ -1,0 +1,77 @@
+# The Guest Image's Docker image (docs/requirements/13-guest-image.md#guest-docker):
+# the root filesystem image of guest/rootfs, plus Docker Engine, containerd,
+# runc and the buildx plugin, iptables on its legacy backend, Go, and the
+# boot unit that points Docker Engine at the Host's registry mirror.
+#
+# Build it with guest/build.sh. It builds guest/rootfs first and passes that
+# image to this build as the named build context guest-rootfs, so the two
+# share every layer of the root filesystem. The build context is guest/,
+# for the root filesystem image's check.sh.
+#
+# Firecracker's CI kernel has no nf_tables, so iptables uses its legacy
+# backend. It has no xt_comment, xt_mark or xt_statistic either; Docker
+# Engine needs none of them.
+
+# The versions, for the docker stage and for the published image's labels.
+# The Docker packages come from Docker's apt repository for Ubuntu 24.04,
+# whose signing key is pinned below; apt checks every package against the
+# signed index. Take a new version from
+# https://download.docker.com/linux/ubuntu/dists/noble/stable/binary-<arch>/Packages.
+ARG DOCKER_VERSION=29.9.1
+ARG DOCKER_APT_VERSION=5:29.9.1-1~ubuntu.24.04~noble
+ARG CONTAINERD_APT_VERSION=2.4.2-2~ubuntu.24.04~noble
+ARG BUILDX_APT_VERSION=0.38.0-1~ubuntu.24.04~noble
+# Go, from https://go.dev/dl/.
+ARG GO_VERSION=1.27.2
+
+# ---------------------------------------------------------------------------
+# docker: the root filesystem with Docker Engine and Go.
+#
+#= docs/requirements/13-guest-image.md#guest-docker
+#/ The Guest Image SHALL include a Docker image, a root filesystem
+#/ image built on the Guest Image's root filesystem image for `linux/amd64`
+#/ and `linux/arm64`, which carries everything this document requires of
+#/ that image.
+FROM guest-rootfs AS docker
+ARG TARGETARCH
+ARG DOCKER_VERSION
+ARG DOCKER_APT_VERSION
+ARG CONTAINERD_APT_VERSION
+ARG BUILDX_APT_VERSION
+ARG GO_VERSION
+# The ASCII-armoured key at https://download.docker.com/linux/ubuntu/gpg,
+# fingerprint 9DC8 5822 9FC7 DD38 854A  E2D8 8D81 803C 0EBF CD88.
+ARG DOCKER_APT_KEY_SHA256=1500c1f56fa9e26b9b8f42452a553675796ade0807cdce11975eb98170b3a570
+# From https://go.dev/dl/?mode=json.
+ARG GO_SHA256_AMD64=ecbadb99091a3f46e31f5f934b068b1864eafa7995211b39eaddf76996045fe5
+ARG GO_SHA256_ARM64=94f3e30b8e374bc285e7dadc11e0865726b9bc6e85b841ccceaabc0214c6b7c8
+COPY rootfs-docker/registry-mirror.sh /usr/libexec/flr-guest/registry-mirror
+COPY rootfs-docker/mirror-docker.sh /usr/libexec/flr-guest/registry-mirror.d/10-docker
+COPY rootfs-docker/flr-registry-mirror.service /etc/systemd/system/flr-registry-mirror.service
+RUN --mount=type=bind,source=rootfs-docker/configure.sh,target=/tmp/configure.sh \
+    bash /tmp/configure.sh
+
+# ---------------------------------------------------------------------------
+# check: run the checks inside the built root filesystem, the root
+# filesystem image's own checks first. On a platform other than the build
+# machine's they run under emulation.
+FROM docker AS check
+#= docs/requirements/13-guest-image.md#guest-build
+#/ The Guest Image build SHALL check the contents of each image it
+#/ builds in a check stage that fails unless the image carries everything
+#/ this document requires of it.
+RUN --mount=type=bind,source=rootfs-docker/check.sh,target=/tmp/check.sh \
+    --mount=type=bind,source=rootfs/check.sh,target=/tmp/check-rootfs.sh \
+    bash /tmp/check-rootfs.sh && bash /tmp/check.sh && mkdir -p /checked && \
+    sha256sum /usr/share/flr-guest/versions.env >/checked/checked
+
+# ---------------------------------------------------------------------------
+# The published image. It takes a file from the check stage so that no
+# builder can skip that stage as unused.
+FROM docker
+COPY --from=check /checked/checked /usr/share/flr-guest/checked
+ARG DOCKER_VERSION
+ARG GO_VERSION
+LABEL org.opencontainers.image.title="flintlock-runner guest root filesystem with Docker" \
+      dev.flintlock.gitlab-runner.version.docker="${DOCKER_VERSION}" \
+      dev.flintlock.gitlab-runner.version.go="${GO_VERSION}"
