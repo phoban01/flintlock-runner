@@ -23,9 +23,14 @@ if [ -n "$mirror" ]; then
 	mirrors=$(printf ',\n  "registry-mirrors": ["%s"]' "$mirror")
 fi
 mkdir -p "$(dirname "$file")"
+#= docs/requirements/13-guest-image.md#guest-agent-protection
+#/ The Guest Image's Docker image SHALL run containerd, Docker Engine
+#/ and every container in a slice whose memory limit is 90 percent of the
+#/ MicroVM's memory and whose CPU weight is the default of 100.
 cat >"$file.tmp" <<EOF
 {
   "storage-driver": "overlay2",
+  "cgroup-parent": "flr-containers.slice",
   "features": { "containerd-snapshotter": false }${mirrors}
 }
 EOF

@@ -26,7 +26,7 @@ And three container images, in the project's registry
 | Image | Tags | Contents |
 |---|---|---|
 | `ghcr.io/phoban01/flintlock-runner/flr` | `<version>` | one index for `linux/amd64` and `linux/arm64`: the same `flr` binaries as the archives, the CA certificates and the time zone database, on `scratch`, running as uid 65532. No shell, no package manager, no `/etc/passwd` (KF-140, KF-141) |
-| `ghcr.io/phoban01/flintlock-runner/guest-kernel` | `<version>` | one index for `linux/amd64` and `linux/arm64`: the Guest Image's kernel, Firecracker's CI 6.1 kernel, at `boot/vmlinux` and nothing else (GI-010, GI-040) |
+| `ghcr.io/phoban01/flintlock-runner/guest-kernel` | `<version>` | one index for `linux/amd64` and `linux/arm64`: the Guest Image's kernel, Linux 6.1 built with Firecracker's CI configuration, at `boot/vmlinux` and nothing else (GI-011, GI-040) |
 | `ghcr.io/phoban01/flintlock-runner/guest-rootfs` | `<version>` | one index for `linux/amd64` and `linux/arm64`: the Guest Image's root filesystem of `guest/rootfs`, Ubuntu 24.04 with systemd, the guest agent, bash, git, curl, the CA certificates, `gitlab-runner-helper` and DHCP (GI-020 to GI-034, GI-040) |
 
 `<version>` is the tag without its `v`: `v1.2.0-rc.1` publishes

@@ -8,9 +8,8 @@
 # share every layer of the root filesystem. The build context is guest/,
 # for the root filesystem image's check.sh.
 #
-# Firecracker's CI kernel has no nf_tables, so iptables uses its legacy
-# backend. It has no xt_comment, xt_mark or xt_statistic either; Docker
-# Engine needs none of them.
+# iptables uses its legacy backend, which works on every kernel; Firecracker's
+# CI kernels of earlier releases had no nf_tables.
 
 # The versions, for the docker stage and for the published image's labels.
 # The Docker packages come from Docker's apt repository for Ubuntu 24.04,
@@ -48,6 +47,7 @@ ARG GO_SHA256_ARM64=94f3e30b8e374bc285e7dadc11e0865726b9bc6e85b841ccceaabc0214c6
 COPY rootfs-docker/registry-mirror.sh /usr/libexec/flr-guest/registry-mirror
 COPY rootfs-docker/mirror-docker.sh /usr/libexec/flr-guest/registry-mirror.d/10-docker
 COPY rootfs-docker/flr-registry-mirror.service /etc/systemd/system/flr-registry-mirror.service
+COPY rootfs-docker/flr-agent.slice rootfs-docker/flr-containers.slice /etc/systemd/system/
 RUN --mount=type=bind,source=rootfs-docker/configure.sh,target=/tmp/configure.sh \
     bash /tmp/configure.sh
 

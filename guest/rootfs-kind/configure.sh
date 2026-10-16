@@ -32,6 +32,21 @@ curl -fsSL -o /usr/local/bin/kubectl \
 printf '%s  %s\n' "$kind_sum" /usr/local/bin/kind "$kubectl_sum" /usr/local/bin/kubectl | sha256sum -c -
 chmod 0755 /usr/local/bin/kind /usr/local/bin/kubectl
 
+#= docs/requirements/13-guest-image.md#guest-kind-fast
+#/ The Guest Image's kind image SHALL contain the node image that
+#/ `KIND_NODE_IMAGE` names, for the image's architecture, in Docker
+#/ Engine's image store under that reference, so that a kind cluster
+#/ starts without a pull or a load of the node image.
+#
+# The node-image stage wrote it into /var/lib/docker. The image ID goes in
+# the versions file, for the check stage and for a Job that looks.
+node_id=$(sed -n 's/.*"[^"]*@sha256:[0-9a-f]\{64\}":"\(sha256:[0-9a-f]\{64\}\)".*/\1/p' /var/lib/docker/image/overlay2/repositories.json)
+if ! [[ $node_id =~ ^sha256:[0-9a-f]{64}$ ]]; then
+	echo "configure: Docker Engine's image store has no node image" >&2
+	exit 1
+fi
+chmod 0755 /usr/local/bin/flr-kind-cluster
+
 #= docs/requirements/13-guest-image.md#guest-kind
 #/ The Guest Image's kind image SHALL contain
 #/ `/etc/default/kind-bootstrap`, which exports `KIND_CLUSTER_NAME`,
@@ -40,15 +55,17 @@ chmod 0755 /usr/local/bin/kind /usr/local/bin/kubectl
 #/ kind release lists.
 cat >/etc/default/kind-bootstrap <<EOF
 # What a Job needs to make a kind cluster in the Guest Image's kind image.
-# Written by its build (guest/rootfs-kind/configure.sh); source it:
+# Written by its build (guest/rootfs-kind/configure.sh). Source it, then
+# make the cluster with flr-kind-cluster, which takes the running cluster
+# when the Pool's create hook made one already:
 #
 #   . /etc/default/kind-bootstrap
-#   kind create cluster --name "\$KIND_CLUSTER_NAME" --image "\$KIND_NODE_IMAGE" \\
-#     --config "\$KIND_CONFIG" --kubeconfig "\$KUBECONFIG_PATH"
+#   flr-kind-cluster
 #
 # KIND_NODE_IMAGE is the node image kind ${KIND_VERSION} lists for Kubernetes
-# ${KIND_NODE_IMAGE#*:v}, by digest. KIND_CONFIG is written at boot, with the
-# Host's registry mirror when the guest has one.
+# ${KIND_NODE_IMAGE#*:v}, by digest. Docker Engine has it already, so kind
+# pulls nothing. KIND_CONFIG is written at boot, with the Host's registry
+# mirror when the guest has one.
 export KIND_CLUSTER_NAME=flr
 export KIND_NODE_IMAGE=${KIND_NODE_IMAGE}
 export KIND_CONFIG=/etc/kind/kind-config.yaml
@@ -65,4 +82,5 @@ cat >>/usr/share/flr-guest/versions.env <<EOF
 KIND_VERSION=$KIND_VERSION
 KUBECTL_VERSION=$KUBECTL_VERSION
 KIND_NODE_IMAGE=$KIND_NODE_IMAGE
+KIND_NODE_IMAGE_ID=$node_id
 EOF

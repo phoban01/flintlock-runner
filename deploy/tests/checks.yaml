@@ -412,6 +412,27 @@ checks:
       [ "$(echo "$sc" | "$YQ" '.capabilities.drop | join(",")')" = ALL ] || fail "the Runner keeps capabilities"
       [ "$(echo "$d" | "$YQ" '.spec.template.spec.securityContext.runAsNonRoot')" = true ] || fail "the Runner may run as root"
 
+  #= docs/requirements/13-guest-image.md#guest-kind-fast
+  #= type=test
+  #/ The Fleet Manifests SHALL include a Profile for the Job Image
+  #/ `flr/kind-ready` that boots the kind image and whose Pool runs
+  #/ `flr-kind-cluster` as its create hook.
+  - name: the flr/kind-ready Profile makes the kind cluster in its Pool's create hook
+    run: |
+      cm=$(obj "$runner" Deployment flintlock-runner | "$YQ" '.spec.template.spec.volumes[] | select(.name == "config") | .configMap.name')
+      obj "$runner" ConfigMap "$cm" | "$YQ" '.data["config.yaml"]' >"$work/warm-config.yaml"
+      warm='.profiles[] | select(.images[] == "flr/kind-ready")'
+      cold='.profiles[] | select(.images[] == "flr/kind")'
+      [ "$(q "$work/warm-config.yaml" "[$warm] | length")" -eq 1 ] || fail "no one Profile for flr/kind-ready"
+      case $(q "$work/warm-config.yaml" "$warm | .rootfs") in
+        ghcr.io/phoban01/flintlock-runner/guest-rootfs-kind:*) ;;
+        *) fail "the flr/kind-ready Profile boots $(q "$work/warm-config.yaml" "$warm | .rootfs"), not the kind image" ;;
+      esac
+      [ "$(q "$work/warm-config.yaml" "$warm | .rootfs")" = "$(q "$work/warm-config.yaml" "$cold | .rootfs")" ] || fail "flr/kind-ready and flr/kind boot different images"
+      [ "$(q "$work/warm-config.yaml" "$warm | .pool.create_hooks | join(\",\")")" = /usr/local/bin/flr-kind-cluster ] || fail "the flr/kind-ready Pool's create hooks are '$(q "$work/warm-config.yaml" "$warm | .pool.create_hooks")'"
+      [ "$(q "$work/warm-config.yaml" "$cold | .pool.create_hooks // [] | length")" -eq 0 ] || fail "the flr/kind Pool has a create hook"
+      [ "$(q "$work/warm-config.yaml" "$warm | .name")" != "$(q "$work/warm-config.yaml" "$cold | .name")" ] || fail "flr/kind-ready shares the flr/kind Profile"
+
   #= docs/requirements/12-cluster-fleet.md#cluster-least-privilege
   #= type=test
   #/ The Fleet Manifests SHALL grant the Runner only the

@@ -1,5 +1,6 @@
 # The Guest Image's kind image (docs/requirements/13-guest-image.md#guest-kind):
-# the Docker image of guest/rootfs-docker, plus kind and kubectl,
+# the Docker image of guest/rootfs-docker, plus kind and kubectl, the kind
+# node image in Docker Engine's image store, flr-kind-cluster,
 # /etc/default/kind-bootstrap for a Job to source, and the boot unit's hook
 # that writes /etc/kind/kind-config.yaml with the Host's registry mirror.
 #
@@ -14,6 +15,31 @@
 ARG KIND_VERSION=0.33.0
 ARG KUBECTL_VERSION=1.37.1
 ARG KIND_NODE_IMAGE=kindest/node:v1.37.0@sha256:a1ed56cfb0e7b93589bdf97c8cd566405a265939e3620fc4f5de89adff580ae5
+# ---------------------------------------------------------------------------
+# node-image: the kind node image that KIND_NODE_IMAGE names, for the
+# image's platform, written into Docker Engine's image store as
+# /out/docker, which becomes the guest's /var/lib/docker. skopeo fetches it
+# by the digest in KIND_NODE_IMAGE, checks the index against that digest
+# and each blob against the digest that names it, and docker-store.sh
+# checks each layer against the image configuration. It runs on the build
+# machine; nothing here runs the image.
+FROM --platform=$BUILDPLATFORM docker.io/library/ubuntu:24.04@sha256:008173c23f95b170204355c12626cb5a965d779a7e1283b09e9cffbb1bf33ca3 AS node-image
+ARG TARGETARCH
+ARG KIND_NODE_IMAGE
+RUN apt-get update && \
+    DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends ca-certificates skopeo && \
+    rm -rf /var/lib/apt/lists/*
+#= docs/requirements/13-guest-image.md#guest-kind-fast
+#/ The Guest Image's kind image SHALL contain the node image that
+#/ `KIND_NODE_IMAGE` names, for the image's architecture, in Docker
+#/ Engine's image store under that reference, so that a kind cluster
+#/ starts without a pull or a load of the node image.
+RUN --mount=type=bind,source=rootfs-kind/docker-store.sh,target=/tmp/docker-store.sh \
+    mkdir -p /out && \
+    skopeo copy --override-os linux --override-arch "${TARGETARCH}" \
+      "docker://docker.io/${KIND_NODE_IMAGE%%:*}@${KIND_NODE_IMAGE#*@}" "docker-archive:/tmp/node.tar:${KIND_NODE_IMAGE%@*}" && \
+    bash /tmp/docker-store.sh /tmp/node.tar "${KIND_NODE_IMAGE}" /out/docker && \
+    rm /tmp/node.tar
 
 # ---------------------------------------------------------------------------
 # kind: the Docker image with kind and kubectl.
@@ -34,6 +60,8 @@ ARG KIND_SHA256_ARM64=20022bee6cfcd5086cb7234d218e3454e6090022f2a8f55d1fa7fcf42c
 ARG KUBECTL_SHA256_AMD64=65691ff77eb6fa44c908b77a1082c9f092c3b9733b5cefabec0d1104890e21a8
 ARG KUBECTL_SHA256_ARM64=ff749f4b78d9c4f1ec87307df9b50119ed819e2094aa9810cb9acffc3286c8c7
 COPY rootfs-kind/mirror-kind.sh /usr/libexec/flr-guest/registry-mirror.d/20-kind
+COPY rootfs-kind/kind-cluster.sh /usr/local/bin/flr-kind-cluster
+COPY --from=node-image /out/docker/ /var/lib/docker/
 RUN --mount=type=bind,source=rootfs-kind/configure.sh,target=/tmp/configure.sh \
     bash /tmp/configure.sh
 

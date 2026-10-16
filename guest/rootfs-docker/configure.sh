@@ -59,7 +59,8 @@ systemctl enable containerd.service docker.service docker.socket
 #/ The Guest Image's Docker image SHALL set iptables and ip6tables to
 #/ their legacy backend.
 #
-# Firecracker's CI kernel has no nf_tables, which the nft backend needs.
+# The legacy backend works on every kernel; Firecracker's CI kernels of
+# earlier releases had no nf_tables, which the nft backend needs.
 update-alternatives --set iptables /usr/sbin/iptables-legacy
 update-alternatives --set ip6tables /usr/sbin/ip6tables-legacy
 
@@ -105,6 +106,36 @@ printf '[Unit]\nWants=flr-registry-mirror.service\nAfter=flr-registry-mirror.ser
 	>/etc/systemd/system/docker.service.d/10-flr-registry-mirror.conf
 # The configuration with no mirror, until the boot unit writes it.
 FLR_REGISTRY_MIRROR='' /usr/libexec/flr-guest/registry-mirror.d/10-docker
+
+#= docs/requirements/13-guest-image.md#guest-agent-protection
+#/ The Guest Image's Docker image SHALL run the guest agent with an OOM
+#/ score adjustment of -999, in a slice of its own with at least 128 MiB of
+#/ memory protected and a CPU weight of 1000.
+#
+# The guest agent starts every Stage script, which inherits its OOM score
+# adjustment. At -999 the kernel kills a Stage's process before the guest
+# agent, and still can when nothing else is left; at -1000 a Stage that
+# took all the memory would leave the kernel nothing to kill.
+mkdir -p /etc/systemd/system/guest-agent.service.d
+cat >/etc/systemd/system/guest-agent.service.d/50-flr-protect.conf <<'EOF'
+# The guest agent keeps memory and CPU when containers take the rest
+# (flr-agent.slice, flr-containers.slice).
+[Service]
+Slice=flr-agent.slice
+OOMScoreAdjust=-999
+EOF
+
+#= docs/requirements/13-guest-image.md#guest-agent-protection
+#/ The Guest Image's Docker image SHALL run containerd, Docker Engine
+#/ and every container in a slice whose memory limit is 90 percent of the
+#/ MicroVM's memory and whose CPU weight is the default of 100.
+#
+# Docker Engine puts each container under its cgroup-parent, which
+# mirror-docker.sh writes into daemon.json.
+for unit in containerd.service docker.service; do
+	mkdir -p "/etc/systemd/system/$unit.d"
+	printf '[Service]\nSlice=flr-containers.slice\n' >"/etc/systemd/system/$unit.d/30-flr-slice.conf"
+done
 
 # The versions file gains the Docker image's versions. runc reports its own.
 runc_version=$(runc --version | sed -n 's/^runc version //p')

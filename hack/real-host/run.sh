@@ -7,7 +7,7 @@
 #
 #   run.sh               images deploy job services
 #   run.sh <step>...     only those: images deploy job services
-#                        cache-demo build-demo kind
+#                        cache-demo build-demo kind kind-ready
 #                        fault-flintlockd fault-flintlockd-hang
 #                        fault-exec-agent-hang fault-not-ready clean
 #
@@ -59,14 +59,16 @@ REGISTRY="${REGISTRY:-127.0.0.1:5000}"
 CTR_NS="flr-real-host"
 NS=flintlock-system
 # The Pools of the Runner's Profiles (runner-config.yaml): the default
-# Profile's, and the Docker and kind Profiles'.
+# Profile's, and the Docker, kind and warm kind Profiles'.
 POOL=real-host-arm64
 DOCKER_POOL=real-host-docker
 KIND_POOL=real-host-kind
+KIND_READY_POOL=real-host-kind-ready
 # The Profiles of runner-config.yaml that deploy keeps: arm64 (the default
-# Profile, for job and services), docker (for cache-demo and build-demo)
-# and kind. On a Mac, keep one at a time (runner-config.yaml says why);
-# deploy deletes the Pools of the others.
+# Profile, for job and services), docker (for cache-demo and build-demo),
+# kind (for kind) and kind-ready (for kind-ready). On a Mac, keep one at a
+# time (runner-config.yaml says why); deploy deletes the Pools of the
+# others.
 PROFILES="${PROFILES:-arm64}"
 # The fake GitLab's runner token. It opens nothing but the fake.
 RUNNER_TOKEN=glrt-real-host
@@ -290,7 +292,7 @@ profile_kept() {
 	[[ " ${PROFILES} " == *" $1 "* ]] || return 1
 	case $1 in
 	docker) [[ -n "${DOCKER_ROOTFS_IMAGE:-}" ]] ;;
-	kind) [[ -n "${KIND_ROOTFS_IMAGE:-}" ]] ;;
+	kind | kind-ready) [[ -n "${KIND_ROOTFS_IMAGE:-}" ]] ;;
 	*) return 0 ;;
 	esac
 }
@@ -301,8 +303,8 @@ overlay() {
 	local dir="${STATE_DIR}/overlay"
 	mkdir -p "${dir}"
 	local drop=() p
-	for p in arm64 docker kind; do
-		profile_kept "${p}" || drop+=(-e "/# BEGIN profile ${p}/,/# END profile ${p}/d")
+	for p in arm64 docker kind kind-ready; do
+		profile_kept "${p}" || drop+=(-e "/# BEGIN profile ${p}:/,/# END profile ${p}$/d")
 	done
 	sed "${drop[@]}" -e "s#: KERNEL_IMAGE\$#: ${KERNEL_IMAGE}#" -e "s#: ROOTFS_IMAGE\$#: ${ROOTFS_IMAGE}#" \
 		-e "s#: DOCKER_ROOTFS_IMAGE\$#: ${DOCKER_ROOTFS_IMAGE:-}#" -e "s#: KIND_ROOTFS_IMAGE\$#: ${KIND_ROOTFS_IMAGE:-}#" \
@@ -412,7 +414,7 @@ step_deploy() {
 	# PROFILES leaves out go here. Their MicroVMs would take the Host's
 	# memory and slow every boot.
 	local p kept=()
-	for p in arm64 docker kind; do
+	for p in arm64 docker kind kind-ready; do
 		if profile_kept "${p}"; then
 			kept+=("real-host-${p}")
 		else
@@ -682,6 +684,21 @@ step_kind() {
 	pass "job ${JOB_ID} made a kind cluster, ran nginx in it and saw it Ready, on the kind image"
 }
 
+# kind-ready: the kind Job on the warm Profile, whose Pool made the cluster
+# in its create hook. The Job's flr-kind-cluster finds it running.
+step_kind-ready() {
+	need_profile kind-ready
+	run_job "${HERE}/job-kind-ready.json" kind-ready "${KIND_READY_POOL}"
+	check_job_passed
+	check_docker_guest
+	expect_trace '^flr-kind-cluster: the cluster flr is running already' "the cluster the create hook made"
+	expect_trace 'Kubernetes control plane.* is running at https://127\.0\.0\.1:[0-9]+' "kubectl cluster-info"
+	expect_trace '^pod/nginx condition met$' "nginx Ready"
+	expect_trace '^flr-control-plane +Ready ' "kind node Ready"
+	record kind-ready
+	pass "job ${JOB_ID} took the kind cluster its Pool's create hook made, ran nginx in it and saw it Ready"
+}
+
 # ---------------------------------------------------------------------------
 # Faults: a Job that runs for ten minutes, a fault on the Host while it
 # runs, and the Job failing as runner_system_failure soon after (KF-200 to
@@ -826,8 +843,8 @@ main() {
 	keep_awake
 	for s in "${steps[@]}"; do
 		case "${s}" in
-		images | deploy | job | services | cache-demo | build-demo | kind | fault-flintlockd | fault-flintlockd-hang | fault-exec-agent-hang | fault-not-ready | clean) "step_${s}" ;;
-		*) die "unknown step ${s}: images deploy job services cache-demo build-demo kind fault-flintlockd fault-flintlockd-hang fault-exec-agent-hang fault-not-ready clean" ;;
+		images | deploy | job | services | cache-demo | build-demo | kind | kind-ready | fault-flintlockd | fault-flintlockd-hang | fault-exec-agent-hang | fault-not-ready | clean) "step_${s}" ;;
+		*) die "unknown step ${s}: images deploy job services cache-demo build-demo kind kind-ready fault-flintlockd fault-flintlockd-hang fault-exec-agent-hang fault-not-ready clean" ;;
 		esac
 	done
 }

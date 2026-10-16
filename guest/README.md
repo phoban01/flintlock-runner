@@ -41,11 +41,16 @@ battery-operator's demo. A Job on them fails, because they have no
 
 | What | Version | Why |
 |---|---|---|
-| Firecracker's CI kernel, at `boot/vmlinux` | 6.1.128, from Firecracker's `firecracker-ci/v1.12` bucket | It has virtio-vsock, virtio-blk, ext4 and devtmpfs built in, so the guest agent is reachable over vsock and systemd boots with no initrd. On amd64 it is an ELF `vmlinux`, on arm64 the uncompressed `Image` that Firecracker loads. |
+| Linux, at `boot/vmlinux` | 6.1.190, from kernel.org's tarball | The 6.1 long-term series, which Firecracker's CI kernels follow. On amd64 it is an ELF `vmlinux`, on arm64 the uncompressed `Image` that Firecracker loads. |
+| Firecracker's CI kernel configuration | `microvm-kernel-ci-<arch>-6.1.config` of Firecracker v1.16.1, the Host Image's Firecracker | virtio-mmio, virtio-vsock, virtio-blk, ext4 and devtmpfs built in, and no loadable modules, so the guest agent is reachable over vsock and systemd boots with no initrd. |
+| `kernel/flr.config`, and `flr-amd64.config` or `flr-arm64.config` | | The iptables `raw` table and the `comment`, `mark`, `statistic` and `multiport` matches and `MARK` target, for kube-proxy and Docker Engine. virtio-pci with the block, network and vsock drivers, and on arm64 the PCI host bridge, GICv3 ITS and PL011 console, for Cloud Hypervisor. |
 
-Firecracker's bucket publishes no checksum, so the sha256 of each download
-is pinned in `kernel/Containerfile`. The image holds the kernel and nothing
-else. A Profile names the file with `kernel.filename: boot/vmlinux`.
+The build stage cross-compiles on the build machine, so no platform is
+emulated; it takes a few minutes per architecture. The tarball's sha256 is
+from kernel.org's signed `sha256sums.asc`, and the configuration is taken
+from the commit of Firecracker's release tag, by sha256. The image holds
+the kernel and nothing else. A Profile names the file with
+`kernel.filename: boot/vmlinux`.
 
 ### `guest-rootfs` (`rootfs/`)
 
@@ -87,9 +92,10 @@ Everything in `guest-rootfs`, and:
 |---|---|---|
 | Docker Engine, the docker CLI, containerd, runc, the buildx plugin | 29.9.1, containerd 2.4.2, buildx 0.38.0, from Docker's apt repository for Ubuntu 24.04 | Jobs that build and run containers. apt checks every package against the index that Docker's signing key signs, and the key is pinned by its sha256. runc comes with containerd.io. |
 | Docker Engine on the overlay2 storage driver | | Docker Engine 29 would keep images in containerd's image store; `/etc/docker/daemon.json` turns that off. overlay2 is what most Jobs expect. |
-| iptables and ip6tables on the legacy backend | Ubuntu 24.04's | The kernel has no `nf_tables`, which the default nft backend needs. Docker Engine's bridge network and NAT work on the legacy backend. |
+| iptables and ip6tables on the legacy backend | Ubuntu 24.04's | Firecracker's older CI kernels had no `nf_tables`, which the default nft backend needs. Docker Engine's bridge network and NAT work on the legacy backend, on every kernel. |
 | Go at `/usr/local/go`, with `go` and `gofmt` in `/usr/local/bin` | 1.27.2, from go.dev, by sha256 | `go build` in a Job. `GOTOOLCHAIN` is `auto` (Go's `go.env`, and `/etc/environment`), so a module that asks for a newer Go fetches it through `GOPROXY`, the Host's Go module proxy. |
 | `flr-registry-mirror.service` | | Once the network is up, it reads the default gateway, where the Host Services listen, and writes `/etc/docker/daemon.json` with the registry mirror `http://<gateway>:5000`. Docker Engine starts after it. With no gateway, Docker Engine starts with no mirror. |
+| `flr-agent.slice` and `flr-containers.slice` | | The guest agent runs in `flr-agent.slice`, with 128 MiB of memory protected, a CPU weight of 1000 and an OOM score adjustment of -999. containerd, Docker Engine and, through `cgroup-parent` in `daemon.json`, every container run in `flr-containers.slice`, limited to 90 percent of the MicroVM's memory. Containers take the pressure, and the guest agent keeps sending its heartbeats (GI-070, GI-071). |
 
 The unit runs `/usr/libexec/flr-guest/registry-mirror`
 (`rootfs-docker/registry-mirror.sh`), which runs each hook in
@@ -101,10 +107,9 @@ Engine (GI-033). Docker Engine is socket activated too, so a Job's first
 The build adds the Docker Engine, containerd, runc, buildx and Go versions
 to `/usr/share/flr-guest/versions.env`.
 
-The kernel also has no `xt_comment`, `xt_mark`, `xt_statistic` or
-`xt_multiport` iptables modules, no IPVS and no VXLAN. Docker Engine needs
-none of them. kube-proxy in a kind cluster uses `comment` and `mark` rules,
-so a kind cluster's Services may not work on this kernel.
+The kernel has the iptables `raw` table, and the `comment`, `mark`,
+`statistic` and `multiport` matches that kube-proxy uses in a kind
+cluster. It has no IPVS and no VXLAN.
 
 ### `guest-rootfs-kind` (`rootfs-kind/`)
 
@@ -116,10 +121,13 @@ Everything in `guest-rootfs-docker`, and:
 | kubectl at `/usr/local/bin/kubectl` | 1.37.1, by sha256 from dl.k8s.io | A Job talks to that cluster. |
 | `/etc/default/kind-bootstrap` | | A Job sources it. It exports `KIND_CLUSTER_NAME` (`flr`), `KIND_NODE_IMAGE`, `KIND_CONFIG`, `KUBECONFIG_PATH` and `KUBECONFIG`. `KIND_NODE_IMAGE` is `kindest/node:v1.37.0` by the digest that kind 0.33.0's release notes list. |
 | `/etc/kind/kind-config.yaml` | | The boot unit's `20-kind` hook writes it. With a gateway, a `containerdConfigPatches` entry points the node's containerd at a hosts directory, and the config mounts `/etc/kind/certs.d` there. Its `docker.io/hosts.toml` names the Host's mirror over plain HTTP. With no gateway, the config has no mirror. |
+| the kind node image, in Docker Engine's store at `/var/lib/docker` | `KIND_NODE_IMAGE`, for the image's architecture, fetched by skopeo by digest | `rootfs-kind/docker-store.sh` unpacks it at build time as Docker Engine 29 keeps an image with the overlay2 storage driver, under its tag and its digest. Docker Engine has it at its first start, so a cluster start neither pulls nor loads it. The image ID is `KIND_NODE_IMAGE_ID` in `versions.env`. |
+| `/usr/local/bin/flr-kind-cluster` | | Makes the cluster from the loaded node image, or writes the kubeconfig of the cluster that is running, then waits for the node to be Ready. A Job on `flr/kind` runs it, and so does the create hook of `flr/kind-ready`'s Pool. |
 
 The kind node runs its own containerd 2, which does not use Docker
 Engine's mirror and takes mirrors only from a hosts directory, hence the
-mount. Docker Engine pulls the node image itself, through its own mirror.
+mount. The kind configuration also has one node only, and puts etcd's data
+on the node's `/tmp`, a tmpfs: the cluster lives as long as one Job.
 
 The build adds the kind, kubectl and node image versions to
 `/usr/share/flr-guest/versions.env`.
@@ -130,7 +138,9 @@ Each image has a check stage that the published image depends on, so an
 image that fails its checks is never produced (GI-003):
 
 - `kernel/check.sh`: the kernel is at `boot/vmlinux`, of the image's
-  architecture, a 6.1 kernel, and alone in the image.
+  architecture, the pinned 6.1 version, and alone in the image. Its
+  `.config` has the options of Firecracker's configuration that the guest
+  needs, no loadable modules, and every option of the fragments.
 - `rootfs/check.sh`: runs inside the built root filesystem, under QEMU for
   the platform that is not the build machine's. It checks everything in
   the table above: the tools run, the helper reports the pinned version and
@@ -144,8 +154,10 @@ image that fails its checks is never produced (GI-003):
   with `dockerd --validate`.
 - `rootfs-kind/check.sh`: runs after both of those in the kind image. The
   kind and kubectl versions, `/etc/default/kind-bootstrap`, the node image
-  by digest and of kind's Kubernetes minor version, and the boot unit's
-  kind configuration with and without a default route.
+  by digest and of kind's Kubernetes minor version, the baked node image's
+  tag, ID and architecture, the boot unit's kind configuration with and
+  without a default route, and `flr-kind-cluster` with stand-ins for
+  docker, kind and kubectl, with and without a running cluster.
 - `lint.sh`: without building, every download is checked with
   `sha256sum -c` against a recorded sha256, and every base image is pinned
   by digest or is an image of the same build.
@@ -210,9 +222,11 @@ A Host whose mirror is on another port needs a derived image with
 
 ## Changing a version
 
-- Kernel: change `KERNEL_VERSION` or `FIRECRACKER_CI_VERSION` in
-  `kernel/Containerfile`, download both architectures' files, and pin their
-  sha256s there.
+- Kernel: change `KERNEL_VERSION` and `KERNEL_SHA256` in
+  `kernel/Containerfile`, from kernel.org's signed `sha256sums.asc`. For a
+  new Firecracker on the Host Image, change `FIRECRACKER_VERSION`,
+  `FIRECRACKER_COMMIT` (the commit of its tag) and the configuration
+  files' sha256s.
 - Guest agent: change `GUEST_AGENT_VERSION` in `rootfs/Containerfile`, and
   take both sha256s from the release's `checksums.txt`.
 - Helper: follows `go.mod`; nothing to change here.

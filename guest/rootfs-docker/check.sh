@@ -199,6 +199,34 @@ else
 fi
 valid /etc/docker/daemon.json "the image's own configuration"
 
+#= docs/requirements/13-guest-image.md#guest-agent-protection
+#= type=test
+#/ The Guest Image's Docker image SHALL run the guest agent with an OOM
+#/ score adjustment of -999, in a slice of its own with at least 128 MiB of
+#/ memory protected and a CPU weight of 1000.
+same "the guest agent's slice" "$(unit_values guest-agent.service Slice | tail -1)" flr-agent.slice
+same "the guest agent's OOMScoreAdjust" "$(unit_values guest-agent.service OOMScoreAdjust | tail -1)" -999
+same "flr-agent.slice's MemoryMin" "$(unit_values flr-agent.slice MemoryMin | tail -1)" 128M
+same "flr-agent.slice's CPUWeight" "$(unit_values flr-agent.slice CPUWeight | tail -1)" 1000
+
+#= docs/requirements/13-guest-image.md#guest-agent-protection
+#= type=test
+#/ The Guest Image's Docker image SHALL run containerd, Docker Engine
+#/ and every container in a slice whose memory limit is 90 percent of the
+#/ MicroVM's memory and whose CPU weight is the default of 100.
+for unit in containerd.service docker.service; do
+	same "$unit's slice" "$(unit_values "$unit" Slice | tail -1)" flr-containers.slice
+done
+same "flr-containers.slice's MemoryMax" "$(unit_values flr-containers.slice MemoryMax | tail -1)" 90%
+same "flr-containers.slice's CPUWeight" "$(unit_values flr-containers.slice CPUWeight | tail -1)" 100
+for f in "$work/with-mirror.json" "$work/no-mirror.json" /etc/docker/daemon.json; do
+	if grep -q '"cgroup-parent": "flr-containers.slice"' "$f"; then
+		ok "$(basename "$f") puts containers in flr-containers.slice"
+	else
+		fail "$(basename "$f") does not put containers in flr-containers.slice: $(cat "$f")"
+	fi
+done
+
 if [ "$failures" -gt 0 ]; then
 	echo "$failures check(s) failed" >&2
 	exit 1

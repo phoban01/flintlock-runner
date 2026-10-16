@@ -1,75 +1,127 @@
 # The Guest Image's kernel (docs/requirements/13-guest-image.md): an OCI
 # image with the kernel at the path a Profile's kernel.filename names,
-# boot/vmlinux. flintlockd pulls it and hands the file to Firecracker.
+# boot/vmlinux. flintlockd pulls it and hands the file to Firecracker or
+# Cloud Hypervisor.
 #
 # Build it with guest/build.sh, which builds it for linux/amd64 and
 # linux/arm64. The build context is guest/kernel.
 #
-# Firecracker's CI kernel, 6.1, as battery-operator's real hosts trial uses
-# it: aarch64 or x86_64 for the image's platform. It has virtio-vsock,
-# virtio-blk, ext4 and devtmpfs built in, so the guest agent is reachable and
-# systemd boots without an initrd. On aarch64 it is the uncompressed Image
-# that Firecracker loads, whatever its name; on x86_64 an ELF vmlinux.
-# Firecracker's bucket publishes no checksum, so the sha256s here are
-# computed from the downloads.
+# The kernel is Linux 6.1 from kernel.org's tarball, configured with
+# Firecracker's CI configuration for the Firecracker release that the Host
+# Image runs, plus flr.config and the fragment of the image's architecture:
+# the iptables options that kube-proxy needs, and virtio-pci for Cloud
+# Hypervisor. Firecracker's configuration has virtio-mmio, virtio-vsock,
+# virtio-blk, ext4 and devtmpfs built in and no loadable modules, so the
+# guest agent is reachable and systemd boots without an initrd. The output
+# is an ELF vmlinux on amd64 and the uncompressed Image on arm64, which is
+# what Firecracker loads.
 #
-# Every stage runs on the build machine's own architecture: nothing here
-# runs the kernel, so no platform is emulated. alpine:3.22 is pinned by the
-# digest of its multi-platform index; resolve a new one with
-# `docker buildx imagetools inspect alpine:3.22`.
+# The build stage runs on the build machine and cross-compiles for the
+# image's platform, so no platform is emulated. ubuntu:24.04 and
+# alpine:3.22 are pinned by the digests of their multi-platform indexes;
+# resolve a new one with `docker buildx imagetools inspect IMAGE:TAG`.
 
-# The versions, for the fetch stage and for the published image's labels.
-ARG FIRECRACKER_CI_VERSION=v1.12
-ARG KERNEL_VERSION=6.1.128
+# The versions, for the build stage and for the published image's labels.
+# KERNEL_SHA256 is from kernel.org's signed sha256sums.asc
+# (https://cdn.kernel.org/pub/linux/kernel/v6.x/sha256sums.asc).
+ARG KERNEL_VERSION=6.1.190
+# The Firecracker release whose CI kernel configuration the kernel takes:
+# the one battery-operator's Host Image runs (its hostimage/versions.env).
+# The configuration files are taken from the commit of that release's tag.
+ARG FIRECRACKER_VERSION=v1.16.1
+ARG FIRECRACKER_COMMIT=2038188f145fb81b8d098147a10e9d9f392fd22f
 
 #= docs/requirements/13-guest-image.md#guest-build
 #/ The Guest Image build SHALL complete on a machine that has
 #/ neither `/dev/kvm` nor a Host.
-FROM --platform=$BUILDPLATFORM docker.io/library/alpine:3.22@sha256:5291449c3df73caf6ed85e649dec1b9e818b39a5d8c871e97afc13e9cd5e8fa8 AS fetch
+FROM --platform=$BUILDPLATFORM docker.io/library/ubuntu:24.04@sha256:008173c23f95b170204355c12626cb5a965d779a7e1283b09e9cffbb1bf33ca3 AS build
+ARG BUILDARCH
 ARG TARGETARCH
-ARG FIRECRACKER_CI_VERSION
 ARG KERNEL_VERSION
-ARG KERNEL_SHA256_ARM64=cb1291c66bca75bc11cb9c8357fcef9965bb1786dffcb42a60923c3e0e49f319
-ARG KERNEL_SHA256_AMD64=27a8310b9a727517e9eb02044524b6ceb77de5728e3491b6974d5c846227ecc8
-#= docs/requirements/13-guest-image.md#guest-kernel
-#/ The Guest Image's kernel image SHALL contain Firecracker's CI
-#/ kernel of the 6.1 series for its architecture at `boot/vmlinux`
-#
+ARG FIRECRACKER_VERSION
+ARG FIRECRACKER_COMMIT
+ARG KERNEL_SHA256=8aa50daca0412a3d0a61a87af3744f39773d40b3132635fb7bc9be652cdb7b0c
+ARG FIRECRACKER_CONFIG_SHA256_AMD64=adbc70ab5e89213ba00594b12d25e09bdf8bb1ed3c252d7449326bb14c22963b
+ARG FIRECRACKER_CONFIG_SHA256_ARM64=1df6e14391ef65eceac0f65cac4e431fefd8e04e4584d261184059320ad492b7
+RUN case "${TARGETARCH}" in \
+      amd64) cross=gcc-x86-64-linux-gnu ;; \
+      arm64) cross=gcc-aarch64-linux-gnu ;; \
+      *) echo "no kernel for ${TARGETARCH}" >&2; exit 1 ;; \
+    esac && \
+    if [ "${TARGETARCH}" = "${BUILDARCH}" ]; then cross=gcc; fi && \
+    apt-get update && \
+    DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+      bc bison build-essential ca-certificates cpio curl flex kmod libelf-dev \
+      libssl-dev python3 xz-utils "${cross}" && \
+    rm -rf /var/lib/apt/lists/*
+WORKDIR /src
 #= docs/requirements/13-guest-image.md#guest-build
 #/ The Guest Image build SHALL verify the checksum of every file
 #/ it downloads against a checksum recorded in the Guest Image's sources and
 #/ SHALL fail when one does not match.
-RUN apk add --no-cache curl && \
-    case "${TARGETARCH}" in \
-      arm64) uarch=aarch64; sum="${KERNEL_SHA256_ARM64}" ;; \
-      amd64) uarch=x86_64; sum="${KERNEL_SHA256_AMD64}" ;; \
-      *) echo "no kernel for ${TARGETARCH}" >&2; exit 1 ;; \
+RUN case "${TARGETARCH}" in \
+      amd64) uarch=x86_64; sum="${FIRECRACKER_CONFIG_SHA256_AMD64}" ;; \
+      arm64) uarch=aarch64; sum="${FIRECRACKER_CONFIG_SHA256_ARM64}" ;; \
     esac && \
-    curl -fsSL -o /vmlinux "https://s3.amazonaws.com/spec.ccfc.min/firecracker-ci/${FIRECRACKER_CI_VERSION}/${uarch}/vmlinux-${KERNEL_VERSION}" && \
-    echo "${sum}  /vmlinux" | sha256sum -c - && \
-    mkdir -p /out/boot && mv /vmlinux /out/boot/vmlinux && chmod 0644 /out/boot/vmlinux
+    curl -fsSL -o /src/linux.tar.xz "https://cdn.kernel.org/pub/linux/kernel/v6.x/linux-${KERNEL_VERSION}.tar.xz" && \
+    curl -fsSL -o /src/firecracker.config \
+      "https://raw.githubusercontent.com/firecracker-microvm/firecracker/${FIRECRACKER_COMMIT}/resources/guest_configs/microvm-kernel-ci-${uarch}-6.1.config" && \
+    printf '%s  %s\n' "${KERNEL_SHA256}" /src/linux.tar.xz "${sum}" /src/firecracker.config | sha256sum -c - && \
+    tar -xJf /src/linux.tar.xz && rm /src/linux.tar.xz
+COPY flr.config flr-amd64.config flr-arm64.config /src/
+#= docs/requirements/13-guest-image.md#guest-kernel
+#/ The Guest Image's kernel image SHALL contain, at `boot/vmlinux`, a
+#/ Linux kernel of the 6.1 series built from a kernel.org source tarball with
+#/ the Firecracker CI kernel configuration of the Firecracker release that
+#/ the Host Image runs, as an ELF `vmlinux` for `linux/amd64` and as an
+#/ uncompressed arm64 `Image` for `linux/arm64`.
+#
+#= docs/requirements/13-guest-image.md#guest-kernel
+#/ The Guest Image's kernel SHALL have the iptables `raw` table, the
+#/ iptables `comment`, `mark` and `statistic` matches and the `MARK` target
+#/ built in.
+#
+#= docs/requirements/13-guest-image.md#guest-kernel
+#/ The Guest Image's kernel SHALL have virtio-pci built in beside
+#/ virtio-mmio, with the virtio block, network and vsock drivers.
+RUN case "${TARGETARCH}" in \
+      amd64) karch=x86_64; image=vmlinux; cross=x86_64-linux-gnu- ;; \
+      arm64) karch=arm64; image=arch/arm64/boot/Image; cross=aarch64-linux-gnu- ;; \
+    esac && \
+    if [ "${TARGETARCH}" = "${BUILDARCH}" ]; then cross=; fi && \
+    cd "/src/linux-${KERNEL_VERSION}" && \
+    cp /src/firecracker.config .config && \
+    ARCH="${karch}" CROSS_COMPILE="${cross}" scripts/kconfig/merge_config.sh -m .config /src/flr.config "/src/flr-${TARGETARCH}.config" && \
+    make ARCH="${karch}" CROSS_COMPILE="${cross}" olddefconfig && \
+    make ARCH="${karch}" CROSS_COMPILE="${cross}" -j"$(nproc)" "$(basename "${image}")" && \
+    mkdir -p /out/boot /config && \
+    cp "${image}" /out/boot/vmlinux && chmod 0644 /out/boot/vmlinux && \
+    cp .config /config/config && cp /src/flr.config "/src/flr-${TARGETARCH}.config" /config/
 
 # ---------------------------------------------------------------------------
-# check: the kernel is where a Profile looks for it, and of the image's
-# architecture. The published image takes the kernel from this stage, so no
-# builder can skip it: a kernel that fails its check is never published.
+# check: the kernel is where a Profile looks for it, of the image's
+# architecture and version, and built with every option the fragments ask
+# for. The published image takes the kernel from this stage, so no builder
+# can skip it: a kernel that fails its check is never published.
 FROM --platform=$BUILDPLATFORM docker.io/library/alpine:3.22@sha256:5291449c3df73caf6ed85e649dec1b9e818b39a5d8c871e97afc13e9cd5e8fa8 AS check
 ARG TARGETARCH
-COPY --from=fetch /out/ /out/
+ARG KERNEL_VERSION
+COPY --from=build /out/ /out/
+COPY --from=build /config/ /config/
 COPY check.sh /check.sh
 #= docs/requirements/13-guest-image.md#guest-build
 #/ The Guest Image build SHALL check the contents of each image it
 #/ builds in a check stage that fails unless the image carries everything
 #/ this document requires of it.
-RUN sh /check.sh /out "${TARGETARCH}"
+RUN sh /check.sh /out "${TARGETARCH}" /config "${KERNEL_VERSION}"
 
 # ---------------------------------------------------------------------------
 # The published image: the kernel and nothing else.
 FROM scratch
-ARG FIRECRACKER_CI_VERSION
 ARG KERNEL_VERSION
+ARG FIRECRACKER_VERSION
 COPY --from=check /out/boot/vmlinux /boot/vmlinux
 LABEL org.opencontainers.image.title="flintlock-runner guest kernel" \
       org.opencontainers.image.source="https://github.com/phoban01/flintlock-runner" \
       dev.flintlock.gitlab-runner.version.kernel="${KERNEL_VERSION}" \
-      dev.flintlock.gitlab-runner.version.firecracker-ci="${FIRECRACKER_CI_VERSION}"
+      dev.flintlock.gitlab-runner.version.firecracker-config="${FIRECRACKER_VERSION}"
