@@ -8,6 +8,11 @@ scripts call `gitlab-runner-helper` (`02-executor.md`, EX-018). The Guest
 Image carries what those scripts need, and a network for a Job that clones a
 repository or uses the Host Services.
 
+Two more root filesystem images build on that one, in layers: the Docker
+image adds Docker Engine and Go, and the kind image adds kind and kubectl
+to the Docker image. A Profile names one root filesystem image and the
+kernel image.
+
 The sources are under `guest/` in this repository. They start from the
 images of battery-operator's real hosts trial (`hack/real-hosts/images`
 there), which have the kernel, systemd and the guest agent and nothing else.
@@ -89,12 +94,88 @@ agent over vsock; only a Job that needs the network fails. systemd derives
 an interface's MAC address from the machine ID, so with one machine ID for
 every guest, every guest would ask DHCP for the same address.
 
+## Docker image {#guest-docker}
+
+- **GI-050** The Guest Image SHALL include a Docker image, a root filesystem
+  image built on the Guest Image's root filesystem image for `linux/amd64`
+  and `linux/arm64`, which carries everything this document requires of
+  that image.
+- **GI-051** The Guest Image's Docker image SHALL contain Docker Engine,
+  containerd, runc and the Docker buildx plugin, each at the version pinned
+  in its sources, and SHALL start Docker Engine at boot.
+- **GI-052** The Guest Image's Docker image SHALL set iptables and ip6tables to
+  their legacy backend.
+- **GI-053** The Guest Image's Docker image SHALL contain Go at the version
+  pinned in its sources, on the `PATH`, with `GOTOOLCHAIN` set to `auto`.
+- **GI-054** The Guest Image's Docker image SHALL start Docker Engine only after
+  the boot unit that writes its configuration has finished.
+- **GI-055** When the guest has a default route once the wait for the network
+  has ended, the Guest Image's Docker image SHALL configure Docker Engine,
+  before it starts, with a registry mirror over plain HTTP at port 5000 of
+  the default route's gateway.
+- **GI-056** If the guest has no default route once the wait for the network has
+  ended, then the Guest Image's Docker image SHALL start Docker Engine with
+  no registry mirror.
+- **GI-057** The Guest Image's Docker image SHALL configure Docker Engine with
+  the overlay2 storage driver.
+- **GI-058** The Guest Image's Docker image SHALL run Docker Engine without
+  the iptables `raw` table, which the kernel does not have.
+
+A Profile that names the Docker image serves Jobs that build and run
+containers: `docker build`, `docker buildx build` against the Host's
+`buildkitd` through `BUILDKIT_HOST`, `docker run`, and `go build`. The Host
+Services listen on the guest bridge's gateway, which is the guest's default
+gateway, so the boot unit finds the registry mirror there. The mirror is
+the Host's pull-through cache of Docker Hub, so an image a Job pulled once
+on a Host comes from the Host the next time. A guest with no lease still
+boots, and Docker Engine pulls from Docker Hub directly.
+
+Firecracker's CI kernel has no `nf_tables`, so iptables has to use its
+legacy backend. The kernel has the bridge, veth, overlayfs, NAT, conntrack
+and the `addrtype` and `conntrack` matches, which Docker Engine needs. It
+has no iptables `raw` table, where Docker Engine 28 and later put the rules
+that keep other hosts off a container's address.
+Docker Engine 29 would keep images in containerd's image store; overlay2
+keeps them where its registry mirror applies.
+
+With `GOTOOLCHAIN` set to `auto`, a module whose `go.mod` asks for a newer
+Go fetches that toolchain through `GOPROXY`, the Host's Go module proxy.
+
+## kind image {#guest-kind}
+
+- **GI-060** The Guest Image SHALL include a kind image, a root filesystem image
+  built on its Docker image for `linux/amd64` and `linux/arm64`, which
+  carries everything this document requires of the Docker image.
+- **GI-061** The Guest Image's kind image SHALL contain kind and kubectl, each
+  at the version pinned in its sources.
+- **GI-062** The Guest Image's kind image SHALL contain
+  `/etc/default/kind-bootstrap`, which exports `KIND_CLUSTER_NAME`,
+  `KIND_NODE_IMAGE`, `KUBECONFIG_PATH` and `KUBECONFIG`, with
+  `KIND_NODE_IMAGE` naming by digest a kindest/node image that the pinned
+  kind release lists.
+- **GI-063** When the guest has a default route once the wait for the network
+  has ended, the Guest Image's kind image SHALL write
+  `/etc/kind/kind-config.yaml` with a containerd mirror of `docker.io` over
+  plain HTTP at port 5000 of the default route's gateway.
+- **GI-064** If the guest has no default route once the wait for the network has
+  ended, then the Guest Image's kind image SHALL write
+  `/etc/kind/kind-config.yaml` with no registry mirror.
+
+A Job sources `/etc/default/kind-bootstrap` and passes its values and
+`/etc/kind/kind-config.yaml` to `kind create cluster`. The kind node runs
+its own containerd, which does not use Docker Engine's mirror, so the kind
+configuration gives it the same mirror. Docker Engine pulls the node image
+itself, through its mirror.
+
 ## Release {#guest-release}
 
 - **GI-040** The Release SHALL publish the Guest Image's kernel image and
   root filesystem image to the project's container registry, each as one
   image index for `linux/amd64` and `linux/arm64`, tagged with the release
   version.
+- **GI-041** The Release SHALL publish the Guest Image's Docker image and
+  kind image to the project's container registry, each as one image index
+  for `linux/amd64` and `linux/arm64`, tagged with the release version.
 
 The release lists the digest of each image in `images.txt`. A Profile names
 the images by that digest (CF-027).

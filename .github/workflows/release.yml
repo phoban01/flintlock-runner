@@ -31,8 +31,8 @@ env:
   GORELEASER_VERSION: v2.18.1
   KUSTOMIZE_VERSION: v5.8.1
   FLR_REPOSITORY: ghcr.io/phoban01/flintlock-runner/flr
-  # The Guest Image goes to GUEST_PREFIX/guest-kernel and
-  # GUEST_PREFIX/guest-rootfs.
+  # The Guest Image goes to GUEST_PREFIX/guest-kernel, guest-rootfs,
+  # guest-rootfs-docker and guest-rootfs-kind.
   GUEST_PREFIX: ghcr.io/phoban01/flintlock-runner
 
 jobs:
@@ -95,9 +95,10 @@ jobs:
       - name: end-to-end harness
         run: make e2e
 
-  # The Guest Image (GI-040): the kernel and root filesystem images a Profile
-  # names, each built for linux/amd64 and linux/arm64 with its check stage,
-  # as CI's guest job builds them, and pushed as one index per image. On a
+  # The Guest Image (GI-040, GI-041): the kernel image and the three root
+  # filesystem images a Profile names, each built for linux/amd64 and
+  # linux/arm64 with its check stage as CI's guest job builds them, and
+  # pushed as one index per image. On a
   # tag they go to ghcr.io, tagged VERSION. On a pull request they go to a
   # registry that lives only inside this job, so that the push and its
   # checks run too, and nothing leaves the runner. The builder is on the
@@ -120,6 +121,8 @@ jobs:
     outputs:
       kernel: ${{ steps.push.outputs.kernel }}
       rootfs: ${{ steps.push.outputs.rootfs }}
+      docker: ${{ steps.push.outputs.docker }}
+      kind: ${{ steps.push.outputs.kind }}
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
       - name: where the images go
@@ -159,6 +162,8 @@ jobs:
           {
             echo "kernel=$(grep '/guest-kernel@' guest.refs)"
             echo "rootfs=$(grep '/guest-rootfs@' guest.refs)"
+            echo "docker=$(grep '/guest-rootfs-docker@' guest.refs)"
+            echo "kind=$(grep '/guest-rootfs-kind@' guest.refs)"
           } >>"$GITHUB_OUTPUT"
       - name: one index for both platforms, tagged with the version only
         env:
@@ -227,11 +232,13 @@ jobs:
         env:
           GUEST_KERNEL_REF: ${{ needs.guest-images.outputs.kernel }}
           GUEST_ROOTFS_REF: ${{ needs.guest-images.outputs.rootfs }}
+          GUEST_DOCKER_REF: ${{ needs.guest-images.outputs.docker }}
+          GUEST_KIND_REF: ${{ needs.guest-images.outputs.kind }}
         run: |
           version=${GITHUB_REF_NAME#v}
           flr_digest=$(jq -r --arg name "$FLR_REPOSITORY:$version" \
             '[.[] | select(.type == "Docker Image" and .name == $name) | .extra.Digest] | unique | .[]' dist/artifacts.json)
-          for d in "$flr_digest" "${GUEST_KERNEL_REF#*@}" "${GUEST_ROOTFS_REF#*@}"; do
+          for d in "$flr_digest" "${GUEST_KERNEL_REF#*@}" "${GUEST_ROOTFS_REF#*@}" "${GUEST_DOCKER_REF#*@}" "${GUEST_KIND_REF#*@}"; do
             if ! [[ $d =~ ^sha256:[0-9a-f]{64}$ ]]; then
               echo "::error::not one digest: \"$d\""
               exit 1
@@ -242,13 +249,15 @@ jobs:
             echo "FLR_REF=$FLR_REPOSITORY@$flr_digest"
             echo "GUEST_KERNEL_REF=$GUEST_KERNEL_REF"
             echo "GUEST_ROOTFS_REF=$GUEST_ROOTFS_REF"
+            echo "GUEST_DOCKER_REF=$GUEST_DOCKER_REF"
+            echo "GUEST_KIND_REF=$GUEST_KIND_REF"
           } >>"$GITHUB_ENV"
       - name: the flr image as published
         run: hack/release/check-flr-image.sh --version "$VERSION" --platforms linux/amd64,linux/arm64 --pull "$FLR_REF"
       - name: only this version's tags, on the pushed digests
         run: hack/release/check-tags.sh published --version "$VERSION" --flr "$FLR_REF"
       - name: the Guest Image as published
-        run: hack/release/check-guest-images.sh --version "$VERSION" "$GUEST_KERNEL_REF" "$GUEST_ROOTFS_REF"
+        run: hack/release/check-guest-images.sh --version "$VERSION" "$GUEST_KERNEL_REF" "$GUEST_ROOTFS_REF" "$GUEST_DOCKER_REF" "$GUEST_KIND_REF"
       # images.txt lists every tag this release pushed with its digest. The
       # render reads the Guest Image's digests from it, for the Runner's
       # Profiles, so it is written first.
@@ -259,6 +268,8 @@ jobs:
             echo "$FLR_REPOSITORY:$VERSION $FLR_REF"
             echo "$GUEST_PREFIX/guest-kernel:$VERSION $GUEST_KERNEL_REF"
             echo "$GUEST_PREFIX/guest-rootfs:$VERSION $GUEST_ROOTFS_REF"
+            echo "$GUEST_PREFIX/guest-rootfs-docker:$VERSION $GUEST_DOCKER_REF"
+            echo "$GUEST_PREFIX/guest-rootfs-kind:$VERSION $GUEST_KIND_REF"
           } >dist/manifests/images.txt
       - name: render the manifests asset
         run: hack/release/render-manifests.sh --flr "$FLR_REF" --images dist/manifests/images.txt --out dist/manifests
@@ -363,7 +374,7 @@ jobs:
       - name: rendering and its checks
         run: hack/release/test-render.sh
       # The dry run builds no Guest Image, so its images.txt names stand-in
-      # digests for guest-kernel and guest-rootfs: the digests of their own
+      # digests for the four Guest Image repositories: the digests of their own
       # names, which no registry holds. The render writes them into the
       # Runner's Profiles as a release writes the pushed ones.
       - name: render the manifests asset
@@ -375,7 +386,7 @@ jobs:
           mkdir -p dist/manifests
           {
             echo "$FLR_REPOSITORY:$VERSION $FLR_REPOSITORY@$FLR_DIGEST"
-            for name in guest-kernel guest-rootfs; do
+            for name in guest-kernel guest-rootfs guest-rootfs-docker guest-rootfs-kind; do
               echo "$GUEST_PREFIX/$name:$VERSION $GUEST_PREFIX/$name@sha256:$(printf '%s' "dry-run $name" | sha256sum | cut -d' ' -f1)"
             done
           } >dist/manifests/images.txt

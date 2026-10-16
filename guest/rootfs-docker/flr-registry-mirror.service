@@ -1,0 +1,19 @@
+# Point the guest's container tools at the Host's registry mirror, on the
+# default gateway, once the guest has its DHCP lease
+# (guest/rootfs-docker/registry-mirror.sh). Docker Engine starts after it,
+# through docker.service.d/10-flr-registry-mirror.conf. The guest agent does
+# not wait for it, nor for the network.
+[Unit]
+Description=Point Docker Engine at the Host's registry mirror
+Wants=network-online.target
+After=network-online.target systemd-networkd-wait-online.service
+Before=docker.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+EnvironmentFile=-/etc/default/flr-registry-mirror
+ExecStart=/usr/libexec/flr-guest/registry-mirror
+
+[Install]
+WantedBy=multi-user.target

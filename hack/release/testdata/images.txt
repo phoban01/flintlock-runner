@@ -1,3 +1,5 @@
 ghcr.io/phoban01/flintlock-runner/flr:1.2.3 ghcr.io/phoban01/flintlock-runner/flr@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
 ghcr.io/phoban01/flintlock-runner/guest-kernel:1.2.3 ghcr.io/phoban01/flintlock-runner/guest-kernel@sha256:1111111111111111111111111111111111111111111111111111111111111111
 ghcr.io/phoban01/flintlock-runner/guest-rootfs:1.2.3 ghcr.io/phoban01/flintlock-runner/guest-rootfs@sha256:2222222222222222222222222222222222222222222222222222222222222222
+ghcr.io/phoban01/flintlock-runner/guest-rootfs-docker:1.2.3 ghcr.io/phoban01/flintlock-runner/guest-rootfs-docker@sha256:4444444444444444444444444444444444444444444444444444444444444444
+ghcr.io/phoban01/flintlock-runner/guest-rootfs-kind:1.2.3 ghcr.io/phoban01/flintlock-runner/guest-rootfs-kind@sha256:5555555555555555555555555555555555555555555555555555555555555555

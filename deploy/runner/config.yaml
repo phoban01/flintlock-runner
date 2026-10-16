@@ -41,33 +41,38 @@ pool_manager:
       key: serving-ca.crt
 
 # The Profiles (KF-080). Each names what battery's Pool of that Profile boots.
-# Neither names a Guest Transport: under the claim backend the Executor
-# runs every Profile over agent-exec (KF-185), and a Profile that names ssh
-# is refused (KF-195).
+# None names a Guest Transport: under the claim backend the Executor runs
+# every Profile over agent-exec (KF-185), and a Profile that names ssh is
+# refused (KF-195).
 #
-# Both boot the Guest Image of guest/ (docs/requirements/13-guest-image.md):
-# Firecracker's CI 6.1 kernel at boot/vmlinux, and Ubuntu 24.04 with the
-# guest agent, bash, git, curl, the CA certificates and gitlab-runner-helper
-# at the default helper path. Each image is one index for amd64 and arm64,
-# so the two Profiles name the same references. The shell, the helper path
-# and the builds and cache directories are left to their defaults, which
-# are what the image has.
+# Each boots the Guest Image of guest/ (docs/requirements/13-guest-image.md):
+# Firecracker's CI 6.1 kernel at boot/vmlinux, and one of its root
+# filesystem images. guest-rootfs is Ubuntu 24.04 with the guest agent,
+# bash, git, curl, the CA certificates and gitlab-runner-helper at the
+# default helper path. guest-rootfs-docker adds Docker Engine and Go, and
+# guest-rootfs-kind adds kind and kubectl to that (docs/docker-and-kind.md).
+# Each image is one index for amd64 and arm64, so an amd64 and an arm64
+# Profile name the same references. The shell, the helper path and the
+# builds and cache directories are left to their defaults, which are what
+# the images have.
 #
 # Pin the images by digest (CF-027). Each release lists the digests it
 # pushed in its images.txt asset (docs/RELEASING.md), one line per image:
-# the tag, then the same image by digest. The images are guest-kernel and
-# guest-rootfs, in the repositories of ghcr.io/phoban01/flintlock-runner.
-# A release writes them into its flintlock-runner-fleet.yaml in place of
-# :REPLACE below. To apply this directory from source, replace each
-# :REPLACE with the @sha256:<digest> of one release. A tag loads too, with a
-# warning at startup that names the Profile and the image (CF-027), but the
-# tag names whatever was pushed last under it.
+# the tag, then the same image by digest. The images are guest-kernel,
+# guest-rootfs, guest-rootfs-docker and guest-rootfs-kind, in the
+# repositories of ghcr.io/phoban01/flintlock-runner. A release writes them
+# into its flintlock-runner-fleet.yaml in place of :REPLACE below. To apply
+# this directory from source, replace each :REPLACE with the
+# @sha256:<digest> of one release. A tag loads too, with a warning at
+# startup that names the Profile and the image (CF-027), but the tag names
+# whatever was pushed last under it.
 profiles:
   - name: default
     default: true
     arch: amd64
     vcpu: 2
     memory_mb: 4096
+    images: [flr/ubuntu]
     kernel:
       image: ghcr.io/phoban01/flintlock-runner/guest-kernel:REPLACE
       filename: boot/vmlinux
@@ -90,6 +95,35 @@ profiles:
     rootfs: ghcr.io/phoban01/flintlock-runner/guest-rootfs:REPLACE
     pool:
       size: 1
+  # Jobs that build and run containers ask for `image: flr/docker`: Docker
+  # Engine with buildx, pointed at the Host's registry mirror at boot, and
+  # Go. `docker buildx build` reaches the Host's buildkitd through
+  # BUILDKIT_HOST.
+  - name: docker
+    arch: amd64
+    vcpu: 4
+    memory_mb: 4096
+    images: [flr/docker]
+    kernel:
+      image: ghcr.io/phoban01/flintlock-runner/guest-kernel:REPLACE
+      filename: boot/vmlinux
+    rootfs: ghcr.io/phoban01/flintlock-runner/guest-rootfs-docker:REPLACE
+    pool:
+      size: 1
+  # Jobs that need a Kubernetes cluster ask for `image: flr/kind`: the
+  # Docker image with kind and kubectl. The Job makes the cluster from
+  # /etc/default/kind-bootstrap and /etc/kind/kind-config.yaml.
+  - name: kind
+    arch: amd64
+    vcpu: 4
+    memory_mb: 8192
+    images: [flr/kind]
+    kernel:
+      image: ghcr.io/phoban01/flintlock-runner/guest-kernel:REPLACE
+      filename: boot/vmlinux
+    rootfs: ghcr.io/phoban01/flintlock-runner/guest-rootfs-kind:REPLACE
+    pool:
+      size: 1
 
 # What Jobs are told about the Host Services. The addresses come from the
 # annotations the Host Agent keeps on the Host's Node (KF-194, KF-189);
@@ -102,6 +136,8 @@ host_services:
     port: 1234
   go_proxy:
     port: 3000
+  # The Docker and kind images point their container tools at port 5000 of
+  # the guest's gateway at boot, so keep the registry mirror there.
   registry_mirror:
     port: 5000
   http_cache:

@@ -7,3 +7,15 @@ profiles:
       image: ghcr.io/phoban01/flintlock-runner/guest-kernel:REPLACE
       filename: boot/vmlinux
     rootfs: ghcr.io/phoban01/flintlock-runner/guest-rootfs:REPLACE
+  - name: docker
+    images: [flr/docker]
+    kernel:
+      image: ghcr.io/phoban01/flintlock-runner/guest-kernel:REPLACE
+      filename: boot/vmlinux
+    rootfs: ghcr.io/phoban01/flintlock-runner/guest-rootfs-docker:REPLACE
+  - name: kind
+    images: [flr/kind]
+    kernel:
+      image: ghcr.io/phoban01/flintlock-runner/guest-kernel:REPLACE
+      filename: boot/vmlinux
+    rootfs: ghcr.io/phoban01/flintlock-runner/guest-rootfs-kind:REPLACE
