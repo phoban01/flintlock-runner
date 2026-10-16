@@ -42,6 +42,22 @@ rm -rf "$hosts"
 	fi
 	echo "kind: Cluster"
 	echo "apiVersion: kind.x-k8s.io/v1alpha4"
+	#= docs/requirements/13-guest-image.md#guest-kind-fast
+	#/ The Guest Image's kind image SHALL write `/etc/kind/kind-config.yaml`
+	#/ with one control-plane node and no other, and with etcd's data
+	#/ directory on the node's `/tmp`, which kind mounts as a tmpfs.
+	#
+	# A cluster in a MicroVM lives as long as one Job, so etcd needs no
+	# durable disk, and the guest's disk is the slow part of a cluster's
+	# start. kind's default CNI, kindnet, stays.
+	cat <<-EOF
+		kubeadmConfigPatches:
+		  - |
+		    kind: ClusterConfiguration
+		    etcd:
+		      local:
+		        dataDir: /tmp/etcd
+	EOF
 	if [ -n "$mirror" ]; then
 		cat <<-EOF
 			containerdConfigPatches:

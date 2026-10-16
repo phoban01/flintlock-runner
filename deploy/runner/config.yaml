@@ -111,8 +111,9 @@ profiles:
     pool:
       size: 1
   # Jobs that need a Kubernetes cluster ask for `image: flr/kind`: the
-  # Docker image with kind and kubectl. The Job makes the cluster from
-  # /etc/default/kind-bootstrap and /etc/kind/kind-config.yaml.
+  # Docker image with kind and kubectl. The Job makes the cluster with
+  # flr-kind-cluster, from /etc/default/kind-bootstrap and
+  # /etc/kind/kind-config.yaml.
   - name: kind
     arch: amd64
     vcpu: 4
@@ -124,6 +125,30 @@ profiles:
     rootfs: ghcr.io/phoban01/flintlock-runner/guest-rootfs-kind:REPLACE
     pool:
       size: 1
+  # Jobs that want a cluster at once ask for `image: flr/kind-ready`: the
+  # kind image, whose Pool makes the cluster in each MicroVM before battery
+  # marks it available. The Job's flr-kind-cluster finds the cluster
+  # running and only writes the kubeconfig. Each warm MicroVM keeps its
+  # cluster running while it waits, and battery gives the create hook no
+  # time limit (docs/docker-and-kind.md).
+  #
+  #= docs/requirements/13-guest-image.md#guest-kind-fast
+  #/ The Fleet Manifests SHALL include a Profile for the Job Image
+  #/ `flr/kind-ready` that boots the kind image and whose Pool runs
+  #/ `flr-kind-cluster` as its create hook.
+  - name: kind-ready
+    arch: amd64
+    vcpu: 4
+    memory_mb: 8192
+    images: [flr/kind-ready]
+    kernel:
+      image: ghcr.io/phoban01/flintlock-runner/guest-kernel:REPLACE
+      filename: boot/vmlinux
+    rootfs: ghcr.io/phoban01/flintlock-runner/guest-rootfs-kind:REPLACE
+    pool:
+      size: 1
+      create_hooks:
+        - /usr/local/bin/flr-kind-cluster
 
 # What Jobs are told about the Host Services. The addresses come from the
 # annotations the Host Agent keeps on the Host's Node (KF-194, KF-189);

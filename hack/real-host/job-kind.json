@@ -36,6 +36,7 @@
     {
       "name": "script",
       "script": [
+        "echo \"BOOT job-start $(cut -d. -f1 /proc/uptime)000 ms\"",
         "cat /usr/share/flr-guest/versions.env",
         "env | grep -E '^(BUILDKIT_HOST|GOPROXY|GOFLAGS|CI_REGISTRY_MIRROR)=' | sort",
         "cat /etc/docker/daemon.json",
@@ -46,14 +47,18 @@
         "env | grep -E '^(KIND_|KUBECONFIG)' | sort",
         "cat \"$KIND_CONFIG\"",
         "cat /etc/kind/certs.d/docker.io/hosts.toml",
-        "TIMEFORMAT='TIMING node-image-pull %R'; time docker pull -q \"$KIND_NODE_IMAGE\"",
-        "TIMEFORMAT='TIMING kind-create %R'; time kind create cluster --name \"$KIND_CLUSTER_NAME\" --image \"$KIND_NODE_IMAGE\" --config \"$KIND_CONFIG\" --kubeconfig \"$KUBECONFIG_PATH\" --wait 5m",
+        "TIMEFORMAT='TIMING kind-cluster %R'; time { if command -v flr-kind-cluster >/dev/null; then flr-kind-cluster; else docker pull -q \"$KIND_NODE_IMAGE\" && kind create cluster --name \"$KIND_CLUSTER_NAME\" --image \"$KIND_NODE_IMAGE\" --config \"$KIND_CONFIG\" --kubeconfig \"$KUBECONFIG_PATH\" --wait 5m; fi; }",
         "kubectl cluster-info",
         "kubectl run nginx --image=docker.io/library/nginx:1.29 --restart=Never",
         "TIMEFORMAT='TIMING nginx-ready %R'; time kubectl wait --for=condition=Ready pod/nginx --timeout=5m",
         "kubectl get nodes -o wide",
         "kubectl get pods -A -o wide",
-        "for u in guest-agent flr-registry-mirror containerd docker; do echo \"BOOT $u $(( $(systemctl show -p ActiveEnterTimestampMonotonic --value $u.service) / 1000 )) ms\"; done"
+        "for u in guest-agent flr-registry-mirror containerd docker; do echo \"BOOT $u $(( $(systemctl show -p ActiveEnterTimestampMonotonic --value $u.service) / 1000 )) ms\"; done",
+        "free -m",
+        "systemd-analyze blame --no-pager | head -20 || true",
+        "systemd-analyze critical-chain --no-pager docker.service || true",
+        "journalctl -b -o short-monotonic --no-pager -u containerd -u docker | head -80 || true",
+        "docker images"
       ],
       "timeout": 1800,
       "when": "on_success",

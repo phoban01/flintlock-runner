@@ -103,7 +103,7 @@ configuration from its `.state`. Without it, set `KUBECONFIG`, and
 | `deploy` | Checks that the Host is ready and that its `host.env` has the Host pool's settings. Applies the namespace and the Secret with the fake's runner token. Deploys the fake GitLab (`fake-gitlab.yaml`). Deploys the Fleet Manifests, `deploy/`, through an overlay in `.state/overlay`: the flr image from `images`, and `runner-config.yaml` as the Runner's configuration, with the Guest Image references in place. Waits for the Host Agent, the Runner and its Pool `real-host-arm64`, and prints the Host Service annotations of the Host's Node. |
 | `job` | Queues `job.json` on the fake GitLab. While the Job runs, it records `kubectl get microvmclaims -A` once the claim is Bound. When the Job ends, it waits for the claim to go. It prints the Job's status and log, and the claims during and after, and writes them to `.state/run-job-<time>.log`. |
 | `services` | As `job`, with `job-host-services.json`, which fetches a Go module through the Go module proxy and an image manifest through the registry mirror. Then it reports on the Host Agent: `getenforce`, the SELinux label of each Host Service's process, the cache `emptyDir` on the Host with its labels and sizes, and every AVC denial since boot, from the journal (the Host Image has no `ausearch`). It fails on a denial of the Host Agent's SELinux level, except buildkitd's probe of the Host's emulators (battery-operator#222). Writes the report to `.state/host-agent-<time>.log`. |
-| `cache-demo`, `build-demo`, `kind` | The example Jobs of `docs/docker-and-kind.md` on the Docker and kind Profiles: `job-cache-demo.json` (a timed `docker pull` through the registry mirror and `go get` through `GOPROXY`), `job-build-demo.json` (`go build`, `docker buildx build` on the Host's buildkitd, `docker run`) and `job-kind.json` (a kind cluster, `kubectl cluster-info`, an nginx pod Ready). Each checks Docker Engine in the guest (overlay2, cgroup v2, the mirror, legacy iptables) and adds the Job's `TIMING` and `BOOT` lines to `.state/timings.txt`, then prints the AVC denials on the Host. They need `deploy` with `PROFILES=docker` or `PROFILES=kind`. |
+| `cache-demo`, `build-demo`, `kind`, `kind-ready` | The example Jobs of `docs/docker-and-kind.md` on the Docker and kind Profiles: `job-cache-demo.json` (a timed `docker pull` through the registry mirror and `go get` through `GOPROXY`), `job-build-demo.json` (`go build`, `docker buildx build` on the Host's buildkitd, `docker run`) and `job-kind.json` (a kind cluster with `flr-kind-cluster`, `kubectl cluster-info`, an nginx pod Ready, and the guest's boot timings). `kind-ready` runs `job-kind-ready.json`, the same Job on `flr/kind-ready`, whose Pool made the cluster in its create hook, and checks that `flr-kind-cluster` found it running. Each checks Docker Engine in the guest (overlay2, cgroup v2, the mirror, legacy iptables) and adds the Job's `TIMING` and `BOOT` lines to `.state/timings.txt`, then prints the AVC denials on the Host. They need `deploy` with `PROFILES=docker`, `PROFILES=kind` or `PROFILES=kind-ready`. |
 | `fault-flintlockd` | Waits for an available MicroVM, and queues `job-long.json`, which prints a line a second for ten minutes. Once it runs, and battery has replaced the claimed MicroVM in the Pool, it stops `flintlockd` and `flintlockd.path` on the Host, and times how long the Job takes to fail. It checks that the Job failed as `runner_system_failure` and that the Runner deleted its claim. Then it starts `flintlockd` again and waits for the Host and the Pool to be ready and the claim to be gone. |
 | `fault-flintlockd-hang` | As `fault-flintlockd`, but the fault is `kill -STOP` of `flintlockd`, and `kill -CONT` puts it back. |
 | `fault-exec-agent-hang` | As `fault-flintlockd`, but the fault is `kill -STOP` of battery-operator's Exec Agent. Its Node still says the Host is ready, so only the Runner's probe sees the fault (KF-200 to KF-202). |
@@ -124,7 +124,7 @@ Settings:
 | `CP_DRIVER`, `CP_NAME`, `CP_SSH` | `lima`, `bo-kubeadm-cp` | how to reach the Node that runs the Runner, to import images there: a Lima VM through `mac limactl`, or `ssh` to `CP_SSH` |
 | `JOB_WAIT`, `FAULT_WAIT` | `900`, `180` | how long a step waits for its Job, in seconds |
 | `POOL_WAIT` | `180` | how long a job step waits for a MicroVM to claim, in seconds. A MicroVM that misses battery's 30 s wait for its guest agent is replaced only at the Pool's next reseed, minutes later |
-| `PROFILES` | `arm64` | the Profiles of `runner-config.yaml` that `deploy` keeps: `arm64`, `docker`, `kind`. `deploy` deletes the Pools of the others. On a Mac, keep one: two guests that boot at once often miss battery's 30 s wait |
+| `PROFILES` | `arm64` | the Profiles of `runner-config.yaml` that `deploy` keeps: `arm64`, `docker`, `kind`, `kind-ready`. `deploy` deletes the Pools of the others. On a Mac, keep one: two guests that boot at once often miss battery's 30 s wait |
 
 `runner-config.yaml` differs from `deploy/runner/config.yaml` in three
 ways, each said in the file: the fake GitLab over plain HTTP, one arm64
@@ -248,3 +248,29 @@ Image of v1.0.0-rc.9:
   available MicroVM first.
 - `fault-exec-agent-hang` and `fault-not-ready` did not run: the leaked
   MicroVMs took all of the Host's MicroVM memory first.
+
+### The kind Jobs, 16 October 2026
+
+On the same Mac and `hack/kubeadm-host` at `main` 40954f0, with Profiles
+of 2 vCPUs and 2 GiB, one at a time (#132):
+
+- A guest of 3 GiB missed battery's 30 s wait for its guest agent in each
+  of five boots. Guests of 2 GiB answered in 17 to 25 s, unless another
+  guest booted or a Job ran beside them.
+- With the Guest Image of v1.0.0-rc.10, the kind Job pulled the node
+  image through the mirror in 347 s, then kind failed after 217 s waiting
+  for the node's systemd. The Job failed after 697 s.
+- With this branch the node image was in Docker Engine already, and kind
+  took 6 to 8 s to find it. kind still failed at the same step, and the
+  Job failed after 273 s. The cause is the guest's disk: Docker Engine
+  copies the node image's `/var`, 391 MB, into a new volume when kind
+  starts the node, which took 101 s and 205 s. A `docker run` of the node
+  image with no volume took 17 s. Cold reads of the guest's root disk run
+  at a few MB/s on this Host; writes ran at 450 to 530 MB/s (#133).
+- Docker Engine was ready 71 s after the guest's kernel started, against
+  109 s on the same kernel with the old unit order, and about 79 s with
+  v1.0.0-rc.10. containerd and Docker Engine spend most of that reading
+  their own binaries from the cold disk.
+- No exec stream timed out in eight Jobs of up to 12 minutes, most with
+  kind running, on either Guest Image. With this branch the guest agent
+  ran in `agent.slice`, at OOM score adjustment -999.

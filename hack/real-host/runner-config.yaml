@@ -78,6 +78,8 @@ profiles:
   # END profile docker
   # BEGIN profile kind: as deploy/runner/config.yaml's kind Profile,
   # smaller. run.sh drops it when images.env names no KIND_ROOTFS_IMAGE.
+  # 2 GiB, not more: on a Mac a guest of 3 GiB missed battery's 30 s
+  # wait for its guest agent every time.
   - name: real-host-kind
     arch: arm64
     vcpu: 2
@@ -93,6 +95,25 @@ profiles:
     pool:
       size: 1
   # END profile kind
+  # BEGIN profile kind-ready: as deploy/runner/config.yaml's kind-ready
+  # Profile, smaller. Its Pool makes the kind cluster in its create hook.
+  - name: real-host-kind-ready
+    arch: arm64
+    vcpu: 2
+    memory_mb: 2048
+    images: [flr/kind-ready]
+    kernel:
+      image: KERNEL_IMAGE
+      filename: boot/vmlinux
+      cmdline:
+        loglevel: 1
+        systemd.show_status: no
+    rootfs: KIND_ROOTFS_IMAGE
+    pool:
+      size: 1
+      create_hooks:
+        - /usr/local/bin/flr-kind-cluster
+  # END profile kind-ready
 
 host_services:
   buildkit:

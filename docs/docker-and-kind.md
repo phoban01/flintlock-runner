@@ -6,10 +6,11 @@ containers, and make a Kubernetes cluster, inside its MicroVM:
 | Image | Profile image name | What it adds |
 |---|---|---|
 | `guest-rootfs-docker` | `flr/docker` | Docker Engine, containerd, runc and buildx; iptables on the legacy backend; Go with `GOTOOLCHAIN=auto` |
-| `guest-rootfs-kind` | `flr/kind` | everything in `guest-rootfs-docker`, plus kind and kubectl, `/etc/default/kind-bootstrap` and `/etc/kind/kind-config.yaml` |
+| `guest-rootfs-kind` | `flr/kind` | everything in `guest-rootfs-docker`, plus kind and kubectl, the kind node image, `flr-kind-cluster`, `/etc/default/kind-bootstrap` and `/etc/kind/kind-config.yaml` |
+| `guest-rootfs-kind` | `flr/kind-ready` | the same image; its Pool makes the kind cluster before a Job claims the MicroVM |
 
 `guest/README.md` lists the versions. `docs/requirements/13-guest-image.md`
-(GI-050 to GI-064) has the requirements. A Job asks for one with its
+(GI-050 to GI-071) has the requirements. A Job asks for one with its
 `image:`, and the Runner's Profile for that name boots it
 (`deploy/runner/config.yaml` has examples).
 
@@ -36,16 +37,48 @@ If the guest has no lease, Docker Engine and kind start with no mirror
 and pull from Docker Hub. `docs/host-services.md` says what the Jobs on
 one Host share through these caches.
 
+## A kind cluster, fast
+
+`flr-kind-cluster` makes the cluster that `/etc/default/kind-bootstrap`
+describes, or takes the one that is running, and waits until its node is
+Ready. The kubeconfig is at `$KUBECONFIG_PATH`, which `$KUBECONFIG` names.
+
+- `flr/kind` boots the kind image, and the Job makes its cluster.
+  Nothing is pulled: the build put the kind node image in Docker Engine's
+  image store, and etcd keeps its data on a tmpfs.
+- `flr/kind-ready` boots the same image. Its Pool runs
+  `flr-kind-cluster` as a create hook, so battery hands out each MicroVM
+  with the cluster running, and the Job's own `flr-kind-cluster` returns
+  at once. Each MicroVM keeps its cluster running while it waits in the
+  Pool, which costs it CPU and memory. battery waits 30 seconds for a new
+  MicroVM's guest agent, then runs the hook with no time limit; a hook
+  that fails gets the MicroVM replaced (`hook_failure_policy`).
+
+A Job that runs `kind create cluster --image "$KIND_NODE_IMAGE"` itself
+still works on `flr/kind`, and pulls nothing either. On `flr/kind-ready` a
+second `kind create cluster` of the same name fails, because the cluster
+is there.
+
+In the Docker and kind images, the guest agent runs in a slice of its own
+(`agent.slice`) with 128 MiB of memory kept for it and a high CPU
+weight. containerd, Docker Engine and every container run in
+`containers.slice`, limited to 90 percent of the MicroVM's memory. A
+cluster that takes all the memory or CPU then slows or kills containers,
+not the guest agent, whose exec stream flintlock drops after 15 seconds
+of silence. A Stage's own processes, which the guest agent starts, share
+its slice.
+
 ## Example jobs
 
 ```yaml
 # A kind cluster in the MicroVM: make it, check it, run a pod in it.
+# With image: flr/kind-ready the cluster is running already, and
+# flr-kind-cluster only writes the kubeconfig.
 verify:kubectl-cluster-info:
   image: flr/kind
   script:
     - . /etc/default/kind-bootstrap
-    - kind create cluster --name "$KIND_CLUSTER_NAME" --image "$KIND_NODE_IMAGE"
-        --config /etc/kind/kind-config.yaml --kubeconfig "$KUBECONFIG_PATH" --wait 5m
+    - flr-kind-cluster
     - kubectl cluster-info
     - kubectl run nginx --image=docker.io/library/nginx:1.29 --restart=Never
     - kubectl wait --for=condition=Ready pod/nginx --timeout=5m
@@ -86,12 +119,17 @@ the guest's Docker Engine. To push instead, log in and use `--push`.
 
 ## Limits
 
-- Firecracker's CI kernel has no `nf_tables`, so iptables is on its legacy
-  backend. Docker Engine works with that. Tools that need `nft` do not.
-- The kernel also has no `xt_comment`, `xt_mark` or `xt_statistic`
-  iptables modules, and no IPVS. kube-proxy in iptables mode uses `comment`
-  and `mark` rules, so a kind cluster's Services may not work. The kind
-  Job has not run to the end on a Host yet.
+- iptables is on its legacy backend. Docker Engine and kind work with
+  that. Tools that need `nft` may not.
+- The kernel has the iptables `raw` table and the `comment`, `mark`,
+  `statistic` and `multiport` matches that kube-proxy uses. It has no IPVS
+  and no VXLAN.
+- On battery-operator's `hack/kubeadm-host` on a Mac, whose Host is a
+  nested VM with a slow disk, kind cannot make its node: Docker Engine
+  copies the node image's `/var` into a new volume for minutes, and kind
+  gives up waiting for the node's systemd. The kind Job has not run to the
+  end there, before or after these changes. A Host on real hardware has
+  not run it yet either (#133).
 - A MicroVM's root disk is 10 GiB on the Host Image. The kind node image
   takes about 1 GiB of it, unpacked.
 - `/etc/default/kind-bootstrap` pins the kind node image by digest. A Job

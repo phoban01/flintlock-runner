@@ -1,0 +1,13 @@
+# The guest agent's slice in the Guest Image's Docker image
+# (guest/rootfs-docker/configure.sh). The Executor runs every Stage through
+# the guest agent, and flintlock drops an exec stream that sends nothing
+# for 15 s. So the guest agent, and the Stage scripts it starts, keep some
+# memory and win the CPU from containers. The slice is at the top level:
+# memory protection works only if every slice above a unit has it too.
+# Its name has no dash, because systemd nests a-b.slice under a.slice.
+[Unit]
+Description=The guest agent, protected from containers
+
+[Slice]
+MemoryMin=128M
+CPUWeight=1000

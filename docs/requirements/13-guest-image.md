@@ -38,15 +38,30 @@ packages do.
 
 ## Kernel {#guest-kernel}
 
-- **GI-010** The Guest Image's kernel image SHALL contain Firecracker's CI
-  kernel of the 6.1 series for its architecture at `boot/vmlinux`, as an
-  ELF `vmlinux` for `linux/amd64` and as an uncompressed arm64 `Image` for
-  `linux/arm64`.
+- **GI-010** (withdrawn) Replaced by GI-011: the kernel is built from
+  source with Firecracker's CI configuration, no longer Firecracker's CI
+  kernel itself.
+- **GI-011** The Guest Image's kernel image SHALL contain, at `boot/vmlinux`, a
+  Linux kernel of the 6.1 series built from a kernel.org source tarball with
+  the Firecracker CI kernel configuration of the Firecracker release that
+  the Host Image runs, as an ELF `vmlinux` for `linux/amd64` and as an
+  uncompressed arm64 `Image` for `linux/arm64`.
+- **GI-012** The Guest Image's kernel SHALL have the iptables `raw` table, the
+  iptables `comment`, `mark` and `statistic` matches and the `MARK` target
+  built in.
+- **GI-013** The Guest Image's kernel SHALL have virtio-pci built in beside
+  virtio-mmio, with the virtio block, network and vsock drivers.
 
-Firecracker's CI kernel has virtio-vsock, virtio-blk, ext4 and devtmpfs
-built in. The guest agent is reachable over vsock and systemd boots without
-an initrd, so a Profile names no initrd. A Profile names the kernel file
-with `kernel.filename: boot/vmlinux`.
+Firecracker's CI configuration has virtio-vsock, virtio-blk, ext4 and
+devtmpfs built in, and no loadable modules. The guest agent is reachable
+over vsock and systemd boots without an initrd, so a Profile names no
+initrd. A Profile names the kernel file with `kernel.filename:
+boot/vmlinux`.
+
+kube-proxy, in a kind cluster's node, writes rules with the `comment`,
+`mark` and `statistic` matches, and Docker Engine 28 and later put rules in
+the `raw` table. Firecracker's devices are virtio-mmio; Cloud Hypervisor's
+are virtio-pci, so one kernel serves a Pool of either hypervisor.
 
 ## Root filesystem {#guest-rootfs}
 
@@ -130,11 +145,14 @@ the Host's pull-through cache of Docker Hub, so an image a Job pulled once
 on a Host comes from the Host the next time. A guest with no lease still
 boots, and Docker Engine pulls from Docker Hub directly.
 
-Firecracker's CI kernel has no `nf_tables`, so iptables has to use its
-legacy backend. The kernel has the bridge, veth, overlayfs, NAT, conntrack
-and the `addrtype` and `conntrack` matches, which Docker Engine needs. It
-has no iptables `raw` table, where Docker Engine 28 and later put the rules
-that keep other hosts off a container's address.
+iptables uses its legacy backend: Firecracker's CI kernel of earlier
+releases had no `nf_tables`, and the legacy backend works on every kernel.
+The kernel has the bridge, veth, overlayfs, NAT, conntrack and the
+`addrtype` and `conntrack` matches, which Docker Engine needs. Docker
+Engine 28 and later put the rules that keep other hosts off a container's
+address in the iptables `raw` table. The Guest Image's kernel has it now
+(GI-012); Docker Engine still runs without it, so the Docker image also
+boots on a kernel without one.
 Docker Engine 29 would keep images in containerd's image store; overlay2
 keeps them where its registry mirror applies.
 
@@ -161,11 +179,60 @@ Go fetches that toolchain through `GOPROXY`, the Host's Go module proxy.
   ended, then the Guest Image's kind image SHALL write
   `/etc/kind/kind-config.yaml` with no registry mirror.
 
-A Job sources `/etc/default/kind-bootstrap` and passes its values and
-`/etc/kind/kind-config.yaml` to `kind create cluster`. The kind node runs
-its own containerd, which does not use Docker Engine's mirror, so the kind
-configuration gives it the same mirror. Docker Engine pulls the node image
-itself, through its mirror.
+A Job sources `/etc/default/kind-bootstrap` and runs `flr-kind-cluster`,
+which passes its values and `/etc/kind/kind-config.yaml` to `kind create
+cluster`. The kind node runs its own containerd, which does not use Docker
+Engine's mirror, so the kind configuration gives it the same mirror.
+
+## A fast kind cluster {#guest-kind-fast}
+
+- **GI-065** The Guest Image's kind image SHALL contain the node image that
+  `KIND_NODE_IMAGE` names, for the image's architecture, in Docker
+  Engine's image store under that reference, so that a kind cluster
+  starts without a pull or a load of the node image.
+- **GI-066** The Guest Image's kind image SHALL write `/etc/kind/kind-config.yaml`
+  with one control-plane node and no other, and with etcd's data
+  directory on the node's `/tmp`, which kind mounts as a tmpfs.
+- **GI-067** The Guest Image's kind image SHALL contain `flr-kind-cluster`, a
+  command that makes the kind cluster of `/etc/default/kind-bootstrap` when
+  there is none, writes the existing cluster's kubeconfig to
+  `KUBECONFIG_PATH` when there is one, and ends once every node of the
+  cluster is Ready.
+- **GI-068** The Fleet Manifests SHALL include a Profile for the Job Image
+  `flr/kind-ready` that boots the kind image and whose Pool runs
+  `flr-kind-cluster` as its create hook.
+
+A Pool of the `flr/kind-ready` Profile makes the cluster in each MicroVM
+before battery marks the MicroVM available, so a Job claims a MicroVM with
+a running cluster. The Job runs `flr-kind-cluster`, as a Job on `flr/kind`
+does; there it only writes the kubeconfig. battery waits 30 seconds for a
+new MicroVM's guest agent, and gives a create hook no time limit of its
+own.
+
+The build unpacks the node image into `/var/lib/docker` as Docker Engine
+keeps it, under its tag and its digest. A MicroVM's root disk is a
+copy-on-write snapshot of the root filesystem image, so each MicroVM gets
+the unpacked image without writing it again. A `docker load` or a pull at
+boot writes the whole image to the guest's disk, which on a slow Host takes
+minutes.
+
+## Guest agent protection {#guest-agent-protection}
+
+- **GI-070** The Guest Image's Docker image SHALL run the guest agent with an OOM
+  score adjustment of -999, in a slice of its own with at least 128 MiB of
+  memory protected and a CPU weight of 1000.
+- **GI-071** The Guest Image's Docker image SHALL run containerd, Docker Engine
+  and every container in a slice whose memory limit is 90 percent of the
+  MicroVM's memory and whose CPU weight is the default of 100.
+
+flintlock drops an exec stream that sends nothing for 15 seconds, and the
+guest agent sends a heartbeat every 5 seconds. A guest agent that
+containers starve of CPU or memory misses its heartbeats, and the Job fails
+as a system failure. The guest agent starts every Stage script, which
+inherits its slice and its OOM score adjustment, so a Stage's own processes
+keep memory and CPU too, and the containers take the pressure. At -999, not
+-1000, the kernel can still kill a Stage's process when nothing else is
+left.
 
 ## Release {#guest-release}
 

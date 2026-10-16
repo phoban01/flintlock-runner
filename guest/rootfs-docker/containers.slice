@@ -1,0 +1,11 @@
+# The containers' slice in the Guest Image's Docker image
+# (guest/rootfs-docker/configure.sh): containerd, Docker Engine and every
+# container, through Docker Engine's cgroup-parent. Under memory pressure
+# the kernel reclaims and kills here first, below the MicroVM's memory, so
+# the guest agent keeps running.
+[Unit]
+Description=Docker Engine, containerd and their containers
+
+[Slice]
+MemoryMax=90%
+CPUWeight=100
