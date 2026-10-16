@@ -77,6 +77,20 @@ same "containerd" "$(containerd --version 2>/dev/null | awk '{print $3}' | sed '
 same "runc" "$(runc --version 2>/dev/null | sed -n 's/^runc version //p')" "${RUNC_VERSION:-}"
 same "docker buildx" "$(docker buildx version 2>/dev/null | awk '{print $2}' | sed 's/^v//')" "${BUILDX_VERSION:-}"
 for unit in containerd.service docker.service docker.socket; do enabled "$unit"; done
+# A fast start: containerd needs no migration of its configuration, and
+# Docker Engine waits neither for containerd nor for the network.
+if containerd --config /etc/containerd/config.toml config dump 2>&1 | grep -qi migrat; then
+	fail "containerd migrates /etc/containerd/config.toml at every start"
+else
+	ok "containerd takes /etc/containerd/config.toml as it is"
+fi
+docker_unit=$(sed -n 's/^\(After\|Wants\)=//p' /etc/systemd/system/docker.service 2>/dev/null)
+if [ -n "$docker_unit" ] && ! grep -qwE 'network-online\.target' <<<"$docker_unit" &&
+	! sed -n 's/^After=//p' /etc/systemd/system/docker.service | grep -qw 'containerd\.service'; then
+	ok "docker.service waits neither for network-online.target nor for containerd.service"
+else
+	fail "docker.service still waits for the network or containerd: $docker_unit"
+fi
 
 #= docs/requirements/13-guest-image.md#guest-docker
 #= type=test
@@ -204,10 +218,10 @@ valid /etc/docker/daemon.json "the image's own configuration"
 #/ The Guest Image's Docker image SHALL run the guest agent with an OOM
 #/ score adjustment of -999, in a slice of its own with at least 128 MiB of
 #/ memory protected and a CPU weight of 1000.
-same "the guest agent's slice" "$(unit_values guest-agent.service Slice | tail -1)" flr-agent.slice
+same "the guest agent's slice" "$(unit_values guest-agent.service Slice | tail -1)" agent.slice
 same "the guest agent's OOMScoreAdjust" "$(unit_values guest-agent.service OOMScoreAdjust | tail -1)" -999
-same "flr-agent.slice's MemoryMin" "$(unit_values flr-agent.slice MemoryMin | tail -1)" 128M
-same "flr-agent.slice's CPUWeight" "$(unit_values flr-agent.slice CPUWeight | tail -1)" 1000
+same "agent.slice's MemoryMin" "$(unit_values agent.slice MemoryMin | tail -1)" 128M
+same "agent.slice's CPUWeight" "$(unit_values agent.slice CPUWeight | tail -1)" 1000
 
 #= docs/requirements/13-guest-image.md#guest-agent-protection
 #= type=test
@@ -215,15 +229,15 @@ same "flr-agent.slice's CPUWeight" "$(unit_values flr-agent.slice CPUWeight | ta
 #/ and every container in a slice whose memory limit is 90 percent of the
 #/ MicroVM's memory and whose CPU weight is the default of 100.
 for unit in containerd.service docker.service; do
-	same "$unit's slice" "$(unit_values "$unit" Slice | tail -1)" flr-containers.slice
+	same "$unit's slice" "$(unit_values "$unit" Slice | tail -1)" containers.slice
 done
-same "flr-containers.slice's MemoryMax" "$(unit_values flr-containers.slice MemoryMax | tail -1)" 90%
-same "flr-containers.slice's CPUWeight" "$(unit_values flr-containers.slice CPUWeight | tail -1)" 100
+same "containers.slice's MemoryMax" "$(unit_values containers.slice MemoryMax | tail -1)" 90%
+same "containers.slice's CPUWeight" "$(unit_values containers.slice CPUWeight | tail -1)" 100
 for f in "$work/with-mirror.json" "$work/no-mirror.json" /etc/docker/daemon.json; do
-	if grep -q '"cgroup-parent": "flr-containers.slice"' "$f"; then
-		ok "$(basename "$f") puts containers in flr-containers.slice"
+	if grep -q '"cgroup-parent": "containers.slice"' "$f"; then
+		ok "$(basename "$f") puts containers in containers.slice"
 	else
-		fail "$(basename "$f") does not put containers in flr-containers.slice: $(cat "$f")"
+		fail "$(basename "$f") does not put containers in containers.slice: $(cat "$f")"
 	fi
 done
 

@@ -30,7 +30,7 @@ mkdir -p "$(dirname "$file")"
 cat >"$file.tmp" <<EOF
 {
   "storage-driver": "overlay2",
-  "cgroup-parent": "flr-containers.slice",
+  "cgroup-parent": "containers.slice",
   "features": { "containerd-snapshotter": false }${mirrors}
 }
 EOF

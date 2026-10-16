@@ -95,7 +95,7 @@ Everything in `guest-rootfs`, and:
 | iptables and ip6tables on the legacy backend | Ubuntu 24.04's | Firecracker's older CI kernels had no `nf_tables`, which the default nft backend needs. Docker Engine's bridge network and NAT work on the legacy backend, on every kernel. |
 | Go at `/usr/local/go`, with `go` and `gofmt` in `/usr/local/bin` | 1.27.2, from go.dev, by sha256 | `go build` in a Job. `GOTOOLCHAIN` is `auto` (Go's `go.env`, and `/etc/environment`), so a module that asks for a newer Go fetches it through `GOPROXY`, the Host's Go module proxy. |
 | `flr-registry-mirror.service` | | Once the network is up, it reads the default gateway, where the Host Services listen, and writes `/etc/docker/daemon.json` with the registry mirror `http://<gateway>:5000`. Docker Engine starts after it. With no gateway, Docker Engine starts with no mirror. |
-| `flr-agent.slice` and `flr-containers.slice` | | The guest agent runs in `flr-agent.slice`, with 128 MiB of memory protected, a CPU weight of 1000 and an OOM score adjustment of -999. containerd, Docker Engine and, through `cgroup-parent` in `daemon.json`, every container run in `flr-containers.slice`, limited to 90 percent of the MicroVM's memory. Containers take the pressure, and the guest agent keeps sending its heartbeats (GI-070, GI-071). |
+| `agent.slice` and `containers.slice` | | The guest agent runs in `agent.slice`, with 128 MiB of memory protected, a CPU weight of 1000 and an OOM score adjustment of -999. containerd, Docker Engine and, through `cgroup-parent` in `daemon.json`, every container run in `containers.slice`, limited to 90 percent of the MicroVM's memory. Containers take the pressure, and the guest agent keeps sending its heartbeats (GI-070, GI-071). |
 
 The unit runs `/usr/libexec/flr-guest/registry-mirror`
 (`rootfs-docker/registry-mirror.sh`), which runs each hook in
@@ -103,6 +103,16 @@ The unit runs `/usr/libexec/flr-guest/registry-mirror`
 in the kind image. The guest agent waits for neither the unit nor Docker
 Engine (GI-033). Docker Engine is socket activated too, so a Job's first
 `docker` command waits for it if the guest is still booting.
+
+Docker Engine starts as early as the registry mirror lets it.
+`/etc/systemd/system/docker.service` is the package's unit without its
+waits for `network-online.target` and `containerd.service`: Docker Engine
+waits for containerd's socket itself, and reads its binary from disk while
+containerd starts. `/etc/containerd/config.toml` is in containerd's own
+configuration version, so containerd does not migrate it at each start.
+On the Mac's nested Host this took Docker Engine's start from 109 s to 71 s
+after the kernel started; most of what is left is reading the two binaries
+from a cold disk.
 
 The build adds the Docker Engine, containerd, runc, buildx and Go versions
 to `/usr/share/flr-guest/versions.env`.

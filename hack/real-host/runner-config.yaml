@@ -78,6 +78,8 @@ profiles:
   # END profile docker
   # BEGIN profile kind: as deploy/runner/config.yaml's kind Profile,
   # smaller. run.sh drops it when images.env names no KIND_ROOTFS_IMAGE.
+  # 2 GiB, not more: on a Mac a guest of 3 GiB missed battery's 30 s
+  # wait for its guest agent every time.
   - name: real-host-kind
     arch: arm64
     vcpu: 2

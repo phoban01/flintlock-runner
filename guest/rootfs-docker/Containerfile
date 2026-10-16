@@ -47,7 +47,7 @@ ARG GO_SHA256_ARM64=94f3e30b8e374bc285e7dadc11e0865726b9bc6e85b841ccceaabc0214c6
 COPY rootfs-docker/registry-mirror.sh /usr/libexec/flr-guest/registry-mirror
 COPY rootfs-docker/mirror-docker.sh /usr/libexec/flr-guest/registry-mirror.d/10-docker
 COPY rootfs-docker/flr-registry-mirror.service /etc/systemd/system/flr-registry-mirror.service
-COPY rootfs-docker/flr-agent.slice rootfs-docker/flr-containers.slice /etc/systemd/system/
+COPY rootfs-docker/agent.slice rootfs-docker/containers.slice /etc/systemd/system/
 RUN --mount=type=bind,source=rootfs-docker/configure.sh,target=/tmp/configure.sh \
     bash /tmp/configure.sh
 

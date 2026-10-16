@@ -60,9 +60,9 @@ second `kind create cluster` of the same name fails, because the cluster
 is there.
 
 In the Docker and kind images, the guest agent runs in a slice of its own
-(`flr-agent.slice`) with 128 MiB of memory kept for it and a high CPU
+(`agent.slice`) with 128 MiB of memory kept for it and a high CPU
 weight. containerd, Docker Engine and every container run in
-`flr-containers.slice`, limited to 90 percent of the MicroVM's memory. A
+`containers.slice`, limited to 90 percent of the MicroVM's memory. A
 cluster that takes all the memory or CPU then slows or kills containers,
 not the guest agent, whose exec stream flintlock drops after 15 seconds
 of silence. A Stage's own processes, which the guest agent starts, share
@@ -119,12 +119,17 @@ the guest's Docker Engine. To push instead, log in and use `--push`.
 
 ## Limits
 
-- Firecracker's CI kernel has no `nf_tables`, so iptables is on its legacy
-  backend. Docker Engine works with that. Tools that need `nft` do not.
-- The kernel also has no `xt_comment`, `xt_mark` or `xt_statistic`
-  iptables modules, and no IPVS. kube-proxy in iptables mode uses `comment`
-  and `mark` rules, so a kind cluster's Services may not work. The kind
-  Job has not run to the end on a Host yet.
+- iptables is on its legacy backend. Docker Engine and kind work with
+  that. Tools that need `nft` may not.
+- The kernel has the iptables `raw` table and the `comment`, `mark`,
+  `statistic` and `multiport` matches that kube-proxy uses. It has no IPVS
+  and no VXLAN.
+- On battery-operator's `hack/kubeadm-host` on a Mac, whose Host is a
+  nested VM with a slow disk, kind cannot make its node: Docker Engine
+  copies the node image's `/var` into a new volume for minutes, and kind
+  gives up waiting for the node's systemd. The kind Job has not run to the
+  end there, before or after these changes. A Host on real hardware has
+  not run it yet either (#133).
 - A MicroVM's root disk is 10 GiB on the Host Image. The kind node image
   takes about 1 GiB of it, unpacked.
 - `/etc/default/kind-bootstrap` pins the kind node image by digest. A Job
