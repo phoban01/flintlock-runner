@@ -1,66 +1,132 @@
-# A Job on a real Host
+# Jobs on a real Host
 
-`run.sh` runs one CI Job through the Runner on a real Host with KVM, next
-to battery-operator. The Runner takes the Job from a fake GitLab, claims a
+`run.sh` runs CI Jobs through the Runner on a real Host with KVM, next to
+battery-operator. The Runner takes each Job from a fake GitLab, claims a
 MicroVM with a `MicroVMClaim`, and runs the Job's script in the MicroVM
-through battery-operator's Exec Agent. The MicroVM boots this repository's
-Guest Image under Firecracker.
+through battery-operator's Exec Agent. The Host Agent runs the Host
+Services on the Host. The MicroVM boots this repository's Guest Image
+under Firecracker.
 
 This is a manual harness. CI has no KVM, so CI runs the same path on fakes
 only (`cmd/flr/run_claim_e2e_test.go`).
 
+## The cluster
+
+The Host boots battery-operator's Host Image, with SELinux enforcing, and
+joins a kubeadm cluster with Calico. battery-operator's
+[`hack/kubeadm-host`](https://github.com/phoban01/battery-operator/tree/main/hack/kubeadm-host)
+makes such a cluster on an Apple silicon Mac:
+
+| Node | What runs there |
+|---|---|
+| `bo-kubeadm-cp`, a Lima VM | the kubeadm control plane, battery-operator and cert-manager; here the Runner and the fake GitLab, which keep off Hosts |
+| `bo-kubeadm-host-1`, a vfkit VM | the Host: the Exec Agent, `flintlockd`, the MicroVMs; here the Host Agent and its Host Services |
+
+`run.sh` no longer supports battery-operator's older real hosts trial
+(`hack/real-hosts`, k3s on Ubuntu). That Host is not the Host Image: it
+has no `/run/battery/host.env`, so the Host Agent cannot run there.
+
+### The Host pool
+
+The Host Services need two settings in the Host's `host.conf`, from
+[`deploy/host-agent/config/host-pool.conf`](../../deploy/host-agent/config/host-pool.conf)
+(KF-198). Without them the Host Agent's `render` container fails and no
+Host Service starts (KF-199). `hack/kubeadm-host` renders `host.conf`
+from its `pool/host-pool.yaml`, which leaves them out. Add both lines to
+its `host.conf` before `up.sh` boots the Host, in a checkout of
+battery-operator that you keep for the run:
+
+```yaml
+  host.conf: |
+    GUEST_SUBNET=10.220.0.0/16
+    # ... the lines that are there ...
+    GATEWAY_SERVICE_PORTS=1234,3000,5000,3128
+    GATEWAY_SERVICE_UIDS=101,1000,10001,10002,100000-165535
+```
+
+The Host reads `host.conf` once, at its first boot. To change it on a
+Host that is up, run `down.sh` and `up.sh` again. battery-operator#224
+asks for a way to add the lines without the edit. The `deploy` step
+checks the Host's `host.env` and stops early when it lacks either value.
+
+### Reaching the cluster from an OrbStack machine
+
+On some Macs an OrbStack machine cannot reach the VMs' network
+(battery-operator#205). Then:
+
+- `HOST_SSH_VIA_MAC=1` for `up.sh`, so that its ssh to the Host goes
+  through `mac nc`. Its `.state/ssh_config` keeps that, and `run.sh` uses
+  the same file.
+- A forwarder from `127.0.0.1:6443` to the control plane's port 6443
+  through `mac nc`, and the kubeconfig pointed at it:
+
+  ```yaml
+  server: https://127.0.0.1:6443
+  tls-server-name: <the control plane's address>
+  ```
+
+  The forwarder is not in either repository. Any TCP forwarder that
+  starts `mac nc <address> 6443` for each connection works.
+
 ## What it needs
 
-- A cluster with battery-operator deployed, and a Host that meets
-  [deploy/README.md](../../deploy/README.md): steps 1 and 2 of its order
-  of application are done. battery-operator's real hosts trial
-  (`hack/real-hosts` in battery-operator, from `main` at #163 or later) is
-  such a cluster: one Lima VM, `bo-host-1`, that is the Node, the k3s
-  server and the only Host.
-- On the Host:
-  - k3s. `run.sh` imports the flr image into k3s's containerd with
-    `k3s ctr`. On another distribution, change `import_to_kubelet`.
-  - `ctr` for `flintlockd`'s containerd, and a registry on
-    `127.0.0.1:5000` (`REGISTRY`) that `flintlockd` pulls from.
-  - Guest networking on the bridge `flintlockd` uses: DHCP, DNS and NAT to
-    the internet. The trial has it from battery-operator#163.
-- An arm64 Host. The Job asks for `image: flr-arm64`, the arm64 Profile in
-  `runner-config.yaml`.
-- Where `run.sh` runs: `docker` with buildx, Go, `kubectl`, and
-  `KUBECONFIG` set to the cluster's kubeconfig. For the trial that is its
-  `hack/real-hosts/.state/kubeconfig`.
-- A way to reach the Host. `HOST_DRIVER=lima` (the default) reaches the
-  Lima VM `NODE_NAME` (`bo-host-1`) with `limactl shell`, through `mac` on
-  an OrbStack machine. `HOST_DRIVER=ssh HOST_SSH=user@host` reaches any
-  other Host; its user needs sudo.
+- The cluster above, after `hack/kubeadm-host/up.sh`: battery-operator is
+  deployed and the Host is ready.
+- An arm64 Host. The Jobs ask for `image: flr-arm64`, the arm64 Profile
+  in `runner-config.yaml`.
+- Where `run.sh` runs: `docker` with buildx, Go, `kubectl`, `curl`, and
+  `mac` on an OrbStack machine (or the Mac itself), for `limactl`.
 
-Nothing is pushed to a public registry.
+The flr image and the fake GitLab's image go straight into the kubelet's
+containerd on each Node. Nothing is pushed to a public registry.
 
 ## Steps
 
 ```sh
-export KUBECONFIG=<battery-operator>/hack/real-hosts/.state/kubeconfig
-hack/real-host/run.sh          # images, deploy, job
-hack/real-host/run.sh job      # another Job on the same Runner
-hack/real-host/run.sh clean    # the Runner, its Pool and the fake GitLab go
+export KUBEADM_HOST=<battery-operator>/hack/kubeadm-host
+hack/real-host/run.sh                        # images deploy job services
+hack/real-host/run.sh job                    # another Job on the same Runner
+hack/real-host/run.sh fault-flintlockd       # stop flintlockd mid-Job
+hack/real-host/run.sh fault-flintlockd-hang  # freeze flintlockd mid-Job
+hack/real-host/run.sh fault-exec-agent-hang  # freeze the Exec Agent mid-Job
+hack/real-host/run.sh fault-not-ready        # the Host not ready mid-Job
+hack/real-host/run.sh clean                  # the Runner, the Host Agent, the Pool and the fake GitLab go
 ```
+
+`KUBEADM_HOST` gives `run.sh` the cluster's kubeconfig and ssh
+configuration from its `.state`. Without it, set `KUBECONFIG`, and
+`HOST_SSH` and `SSH_OPTS` for the Host.
 
 | Step | What it does |
 |---|---|
-| `images` | Builds `flr` and `fake-gitlab` for the Host's architecture, each into an image of one binary (`hack/release/flr.Containerfile`, `fake-gitlab/Containerfile`). Imports both into k3s's containerd. Builds the Guest Image with `guest/build.sh --load`, and pushes the kernel and the root filesystem to the Host's registry. Writes the references to `.state/images.env`, the Guest Image by digest. |
-| `deploy` | Applies `deploy/namespace.yaml` and the Secret with the fake's runner token. Deploys the fake GitLab (`fake-gitlab.yaml`). Deploys the Runner from `deploy/runner` through an overlay in `.state/overlay`: the flr image from `images`, and `runner-config.yaml` as its configuration, with the Guest Image references in place. The Runner keeps the probes of `deploy/runner`: its pod is Ready once its token is verified and one of its Pools is Ready (OB-031). Waits until the Runner's Pool `lima-arm64` is Ready. |
-| `job` | Queues `job.json` on the fake GitLab. While the Job runs, it records `kubectl get microvmclaims -A` once the claim is Bound. When the Job ends, it waits for the claim to go. It prints the Job's status and log, and the claims during and after, and writes them to `.state/run-<time>.log`. |
-| `clean` | Deletes the Runner, the fake GitLab, the claims and Pools in `flintlock-system`, and the namespace. battery-operator stays. The images stay on the Host. |
+| `images` | Builds `flr` and `fake-gitlab` for the Host's architecture, each into an image of one binary (`hack/release/flr.Containerfile`, `fake-gitlab/Containerfile`). Imports both into the kubelet's containerd on the Host and on the control plane, with `ctr`. Takes the Guest Image's digests from the release `RELEASE`'s `images.txt`, after checking that file against the release's `checksums.txt`. Writes the references to `.state/images.env`. |
+| `deploy` | Checks that the Host is ready and that its `host.env` has the Host pool's settings. Applies the namespace and the Secret with the fake's runner token. Deploys the fake GitLab (`fake-gitlab.yaml`). Deploys the Fleet Manifests, `deploy/`, through an overlay in `.state/overlay`: the flr image from `images`, and `runner-config.yaml` as the Runner's configuration, with the Guest Image references in place. Waits for the Host Agent, the Runner and its Pool `real-host-arm64`, and prints the Host Service annotations of the Host's Node. |
+| `job` | Queues `job.json` on the fake GitLab. While the Job runs, it records `kubectl get microvmclaims -A` once the claim is Bound. When the Job ends, it waits for the claim to go. It prints the Job's status and log, and the claims during and after, and writes them to `.state/run-job-<time>.log`. |
+| `services` | As `job`, with `job-host-services.json`, which fetches a Go module through the Go module proxy and an image manifest through the registry mirror. Then it reports on the Host Agent: `getenforce`, the SELinux label of each Host Service's process, the cache `emptyDir` on the Host with its labels and sizes, and every AVC denial since boot, from the journal (the Host Image has no `ausearch`). It fails on a denial of the Host Agent's SELinux level, except buildkitd's probe of the Host's emulators (battery-operator#222). Writes the report to `.state/host-agent-<time>.log`. |
+| `fault-flintlockd` | Waits for an available MicroVM, and queues `job-long.json`, which prints a line a second for ten minutes. Once it runs, and battery has replaced the claimed MicroVM in the Pool, it stops `flintlockd` and `flintlockd.path` on the Host, and times how long the Job takes to fail. It checks that the Job failed as `runner_system_failure` and that the Runner deleted its claim. Then it starts `flintlockd` again and waits for the Host and the Pool to be ready and the claim to be gone. |
+| `fault-flintlockd-hang` | As `fault-flintlockd`, but the fault is `kill -STOP` of `flintlockd`, and `kill -CONT` puts it back. |
+| `fault-exec-agent-hang` | As `fault-flintlockd`, but the fault is `kill -STOP` of battery-operator's Exec Agent. Its Node still says the Host is ready, so only the Runner's probe sees the fault (KF-200 to KF-202). |
+| `fault-not-ready` | As `fault-flintlockd`, but the fault is a not ready reason file, `/run/battery/not-ready.d/flr-real-host`, which the Exec Agent reports (KF-203 to KF-205). `flintlockd` keeps running. The step removes the file at the end. |
+| `clean` | Deletes the Runner, the Host Agent, the fake GitLab, the claims and Pools in `flintlock-system`, the rest of the Fleet Manifests and the namespace. battery-operator stays. The images stay on the Nodes. |
 
 Each step can run again. `images` tags each image by its content, so a new
-build rolls the pods and the same build does not. `deploy` applies. `job`
-queues a new Job each time.
+build rolls the pods and the same build does not. `deploy` applies. The
+job and fault steps queue a new Job each time.
 
-`runner-config.yaml` differs from `deploy/runner/config.yaml` in four ways,
-each said in the file: the fake GitLab over plain HTTP, one arm64 Profile
-as the default, the Guest Image from the Host's registry, and no Host
-Services. The trial runs no Host Agent, because the Host Agent needs the
-Host Image's `/run/battery/host.env`.
+Settings:
+
+| Variable | Default | What |
+|---|---|---|
+| `GUEST` | `release` | `release`: the Guest Image of `RELEASE`, which `flintlockd` pulls from ghcr.io. `build`: build it from `guest/` and push it to the Host's registry on `REGISTRY` (`hack/kubeadm-host`'s `images` step starts one on `127.0.0.1:5000`) |
+| `RELEASE` | `v1.0.0-rc.9` | the release whose `images.txt` names the Guest Image |
+| `NODE_NAME` | `bo-kubeadm-host-1` | the Host's Node |
+| `CP_DRIVER`, `CP_NAME`, `CP_SSH` | `lima`, `bo-kubeadm-cp` | how to reach the Node that runs the Runner, to import images there: a Lima VM through `mac limactl`, or `ssh` to `CP_SSH` |
+| `JOB_WAIT`, `FAULT_WAIT` | `900`, `180` | how long a step waits for its Job, in seconds |
+
+`runner-config.yaml` differs from `deploy/runner/config.yaml` in three
+ways, each said in the file: the fake GitLab over plain HTTP, one arm64
+Profile as the default, and the Guest Image by digest. The Host Services
+are on.
 
 ## The fake GitLab
 
@@ -72,60 +138,110 @@ the API server's proxy to its Service:
 | Request | What |
 |---|---|
 | `POST /fake/jobs` | Queues the Job in the body, in GitLab's JSON form, with a new id. Answers `{"id": N}`. |
-| `GET /fake/jobs` | Every Job handed out: status, states, exit code and log. |
-| `GET /fake/jobs/N/status`, `GET /fake/jobs/N/trace` | One Job's status (`pending` while queued) or log, as plain text. |
+| `GET /fake/jobs` | Every Job handed out: status, states, failure reason, exit code and log. |
+| `GET /fake/jobs/N/status`, `GET /fake/jobs/N/failure_reason`, `GET /fake/jobs/N/trace` | One Job's status (`pending` while queued), failure reason (empty unless it failed) or log, as plain text. |
+
+By hand:
+
+```sh
+P=/api/v1/namespaces/flintlock-system/services/fake-gitlab:http/proxy/fake
+kubectl create --raw $P/jobs -f hack/real-host/job.json   # {"id":N}
+kubectl get --raw $P/jobs/N/status
+kubectl get --raw $P/jobs/N/trace
+```
 
 It also logs each Job's status and log when the Job ends:
 `kubectl -n flintlock-system logs deploy/fake-gitlab`.
 
-## The Job
+## The Jobs
 
-`job.json` asks for `image: flr-arm64`, sets `GIT_STRATEGY: none` because
-the fake GitLab serves no repository, and runs:
+Each Job asks for `image: flr-arm64` and sets `GIT_STRATEGY: none`,
+because the fake GitLab serves no repository.
 
-```sh
-uname -a
-cat /etc/os-release
-git clone --depth 1 https://github.com/liquidmetal-dev/flintlock flintlock
-git -C flintlock log -1 --format='cloned liquidmetal-dev/flintlock at %H'
-```
+- `job.json` runs `uname -a`, `cat /etc/os-release`, and a shallow clone
+  of `liquidmetal-dev/flintlock` from GitHub.
+- `job-host-services.json` prints the Host Service variables, fetches
+  `github.com/google/uuid@v1.6.0` from `$GOPROXY`, and the manifest of
+  `library/busybox:1.37.0` from `$CI_REGISTRY_MIRROR`.
+- `job-long.json` prints `tick N` once a second for ten minutes, for the
+  fault steps.
 
 ## What a run proves
 
-A `job` that passes shows, on a real Host:
-
 - The Runner starts from `deploy/runner` with the claim backend, as its own
   ServiceAccount with `deploy/runner/rbac.yaml`, and declares its Pool.
-  battery fills the Pool with MicroVMs of the Guest Image.
-- The Runner takes the Job, and claims a MicroVM for it. The claim is
-  `Bound` on the Host's Node while the Job runs.
+  battery fills the Pool with MicroVMs of the released Guest Image.
+- The Runner takes each Job and claims a MicroVM for it. The claim is
+  `Bound` on the Host's Node while the Job runs, and gone after.
 - Each Stage reaches the MicroVM through the Exec Agent of the claim's
   Host, with TLS verified against battery-operator's serving CA and a
   claim token of the Holder.
-- The Guest Image boots and runs the Job's shell: `uname -a` shows the
-  guest's kernel, and `/etc/os-release` shows Ubuntu 24.04.
-- The guest reaches the internet: it gets an address by DHCP, resolves
-  `github.com`, and clones over HTTPS through the Host's NAT.
-- The Job succeeds in GitLab, and the Runner deletes the claim when the
-  Job ends.
+- The guest reaches the internet through the Host's NAT.
+- The Host Agent runs from `deploy/host-agent` on the Host Image, under
+  SELinux enforcing, with its cache in the pod's `emptyDir`. A Job reaches
+  the Go module proxy and the registry mirror on the guest bridge gateway.
+- A Job whose Host loses `flintlockd`, whose Exec Agent stops answering,
+  or whose Host reports not ready, fails as `runner_system_failure` well
+  before its timeout, and the Runner deletes its claim (KF-200 to
+  KF-205). See [What the runs found](#what-the-runs-found) for which of
+  these have run.
 
-It does not show the Host Services, the Host Image, more than one Host, or
-a real GitLab.
+It does not show more than one Host, a real GitLab, or buildkit and the
+HTTP cache in use by a Job.
 
-## What the first run found
+## What the runs found
 
-On the trial's Lima Host `bo-host-1` (an M4 Mac), with battery-operator at
-`08d8273`, on 28 September 2026:
+### On k3s, 28 September 2026
 
-- `flr` serves no `/healthz` or `/readyz` (OB-030 to OB-032, #94).
-  `deploy/runner`'s probes get a 404, so the Runner's pod never becomes
-  Ready, and the kubelet restarts it about every two minutes. `flr` now
-  serves both. Under the claim backend, `/readyz` passes once the token is
-  verified and one of the Runner's Pools is Ready (OB-031). The overlay
-  keeps the probes of `deploy/runner`. The next run checks them on a real
-  cluster.
-- The Pool of one MicroVM is Ready within seconds. The Job gets its
-  MicroVM in about 1 s, the guest agent answers in about 60 ms, and the
-  clone from GitHub takes 3 to 5 s.
-- `kubectl get microvmclaims` shows `<invalid>` under `EXPIRES` for a
-  Bound claim. kubectl prints that for a time in the future.
+On battery-operator's real hosts trial (`bo-host-1`, k3s on Ubuntu, an
+M4 Mac), with battery-operator at `08d8273`:
+
+- `flr` served no `/healthz` or `/readyz` (#94), so the Runner's pod never
+  became Ready. `flr` now serves both (OB-030 to OB-032).
+- The Pool of one MicroVM was Ready within seconds. A Job got its MicroVM
+  in about 1 s, and the clone from GitHub took 3 to 5 s.
+
+### On a kubeadm Host, 15 October 2026
+
+On an M4 Mac, with battery-operator's `hack/kubeadm-host` at `main`
+40954f0 (Host Image with Kubernetes v1.36.3, containerd v2.2.9, Calico
+v3.31.2, SELinux enforcing), the Runner at this branch, and the Guest
+Image of v1.0.0-rc.9:
+
+- `images`, `deploy`, `job` and `services` passed. The Host Agent's pod
+  had all 8 containers running within a minute. The Pool was Ready
+  within seconds of the Runner's start.
+- Each Job got its MicroVM in about 1 s, and the guest agent answered in
+  about 110 ms. `job` took 18 s from queued to success, the clone 4 s.
+  The claim was Bound on `bo-kubeadm-host-1` while each Job ran, and gone
+  when it ended.
+- Every Host Service ran as `container_t` at `s0:c311,c827`, buildkitd as
+  `container_engine_t` at the same level. The cache `emptyDir` and each
+  service's directory in it were `container_file_t:s0:c311,c827`, owned
+  by each service's user id. The Job's Go module landed in `goproxy`, the
+  image manifest in `registry`.
+- The only AVC denials from the Host Agent were nine `map` denials of
+  buildkitd's probe of the Host's `qemu-*-static` emulators, which the
+  Host Image registers with binfmt_misc (battery-operator#222). buildkitd
+  ran without them. The other denials of the boot were `bootupctl` and
+  `chcon`, as the kubeadm Host proof found before.
+- Stopping `flintlockd` failed the Job at once: the Stage's exec stream
+  to `flintlockd` broke, and the Executor reported `runner_system_failure`
+  ("the exec stream to flintlockd failed before the command's exit
+  status"). That is the Guest Transport's path, not KF-200 to KF-205.
+- Freezing `flintlockd` failed the Job 19.8 s after the fault, as
+  `runner_system_failure`. The Exec Agent reported the Host not ready
+  (`FlintlockdNotReady`) about 10 s after the fault, and the next
+  heartbeat aborted the Job with that reason (KF-203 to KF-205). The
+  Runner's probe had failed once by then (KF-200). The Runner deleted
+  the claim at once. battery-operator kept its finalizer until battery
+  could release the lease, once `flintlockd` ran again.
+- Both `flintlockd` faults leaked a MicroVM: the Pool's replacement for
+  the claimed MicroVM was still booting, its create hook failed, and
+  battery did not retry its delete. After the second, the Pool stayed
+  "provisioning" for good, said Ready, and served no claim
+  (battery-operator#223). The fault steps now wait for the replacement
+  before the fault, and every step that queues a Job waits for an
+  available MicroVM first.
+- `fault-exec-agent-hang` and `fault-not-ready` did not run: the leaked
+  MicroVMs took all of the Host's MicroVM memory first.

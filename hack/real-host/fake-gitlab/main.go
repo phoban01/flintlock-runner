@@ -5,8 +5,9 @@
 // It starts with no Job. POST /fake/jobs queues one, a spec.Job in GitLab's
 // JSON wire form, and answers with the id it gives the Job. GET /fake/jobs
 // returns the fake's record of every Job handed out: its status, states and
-// trace; GET /fake/jobs/{id}/status and /fake/jobs/{id}/trace return one
-// Job's status and trace as plain text. It logs each Job's record once the
+// trace; GET /fake/jobs/{id}/status, /fake/jobs/{id}/failure_reason and
+// /fake/jobs/{id}/trace return one Job's status, failure reason and trace
+// as plain text. It logs each Job's record once the
 // Job ends. The runner token comes from FAKE_GITLAB_RUNNER_TOKEN.
 //
 // It is a test tool. It keeps its state in memory, serves plain HTTP and
@@ -126,8 +127,9 @@ func handler(gl *fakegitlab.Server, log *slog.Logger) http.Handler {
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(summaries(gl.Records()))
 	})
-	// The status and the trace of one Job as plain text, for a script
-	// without a JSON parser. A Job still in the queue is "pending".
+	// The status, the failure reason and the trace of one Job as plain
+	// text, for a script without a JSON parser. A Job still in the queue is
+	// "pending". The failure reason is empty until the Job fails.
 	mux.HandleFunc("GET /fake/jobs/{id}/{field}", func(w http.ResponseWriter, r *http.Request) {
 		id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
 		if err != nil {
@@ -150,6 +152,10 @@ func handler(gl *fakegitlab.Server, log *slog.Logger) http.Handler {
 				status = rec.Status
 			}
 			_, _ = fmt.Fprintln(w, status)
+		case "failure_reason":
+			if rec != nil && rec.FailureReason != "" {
+				_, _ = fmt.Fprintln(w, rec.FailureReason)
+			}
 		case "trace":
 			if rec != nil {
 				_, _ = io.WriteString(w, rec.Trace)

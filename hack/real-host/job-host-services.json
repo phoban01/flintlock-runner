@@ -1,0 +1,41 @@
+{
+  "id": 1,
+  "token": "glcbt-real-host-1",
+  "allow_git_fetch": false,
+  "job_info": {
+    "name": "real-host-services",
+    "stage": "test",
+    "project_id": 1,
+    "project_name": "real-host"
+  },
+  "git_info": {
+    "repo_url": "https://gitlab.example.com/flintlock-runner/real-host.git",
+    "ref": "main",
+    "sha": "0000000000000000000000000000000000000000",
+    "ref_type": "branch"
+  },
+  "runner_info": {
+    "timeout": 900
+  },
+  "image": {
+    "name": "flr-arm64"
+  },
+  "variables": [
+    { "key": "GIT_STRATEGY", "value": "none", "public": true },
+    { "key": "CI_JOB_ID", "value": "1", "public": true }
+  ],
+  "steps": [
+    {
+      "name": "script",
+      "script": [
+        "env | grep -E '^(BUILDKIT_HOST|GOPROXY|GOFLAGS|CI_REGISTRY_MIRROR)=' | sort",
+        "curl -fsS \"$GOPROXY/github.com/google/uuid/@v/v1.6.0.info\"; echo",
+        "curl -fsS -o /dev/null -w 'go module zip: %{http_code}, %{size_download} bytes\\n' \"$GOPROXY/github.com/google/uuid/@v/v1.6.0.zip\"",
+        "curl -fsS -o /dev/null -w 'registry mirror: %{http_code}\\n' -H 'Accept: application/vnd.oci.image.index.v1+json' -H 'Accept: application/vnd.docker.distribution.manifest.list.v2+json' \"$CI_REGISTRY_MIRROR/v2/library/busybox/manifests/1.37.0\""
+      ],
+      "timeout": 900,
+      "when": "on_success",
+      "allow_failure": false
+    }
+  ]
+}
