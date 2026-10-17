@@ -1,0 +1,25 @@
+# Docker Engine's volumes on a tmpfs, in the Guest Image's kind image
+# (guest/rootfs-kind/configure.sh). kind starts its node with /var as an
+# anonymous volume, and Docker Engine copies the node image's /var, about
+# 400 MB, into it. On the root disk that copy can stall the MicroVM's
+# block device for long enough that flintlock drops the exec stream
+# (#133). Here it goes to memory. The node image itself stays on disk; it
+# is mostly read.
+#
+# 25 percent of the MicroVM's memory is a ceiling, not a reservation: the
+# pages count only once written, against containers.slice, since Docker
+# Engine writes them. It holds the node's /var with room for the images a
+# Job pulls into the cluster on a 4 GiB MicroVM or larger. A full tmpfs
+# fails the write, not the MicroVM (GI-069).
+[Unit]
+Description=Docker Engine's volumes in memory
+Before=docker.service
+
+[Mount]
+What=tmpfs
+Where=/var/lib/docker/volumes
+Type=tmpfs
+Options=size=25%,mode=0700,uid=0,gid=0
+
+[Install]
+RequiredBy=docker.service

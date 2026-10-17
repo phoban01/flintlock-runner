@@ -68,6 +68,33 @@ not the guest agent, whose exec stream flintlock drops after 15 seconds
 of silence. A Stage's own processes, which the guest agent starts, share
 its slice.
 
+kind starts its node with `/var` as an anonymous Docker volume, and
+Docker Engine first copies the node image's `/var`, about 400 MB, into
+it. In the kind image, Docker Engine's volumes are on a tmpfs
+(`/var/lib/docker/volumes`, 25 percent of the MicroVM's memory), so that
+copy goes to memory and not to the disk (GI-069). A heavy write to the
+root disk can stall the MicroVM long enough for flintlock to drop the
+exec stream (#133). The node image stays on disk, where it is mostly
+read. The node's `/var` also holds the images the cluster pulls, so they
+are in memory too.
+
+### MicroVM size for kind
+
+The tmpfs size is a ceiling, not a reservation. Its pages count against
+`containers.slice` once Docker Engine writes them. So the node's `/var`,
+etcd's tmpfs and the cluster's processes share that slice's limit of 90
+percent of the MicroVM's memory. The node's `/var` takes 390 MB of the
+tmpfs as soon as kind starts the node. Each image the cluster pulls adds
+its compressed and its unpacked size.
+
+- 8 GiB, as the example Profiles: a 2 GiB tmpfs, room for the node's
+  `/var` and about 1.5 GB of images pulled into the cluster.
+- 4 GiB: the smallest size we recommend. A 1 GiB tmpfs holds the node's
+  `/var` and a few small images.
+- 2 GiB: a 498 MiB tmpfs holds the node's `/var` with 108 MiB to spare.
+  A pull into the cluster can fill it, and the pull then fails with no
+  space left.
+
 ## Example jobs
 
 ```yaml
@@ -125,11 +152,13 @@ the guest's Docker Engine. To push instead, log in and use `--push`.
   `statistic` and `multiport` matches that kube-proxy uses. It has no IPVS
   and no VXLAN.
 - On battery-operator's `hack/kubeadm-host` on a Mac, whose Host is a
-  nested VM with a slow disk, kind cannot make its node: Docker Engine
-  copies the node image's `/var` into a new volume for minutes, and kind
-  gives up waiting for the node's systemd. The kind Job has not run to the
-  end there, before or after these changes. A Host on real hardware has
-  not run it yet either (#133).
+  nested VM with a slow disk, kind cannot make its node. The volume on a
+  tmpfs did not change that: the copy of the node image's `/var` still
+  took 4 minutes, because the slow part is the cold read of the node
+  image from the guest's root disk, not the write. The node's systemd
+  then starts slowly too, and kind gives up waiting for it. The kind Job
+  has not run to the end there. A Host on real hardware has not run it
+  yet either (#133, #136).
 - A MicroVM's root disk is 10 GiB on the Host Image. The kind node image
   takes about 1 GiB of it, unpacked.
 - `/etc/default/kind-bootstrap` pins the kind node image by digest. A Job
