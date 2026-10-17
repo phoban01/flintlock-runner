@@ -259,6 +259,47 @@ else
 	fail "with the cluster running, flr-kind-cluster does not wait for the nodes: $calls"
 fi
 
+#= docs/requirements/13-guest-image.md#guest-kind-fast
+#= type=test
+#/ The Guest Image's kind image SHALL mount a tmpfs of 25 percent
+#/ of the MicroVM's memory, with mode 0700 and owned by root, at
+#/ `/var/lib/docker/volumes` before Docker Engine starts, so that the `/var`
+#/ volume of a kind node is in memory.
+#
+# systemd is not running here, so this reads the unit and its links as
+# systemd would at boot.
+mount_unit=var-lib-docker-volumes.mount
+unit=/etc/systemd/system/$mount_unit
+value() { sed -n "s/^$1=//p" "$unit" 2>/dev/null | tail -1; }
+if [ -f "$unit" ]; then ok "$unit is here"; else fail "$unit is missing"; fi
+same "the mount's Where" "$(value Where)" /var/lib/docker/volumes
+same "the mount's What" "$(value What)" tmpfs
+same "the mount's Type" "$(value Type)" tmpfs
+options=",$(value Options),"
+for want in size=25% mode=0700 uid=0 gid=0; do
+	if [[ $options == *",$want,"* ]]; then ok "the tmpfs has $want"; else fail "the tmpfs options are '$(value Options)', without $want"; fi
+done
+if [ "$(systemctl is-enabled "$mount_unit" 2>/dev/null)" = enabled ]; then
+	ok "$mount_unit is enabled"
+else
+	fail "$mount_unit is not enabled"
+fi
+if [ "$(readlink -f "/etc/systemd/system/docker.service.requires/$mount_unit")" = "$unit" ]; then
+	ok "docker.service requires $mount_unit"
+else
+	fail "docker.service does not require $mount_unit"
+fi
+if [[ " $(value Before | tr ',' ' ') " == *" docker.service "* ]]; then
+	ok "$mount_unit is ordered before docker.service"
+else
+	fail "$mount_unit is not ordered before docker.service: Before=$(value Before)"
+fi
+if [ -d /var/lib/docker/volumes ] && [ -z "$(ls -A /var/lib/docker/volumes)" ]; then
+	ok "the image has nothing under /var/lib/docker/volumes for the tmpfs to hide"
+else
+	fail "/var/lib/docker/volumes is missing or not empty: $(ls -A /var/lib/docker/volumes 2>&1)"
+fi
+
 if [ "$failures" -gt 0 ]; then
 	echo "$failures check(s) failed" >&2
 	exit 1

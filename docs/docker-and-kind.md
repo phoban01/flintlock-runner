@@ -68,6 +68,31 @@ not the guest agent, whose exec stream flintlock drops after 15 seconds
 of silence. A Stage's own processes, which the guest agent starts, share
 its slice.
 
+kind starts its node with `/var` as an anonymous Docker volume, and
+Docker Engine first copies the node image's `/var`, about 400 MB, into
+it. In the kind image, Docker Engine's volumes are on a tmpfs
+(`/var/lib/docker/volumes`, 25 percent of the MicroVM's memory), so that
+copy goes to memory and not to the disk (GI-069). A heavy write to the
+root disk can stall the MicroVM long enough for flintlock to drop the
+exec stream (#133). The node image stays on disk, where it is mostly
+read. The node's `/var` also holds the images the cluster pulls, so they
+are in memory too.
+
+### MicroVM size for kind
+
+The tmpfs size is a ceiling, not a reservation. Its pages count against
+`containers.slice` once Docker Engine writes them, so the cluster, the
+node's `/var` and etcd's tmpfs share that slice's 90 percent. An idle
+one-node cluster uses about 1 GiB of memory besides its `/var`.
+
+- 8 GiB, as the example Profiles: a 2 GiB tmpfs, room for the node's
+  `/var` and about 1.5 GB of images pulled into the cluster.
+- 4 GiB: the smallest size we recommend. A 1 GiB tmpfs holds the node's
+  `/var` and a few small images.
+- 2 GiB: a 512 MiB tmpfs holds the node's `/var` with little to spare. A
+  pull into the cluster can fill it, and the pull then fails with no
+  space left.
+
 ## Example jobs
 
 ```yaml

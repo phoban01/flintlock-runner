@@ -47,6 +47,25 @@ if ! [[ $node_id =~ ^sha256:[0-9a-f]{64}$ ]]; then
 fi
 chmod 0755 /usr/local/bin/flr-kind-cluster
 
+#= docs/requirements/13-guest-image.md#guest-kind-fast
+#/ The Guest Image's kind image SHALL mount a tmpfs of 25 percent
+#/ of the MicroVM's memory, with mode 0700 and owned by root, at
+#/ `/var/lib/docker/volumes` before Docker Engine starts, so that the `/var`
+#/ volume of a kind node is in memory.
+#
+# kind starts its node with /var as an anonymous volume, and Docker Engine
+# copies the node image's /var into it, about 400 MB. The unit
+# (var-lib-docker-volumes.mount) is ordered before docker.service, and
+# docker.service requires it, so Docker Engine never starts with its
+# volumes on the root disk. The tmpfs would hide anything the build left
+# under the mount point, so there has to be nothing.
+if [ -n "$(ls -A /var/lib/docker/volumes 2>/dev/null)" ]; then
+	echo "configure: /var/lib/docker/volumes is not empty, and the tmpfs would hide it" >&2
+	exit 1
+fi
+install -d -m 0700 /var/lib/docker/volumes
+systemctl enable var-lib-docker-volumes.mount
+
 #= docs/requirements/13-guest-image.md#guest-kind
 #/ The Guest Image's kind image SHALL contain
 #/ `/etc/default/kind-bootstrap`, which exports `KIND_CLUSTER_NAME`,
