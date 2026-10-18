@@ -42,6 +42,7 @@
         "TIMEFORMAT='TIMING docker-info %R'; time docker info --format 'docker info: storage driver {{.Driver}}, cgroup v{{.CgroupVersion}} ({{.CgroupDriver}}), registry mirrors {{.RegistryConfig.Mirrors}}'",
         "iptables --version",
         "iptables -t nat -S POSTROUTING",
+        "cat /sys/fs/cgroup/containers.slice/io.max",
         "mkdir -p /tmp/builddemo && cd /tmp/builddemo",
         "printf 'package main\\n\\nimport \"fmt\"\\n\\nfunc main() { fmt.Println(\"hello from a flintlock-runner MicroVM\") }\\n' >main.go",
         "go mod init example.com/builddemo",

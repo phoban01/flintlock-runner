@@ -1,0 +1,71 @@
+{
+  "id": 1,
+  "token": "glcbt-real-host-1",
+  "allow_git_fetch": false,
+  "job_info": {
+    "name": "verify:io-burst",
+    "stage": "verify",
+    "project_id": 1,
+    "project_name": "real-host"
+  },
+  "git_info": {
+    "repo_url": "https://gitlab.example.com/flintlock-runner/real-host.git",
+    "ref": "main",
+    "sha": "0000000000000000000000000000000000000000",
+    "ref_type": "branch"
+  },
+  "runner_info": {
+    "timeout": 900
+  },
+  "image": {
+    "name": "flr/docker"
+  },
+  "variables": [
+    {
+      "key": "GIT_STRATEGY",
+      "value": "none",
+      "public": true
+    },
+    {
+      "key": "CI_JOB_ID",
+      "value": "1",
+      "public": true
+    }
+  ],
+  "steps": [
+    {
+      "name": "script",
+      "script": [
+        "cat /usr/share/flr-guest/versions.env",
+        "cat /etc/docker/daemon.json",
+        "TIMEFORMAT='TIMING docker-info %R'; time docker info --format 'docker info: storage driver {{.Driver}}, cgroup v{{.CgroupVersion}} ({{.CgroupDriver}}), registry mirrors {{.RegistryConfig.Mirrors}}'",
+        "iptables --version",
+        "iptables -t nat -S POSTROUTING",
+        "echo \"the root cgroup's subtree_control: $(cat /sys/fs/cgroup/cgroup.subtree_control)\"",
+        "cat /sys/fs/cgroup/containers.slice/io.max",
+        "systemctl show containers.slice -p IOReadIOPSMax -p IOWriteIOPSMax -p IOReadBandwidthMax -p IOWriteBandwidthMax",
+        "cat /etc/default/flr-io 2>/dev/null || echo 'no /etc/default/flr-io: the defaults apply'",
+        "echo \"the Stage runs in $(cut -d: -f3 /proc/self/cgroup)\"",
+        "for u in guest-agent containerd docker; do echo \"$u.service runs in $(systemctl show -p ControlGroup --value $u.service)\"; done",
+        "docker run -d --name cg docker.io/library/ubuntu:24.04 sleep 60 >/dev/null; echo \"a container runs in $(cut -d: -f3 /proc/$(docker inspect -f '{{.State.Pid}}' cg)/cgroup)\"; docker rm -f cg >/dev/null",
+        "wios() { sed -n 's/.*wios=\\([0-9]*\\).*/\\1/p' /sys/fs/cgroup/containers.slice/io.stat | head -1; }",
+        "result() { awk -v n=\"$1\" -v w=\"$2\" -v a=\"$3\" -v b=\"$4\" 'BEGIN { printf \"RESULT %s: %d write IOs in %.1f s, %.0f write IOPS\\n\", n, w, b - a, w / (b - a) }'; }",
+        "echo \"io.stat before: $(cat /sys/fs/cgroup/containers.slice/io.stat)\"",
+        "w0=$(wios); w0=${w0:-0}; t0=$(date +%s.%N)",
+        "TIMEFORMAT='TIMING small-files %R'; time docker run --rm -v /var/tmp:/t docker.io/library/ubuntu:24.04 bash -c 'mkdir -p /t/x && for i in $(seq 50000); do echo x > /t/x/$i; done; sync'",
+        "w1=$(wios); t1=$(date +%s.%N); result small-files $((${w1:-0} - w0)) \"$t0\" \"$t1\"",
+        "echo \"io.stat after small files: $(cat /sys/fs/cgroup/containers.slice/io.stat)\"",
+        "TIMEFORMAT='TIMING fio-install %R'; time { docker run --name fio docker.io/library/ubuntu:24.04 bash -c 'apt-get -qq update >/dev/null && apt-get -qq install -y fio >/dev/null 2>&1' && docker commit fio fio:local >/dev/null && docker rm fio >/dev/null; }",
+        "w0=$(wios); w0=${w0:-0}; t0=$(date +%s.%N)",
+        "TIMEFORMAT='TIMING fio-randwrite %R'; time docker run --rm -v /var/tmp:/t fio:local fio --name=randwrite --directory=/t --rw=randwrite --bs=4k --iodepth=64 --ioengine=libaio --direct=1 --size=1G --runtime=120 --time_based",
+        "w1=$(wios); t1=$(date +%s.%N); result fio-randwrite $((${w1:-0} - w0)) \"$t0\" \"$t1\"",
+        "echo \"io.stat after fio: $(cat /sys/fs/cgroup/containers.slice/io.stat)\"",
+        "rm -rf /var/tmp/x /var/tmp/randwrite*",
+        "for u in guest-agent flr-registry-mirror containerd docker; do echo \"BOOT $u $(( $(systemctl show -p ActiveEnterTimestampMonotonic --value $u.service) / 1000 )) ms\"; done"
+      ],
+      "timeout": 900,
+      "when": "on_success",
+      "allow_failure": false
+    }
+  ]
+}

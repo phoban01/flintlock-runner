@@ -42,6 +42,7 @@
         "TIMEFORMAT='TIMING docker-info %R'; time docker info --format 'docker info: storage driver {{.Driver}}, cgroup v{{.CgroupVersion}} ({{.CgroupDriver}}), registry mirrors {{.RegistryConfig.Mirrors}}'",
         "iptables --version",
         "iptables -t nat -S POSTROUTING",
+        "cat /sys/fs/cgroup/containers.slice/io.max",
         "TIMEFORMAT='TIMING docker-pull %R'; time docker pull -q docker.io/library/python:3.13-slim",
         "mkdir -p /tmp/cachedemo && cd /tmp/cachedemo && go mod init example.com/cachedemo",
         "TIMEFORMAT='TIMING go-mod-download %R'; time go get k8s.io/client-go@v0.34.1",

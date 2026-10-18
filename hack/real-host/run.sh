@@ -7,7 +7,7 @@
 #
 #   run.sh               images deploy job services
 #   run.sh <step>...     only those: images deploy job services
-#                        cache-demo build-demo kind kind-ready
+#                        cache-demo build-demo io-burst kind kind-ready
 #                        fault-flintlockd fault-flintlockd-hang
 #                        fault-exec-agent-hang fault-not-ready clean
 #
@@ -638,7 +638,9 @@ record() {
 
 # expect_trace PATTERN WHAT fails unless the Job's trace has PATTERN.
 expect_trace() {
-	trace_lines | grep -qE -- "$1" || die "job ${JOB_ID}'s trace shows no $2"
+	# Not grep -q: it exits at the first match, sed gets SIGPIPE on a long
+	# trace, and pipefail turns the match into a failure.
+	trace_lines | grep -E -- "$1" >/dev/null || die "job ${JOB_ID}'s trace shows no $2"
 }
 
 # The checks every Job on the Docker image makes of the guest.
@@ -647,6 +649,10 @@ check_docker_guest() {
 		"Docker Engine on overlay2 and cgroup v2 with the Host's registry mirror"
 	expect_trace '^iptables v[0-9.]+ \(legacy\)$' "iptables on its legacy backend"
 	expect_trace '^-A POSTROUTING -s 172\.17\.0\.0/16 ! -o docker0 -j MASQUERADE$' "Docker Engine's NAT rule"
+	# The block I/O limits of containers.slice, as the kernel applies them
+	# at boot (GI-072): the root disk's major:minor, then the limits.
+	expect_trace '^[0-9]+:[0-9]+ rbps=60000000 wbps=60000000 riops=1500 wiops=1500$' \
+		"io.max of containers.slice with the default limits"
 	expect_trace '^BOOT docker [1-9][0-9]* ms$' "the time Docker Engine started"
 }
 
@@ -670,6 +676,28 @@ step_build-demo() {
 	expect_trace '^hello from a flintlock-runner MicroVM$' "output of the image it built"
 	record build-demo
 	pass "job ${JOB_ID} built with Go, built an image on the Host's buildkitd and ran it, on the Docker image"
+}
+
+# io-burst: two write bursts in containers on the Docker image, each long
+# enough to hold the MicroVM's block queue full without the limits of
+# containers.slice: 50,000 small files, then fio's random 4k writes at a
+# queue depth of 64. The Job prints the limits the guest applied, where
+# the Stage, the daemons and a container run, and the write IOPS each
+# burst achieved from io.stat. It passes when the Job ends, which it does
+# not if the exec stream drops (#133, #138).
+step_io-burst() {
+	need_profile docker
+	run_job "${HERE}/job-io-burst.json" io-burst "${DOCKER_POOL}"
+	check_job_passed
+	check_docker_guest
+	expect_trace '^the Stage runs in /agent\.slice/' "Stage in agent.slice"
+	expect_trace '^a container runs in /containers\.slice/docker-[0-9a-f]+\.scope$' "container in containers.slice"
+	expect_trace '^RESULT small-files: [0-9]+ write IOs in [0-9.]+ s, [0-9]+ write IOPS$' "write IOPS of the small-file burst"
+	expect_trace '^RESULT fio-randwrite: [0-9]+ write IOs in [0-9.]+ s, [0-9]+ write IOPS$' "write IOPS of the fio burst"
+	expect_trace 'write: IOPS=' "fio's own report"
+	record io-burst
+	trace_lines | grep -E '^(RESULT |  write: IOPS=)' >&2 || true
+	pass "job ${JOB_ID} sustained two write bursts in containers under the limits of containers.slice, and its exec stream held"
 }
 
 step_kind() {
@@ -843,8 +871,8 @@ main() {
 	keep_awake
 	for s in "${steps[@]}"; do
 		case "${s}" in
-		images | deploy | job | services | cache-demo | build-demo | kind | kind-ready | fault-flintlockd | fault-flintlockd-hang | fault-exec-agent-hang | fault-not-ready | clean) "step_${s}" ;;
-		*) die "unknown step ${s}: images deploy job services cache-demo build-demo kind kind-ready fault-flintlockd fault-flintlockd-hang fault-exec-agent-hang fault-not-ready clean" ;;
+		images | deploy | job | services | cache-demo | build-demo | io-burst | kind | kind-ready | fault-flintlockd | fault-flintlockd-hang | fault-exec-agent-hang | fault-not-ready | clean) "step_${s}" ;;
+		*) die "unknown step ${s}: images deploy job services cache-demo build-demo io-burst kind kind-ready fault-flintlockd fault-flintlockd-hang fault-exec-agent-hang fault-not-ready clean" ;;
 		esac
 	done
 }
