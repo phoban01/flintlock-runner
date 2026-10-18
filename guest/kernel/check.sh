@@ -91,6 +91,20 @@ else
 	fail "the kernel was built with CONFIG_MODULES"
 fi
 
+#= docs/requirements/13-guest-image.md#guest-agent-protection
+#= type=test
+#/ The Guest Image's Docker image SHALL limit the block I/O of the
+#/ containers' slice on the root filesystem's block device to 1500 read and
+#/ 1500 write operations per second and to 60 MB/s of reads and 60 MB/s of
+#/ writes, or to the limits that `/etc/default/flr-io` sets in their place.
+#
+# The limit is io.max of cgroup v2's io controller: the block cgroup with
+# its throttling, and cgroup writeback, which charges a container's
+# buffered writes to its cgroup. Firecracker's configuration has all three.
+for opt in CONFIG_BLK_CGROUP CONFIG_BLK_DEV_THROTTLING CONFIG_CGROUP_WRITEBACK; do
+	if built "$opt"; then ok "$opt=y, for io.max on containers.slice"; else fail "$opt is not built in: io.max on containers.slice needs it"; fi
+done
+
 #= docs/requirements/13-guest-image.md#guest-kernel
 #= type=test
 #/ The Guest Image's kernel SHALL have the iptables `raw` table, the

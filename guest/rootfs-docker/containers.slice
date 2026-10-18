@@ -3,9 +3,25 @@
 # container, through Docker Engine's cgroup-parent. Under memory pressure
 # the kernel reclaims and kills here first, below the MicroVM's memory, so
 # the guest agent keeps running.
+#
+# The IO limits cap the containers' block I/O on the root filesystem's
+# device, so that a container cannot keep the MicroVM's block queue full.
+# Firecracker serves the block device and the vsock from one thread, and
+# a full queue holds the guest agent's heartbeats back until flintlock
+# drops the exec stream (#133). The numbers are below a gp3 EBS volume's
+# baseline of 3,000 IOPS and 125 MB/s. systemd resolves `/` to the block
+# device under the root filesystem when it applies the limits, so the
+# device's name does not matter: /dev/vda under Firecracker and Cloud
+# Hypervisor alike. /etc/default/flr-io raises or removes a limit, through
+# the flr-io generator (GI-072). Stage scripts run in agent.slice and are
+# not limited.
 [Unit]
 Description=Docker Engine, containerd and their containers
 
 [Slice]
 MemoryMax=90%
 CPUWeight=100
+IOReadIOPSMax=/ 1500
+IOWriteIOPSMax=/ 1500
+IOReadBandwidthMax=/ 60M
+IOWriteBandwidthMax=/ 60M

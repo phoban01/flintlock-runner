@@ -4,7 +4,7 @@ The Guest Image is what every MicroVM of a Pool boots: a kernel image and a
 root filesystem image, both OCI images that a Profile names and that
 `flintlockd` pulls. The requirements are in
 [docs/requirements/13-guest-image.md](../docs/requirements/13-guest-image.md)
-(GI-001 to GI-064).
+(GI-001 to GI-072).
 
 The kernel and the first root filesystem image start from
 battery-operator's guest images (`guestimage/`, first in its
@@ -96,6 +96,8 @@ Everything in `guest-rootfs`, and:
 | Go at `/usr/local/go`, with `go` and `gofmt` in `/usr/local/bin` | 1.27.2, from go.dev, by sha256 | `go build` in a Job. `GOTOOLCHAIN` is `auto` (Go's `go.env`, and `/etc/environment`), so a module that asks for a newer Go fetches it through `GOPROXY`, the Host's Go module proxy. |
 | `flr-registry-mirror.service` | | Once the network is up, it reads the default gateway, where the Host Services listen, and writes `/etc/docker/daemon.json` with the registry mirror `http://<gateway>:5000`. Docker Engine starts after it. With no gateway, Docker Engine starts with no mirror. |
 | `agent.slice` and `containers.slice` | | The guest agent runs in `agent.slice`, with 128 MiB of memory protected, a CPU weight of 1000 and an OOM score adjustment of -999. containerd, Docker Engine and, through `cgroup-parent` in `daemon.json`, every container run in `containers.slice`, limited to 90 percent of the MicroVM's memory. Containers take the pressure, and the guest agent keeps sending its heartbeats (GI-070, GI-071). |
+| block I/O limits on `containers.slice` | | `IOReadIOPSMax`, `IOWriteIOPSMax`, `IOReadBandwidthMax` and `IOWriteBandwidthMax` on `/`, which systemd resolves to the root disk when it starts the slice: 1500 read and 1500 write IOPS, and 60 MB/s each way, below a gp3 EBS volume's baseline. A container cannot keep the MicroVM's block queue full, which starves the guest agent's heartbeats (#133). Stage scripts are in `agent.slice`, unlimited (GI-072). |
+| `/etc/default/flr-io` and the `flr-io` generator | | The image has no such file. A derived image for a Host with a faster thin pool adds one with `FLR_IO_READ_IOPS`, `FLR_IO_WRITE_IOPS`, `FLR_IO_READ_BPS` and `FLR_IO_WRITE_BPS`, each a number with an optional K, M, G or T (powers of 1000), or `infinity` for no limit. The generator at `/usr/lib/systemd/system-generators/flr-io` writes the keys it finds into a drop-in of `containers.slice` at boot. |
 
 The unit runs `/usr/libexec/flr-guest/registry-mirror`
 (`rootfs-docker/registry-mirror.sh`), which runs each hook in
@@ -119,7 +121,23 @@ to `/usr/share/flr-guest/versions.env`.
 
 The kernel has the iptables `raw` table, and the `comment`, `mark`,
 `statistic` and `multiport` matches that kube-proxy uses in a kind
-cluster. It has no IPVS and no VXLAN.
+cluster. It has no IPVS and no VXLAN. It has the block cgroup, its
+throttling and cgroup writeback, from Firecracker's configuration, which
+the block I/O limits need: `io.max` of `containers.slice`, with a
+container's buffered writes charged to its cgroup.
+
+Why the block I/O limits: Firecracker serves a MicroVM's block device and
+its vsock from one thread, and flintlock leaves the block engine
+synchronous with no rate limit. While the guest keeps the block queue
+full, that thread serves the queue and nothing else, so the guest agent's
+heartbeats wait, and after 15 s flintlock drops the exec stream. On an
+EBS gp3 thin pool at its baseline, kind's copy of its node's `/var` did
+that every time (#133). With the limits, the containers' I/O stays below
+what the pool completes, the queue empties, and the thread returns to the
+vsock. The cost: a container that reads or writes the root disk hard runs
+at the limit. A Pool on a Host with a faster thin pool raises the limits
+in a derived image, through `/etc/default/flr-io`. The kind image's
+volumes tmpfs is not limited: it is memory.
 
 ### `guest-rootfs-kind` (`rootfs-kind/`)
 
@@ -151,7 +169,8 @@ image that fails its checks is never produced (GI-003):
 - `kernel/check.sh`: the kernel is at `boot/vmlinux`, of the image's
   architecture, the pinned 6.1 version, and alone in the image. Its
   `.config` has the options of Firecracker's configuration that the guest
-  needs, no loadable modules, and every option of the fragments.
+  needs, among them the block cgroup options the I/O limits need, no
+  loadable modules, and every option of the fragments.
 - `rootfs/check.sh`: runs inside the built root filesystem, under QEMU for
   the platform that is not the build machine's. It checks everything in
   the table above: the tools run, the helper reports the pinned version and
@@ -162,7 +181,11 @@ image that fails its checks is never produced (GI-003):
   iptables on the legacy backend, `GOTOOLCHAIN`, the units and their order.
   It runs the boot unit's script with a stand-in `ip` command, once with a
   default route and once without, and checks the `daemon.json` it writes,
-  with `dockerd --validate`.
+  with `dockerd --validate`. The slices: the guest agent's and the
+  containers' settings, the block I/O limits of `containers.slice`, which
+  `systemd-analyze verify` accepts, and the `flr-io` generator run with a
+  stand-in `/etc/default/flr-io`: no file, every key, and malformed
+  values, which it reports and skips.
 - `rootfs-kind/check.sh`: runs after both of those in the kind image. The
   kind and kubectl versions, `/etc/default/kind-bootstrap`, the node image
   by digest and of kind's Kubernetes minor version, the baked node image's
@@ -232,6 +255,19 @@ The Docker and kind images expect the Host's registry mirror on port 5000
 of the guest's gateway, the default of `host_services.registry_mirror.port`.
 A Host whose mirror is on another port needs a derived image with
 `REGISTRY_MIRROR_PORT=<port>` in `/etc/default/flr-registry-mirror`.
+
+The Docker and kind images limit the containers' block I/O on the root
+disk to 1500 read and 1500 write IOPS and 60 MB/s each way. A Pool on a
+Host whose thin pool completes more, say a gp3 volume with provisioned
+IOPS or an NVMe instance store, raises them in a derived image:
+
+```dockerfile
+FROM ghcr.io/phoban01/flintlock-runner/guest-rootfs-docker@sha256:<digest>
+RUN printf 'FLR_IO_READ_IOPS=6000\nFLR_IO_WRITE_IOPS=6000\nFLR_IO_READ_BPS=250M\nFLR_IO_WRITE_BPS=250M\n' >/etc/default/flr-io
+```
+
+`infinity` removes a limit. The image has no cloud-init, so a Profile's
+`user_data` cannot set the file.
 
 ## Changing a version
 

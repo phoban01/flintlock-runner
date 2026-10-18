@@ -103,7 +103,8 @@ configuration from its `.state`. Without it, set `KUBECONFIG`, and
 | `deploy` | Checks that the Host is ready and that its `host.env` has the Host pool's settings. Applies the namespace and the Secret with the fake's runner token. Deploys the fake GitLab (`fake-gitlab.yaml`). Deploys the Fleet Manifests, `deploy/`, through an overlay in `.state/overlay`: the flr image from `images`, and `runner-config.yaml` as the Runner's configuration, with the Guest Image references in place. Waits for the Host Agent, the Runner and its Pool `real-host-arm64`, and prints the Host Service annotations of the Host's Node. |
 | `job` | Queues `job.json` on the fake GitLab. While the Job runs, it records `kubectl get microvmclaims -A` once the claim is Bound. When the Job ends, it waits for the claim to go. It prints the Job's status and log, and the claims during and after, and writes them to `.state/run-job-<time>.log`. |
 | `services` | As `job`, with `job-host-services.json`, which fetches a Go module through the Go module proxy and an image manifest through the registry mirror. Then it reports on the Host Agent: `getenforce`, the SELinux label of each Host Service's process, the cache `emptyDir` on the Host with its labels and sizes, and every AVC denial since boot, from the journal (the Host Image has no `ausearch`). It fails on a denial of the Host Agent's SELinux level, except buildkitd's probe of the Host's emulators (battery-operator#222). Writes the report to `.state/host-agent-<time>.log`. |
-| `cache-demo`, `build-demo`, `kind`, `kind-ready` | The example Jobs of `docs/docker-and-kind.md` on the Docker and kind Profiles: `job-cache-demo.json` (a timed `docker pull` through the registry mirror and `go get` through `GOPROXY`), `job-build-demo.json` (`go build`, `docker buildx build` on the Host's buildkitd, `docker run`) and `job-kind.json` (a kind cluster with `flr-kind-cluster`, `kubectl cluster-info`, an nginx pod Ready, and the guest's boot timings). `kind-ready` runs `job-kind-ready.json`, the same Job on `flr/kind-ready`, whose Pool made the cluster in its create hook, and checks that `flr-kind-cluster` found it running. Each checks Docker Engine in the guest (overlay2, cgroup v2, the mirror, legacy iptables) and adds the Job's `TIMING` and `BOOT` lines to `.state/timings.txt`, then prints the AVC denials on the Host. They need `deploy` with `PROFILES=docker`, `PROFILES=kind` or `PROFILES=kind-ready`. |
+| `cache-demo`, `build-demo`, `kind`, `kind-ready` | The example Jobs of `docs/docker-and-kind.md` on the Docker and kind Profiles: `job-cache-demo.json` (a timed `docker pull` through the registry mirror and `go get` through `GOPROXY`), `job-build-demo.json` (`go build`, `docker buildx build` on the Host's buildkitd, `docker run`) and `job-kind.json` (a kind cluster with `flr-kind-cluster`, `kubectl cluster-info`, an nginx pod Ready, and the guest's boot timings). `kind-ready` runs `job-kind-ready.json`, the same Job on `flr/kind-ready`, whose Pool made the cluster in its create hook, and checks that `flr-kind-cluster` found it running. Each checks Docker Engine in the guest (overlay2, cgroup v2, the mirror, legacy iptables) and `io.max` of `containers.slice` (GI-072), and adds the Job's `TIMING` and `BOOT` lines to `.state/timings.txt`, then prints the AVC denials on the Host. They need `deploy` with `PROFILES=docker`, `PROFILES=kind` or `PROFILES=kind-ready`. |
+| `io-burst` | `job-io-burst.json` on `flr/docker`: two write bursts in containers, each long enough to hold the MicroVM's disk queue full without the limits of `containers.slice`: 50,000 small files with `sync`, then `fio --rw=randwrite --bs=4k --iodepth=64 --direct=1` for 120 s. The Job prints the limits the guest applied, where the Stage, the daemons and a container run, and the write IOPS each burst achieved from `io.stat` (`RESULT` lines). It passes when the Job ends; a dropped exec stream fails it (#133, #138). Needs `deploy` with `PROFILES=docker`. |
 | `fault-flintlockd` | Waits for an available MicroVM, and queues `job-long.json`, which prints a line a second for ten minutes. Once it runs, and battery has replaced the claimed MicroVM in the Pool, it stops `flintlockd` and `flintlockd.path` on the Host, and times how long the Job takes to fail. It checks that the Job failed as `runner_system_failure` and that the Runner deleted its claim. Then it starts `flintlockd` again and waits for the Host and the Pool to be ready and the claim to be gone. |
 | `fault-flintlockd-hang` | As `fault-flintlockd`, but the fault is `kill -STOP` of `flintlockd`, and `kill -CONT` puts it back. |
 | `fault-exec-agent-hang` | As `fault-flintlockd`, but the fault is `kill -STOP` of battery-operator's Exec Agent. Its Node still says the Host is ready, so only the Runner's probe sees the fault (KF-200 to KF-202). |
@@ -299,3 +300,36 @@ one Profile at a time (#136):
   of memory available.
 - No exec stream dropped in any Job, including the 11-minute Job above.
 - `kind-ready` did not run: its create hook would fail at the same step.
+
+### Block I/O limits on containers.slice, 18 October 2026
+
+On the same Mac, with `hack/kubeadm-host` at battery-operator `main`
+40954f0 and the Guest Image built from #138's branch (`GUEST=build`),
+one Profile at a time, `flr/docker` and `flr/kind` at 2 vCPUs and 2 GiB:
+
+- In the guest, `io.max` of `containers.slice` was
+  `254:0 rbps=60000000 wbps=60000000 riops=1500 wiops=1500`, and the root
+  cgroup's `subtree_control` had `io`. systemd resolved `/` to the root
+  disk, 254:0. The Stage ran in `/agent.slice/guest-agent.service`,
+  containerd and Docker Engine in `containers.slice`, and a container in
+  `/containers.slice/docker-<id>.scope`.
+- `io-burst` passed three times. 50,000 small files from a container took
+  69 to 108 s: 56,000 write IOs at 513 to 808 IOPS, under the cap of 1500.
+  fio's random 4k direct writes at a queue depth of 64 ran at 1487 to 1493
+  IOPS, 5.9 MiB/s, for 120 s: the cap, with 60 percent of the writes
+  waiting about 100 ms in the throttle. No exec stream dropped in the
+  three Jobs of 8 to 13 minutes.
+- The cost of the cap: `apt-get install fio` in a container took 384 to
+  392 s. Package unpacking is small writes, at 1500 IOPS at most.
+- `cache-demo` and `build-demo` passed with the cap: `docker pull` 47.8 s
+  (41.5 and 49.6 s in #130), `go get` 26.9 s (12.6 and 25.5 s), `go build`
+  301 s (304 and 343 s), `buildx build` 12.3 s (18.3 and 20.9 s). The
+  pull's writes are Docker Engine's, in the slice; the Go build's are the
+  Stage's, outside it.
+- A replacement MicroVM that booted while `io-burst` ran missed battery's
+  30 s wait for its guest agent three times, as a guest that boots beside
+  a Job did in the earlier runs. The Pool filled at its next reseed after
+  the Job ended. `POOL_WAIT=900` covers that.
+- `kind` failed as before, with the cap in place in the kind image: kind
+  gave up waiting for the node's systemd after 223 s. The cold read of
+  the node image is still the Mac's limit. No exec stream dropped.

@@ -43,6 +43,7 @@
         "TIMEFORMAT='TIMING docker-info %R'; time docker info --format 'docker info: storage driver {{.Driver}}, cgroup v{{.CgroupVersion}} ({{.CgroupDriver}}), registry mirrors {{.RegistryConfig.Mirrors}}'",
         "iptables --version",
         "iptables -t nat -S POSTROUTING",
+        "cat /sys/fs/cgroup/containers.slice/io.max",
         ". /etc/default/kind-bootstrap",
         "env | grep -E '^(KIND_|KUBECONFIG)' | sort",
         "cat \"$KIND_CONFIG\"",

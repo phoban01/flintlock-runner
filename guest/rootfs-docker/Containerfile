@@ -1,7 +1,8 @@
 # The Guest Image's Docker image (docs/requirements/13-guest-image.md#guest-docker):
 # the root filesystem image of guest/rootfs, plus Docker Engine, containerd,
-# runc and the buildx plugin, iptables on its legacy backend, Go, and the
-# boot unit that points Docker Engine at the Host's registry mirror.
+# runc and the buildx plugin, iptables on its legacy backend, Go, the
+# boot unit that points Docker Engine at the Host's registry mirror, and
+# the slices that keep the guest agent ahead of the containers.
 #
 # Build it with guest/build.sh. It builds guest/rootfs first and passes that
 # image to this build as the named build context guest-rootfs, so the two
@@ -48,6 +49,7 @@ COPY rootfs-docker/registry-mirror.sh /usr/libexec/flr-guest/registry-mirror
 COPY rootfs-docker/mirror-docker.sh /usr/libexec/flr-guest/registry-mirror.d/10-docker
 COPY rootfs-docker/flr-registry-mirror.service /etc/systemd/system/flr-registry-mirror.service
 COPY rootfs-docker/agent.slice rootfs-docker/containers.slice /etc/systemd/system/
+COPY rootfs-docker/io-generator.sh /usr/lib/systemd/system-generators/flr-io
 RUN --mount=type=bind,source=rootfs-docker/configure.sh,target=/tmp/configure.sh \
     bash /tmp/configure.sh
 

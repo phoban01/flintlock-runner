@@ -158,6 +158,23 @@ for unit in containerd.service docker.service; do
 	printf '[Service]\nSlice=containers.slice\n' >"/etc/systemd/system/$unit.d/30-flr-slice.conf"
 done
 
+#= docs/requirements/13-guest-image.md#guest-agent-protection
+#/ The Guest Image's Docker image SHALL limit the block I/O of the
+#/ containers' slice on the root filesystem's block device to 1500 read and
+#/ 1500 write operations per second and to 60 MB/s of reads and 60 MB/s of
+#/ writes, or to the limits that `/etc/default/flr-io` sets in their place.
+#
+# The defaults are the IO directives of containers.slice. The flr-io
+# generator (io-generator.sh) writes a drop-in from /etc/default/flr-io at
+# boot, for a derived image on a faster Host. systemd applies a slice's
+# limits when it starts the first unit in it; the check stage reads them
+# back from the unit as systemd would.
+chmod 0755 /usr/lib/systemd/system-generators/flr-io
+if ! grep -q '^IOWriteIOPSMax=/ ' /etc/systemd/system/containers.slice; then
+	echo "configure: containers.slice sets no IOWriteIOPSMax" >&2
+	exit 1
+fi
+
 # The versions file gains the Docker image's versions. runc reports its own.
 runc_version=$(runc --version | sed -n 's/^runc version //p')
 containerd_version=$(containerd --version | awk '{print $3}')

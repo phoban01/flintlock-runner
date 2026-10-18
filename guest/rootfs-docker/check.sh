@@ -241,6 +241,69 @@ for f in "$work/with-mirror.json" "$work/no-mirror.json" /etc/docker/daemon.json
 	fi
 done
 
+#= docs/requirements/13-guest-image.md#guest-agent-protection
+#= type=test
+#/ The Guest Image's Docker image SHALL limit the block I/O of the
+#/ containers' slice on the root filesystem's block device to 1500 read and
+#/ 1500 write operations per second and to 60 MB/s of reads and 60 MB/s of
+#/ writes, or to the limits that `/etc/default/flr-io` sets in their place.
+#
+# systemd is not running here, so this reads the slice as systemd would at
+# boot: its own IO directives, and the drop-in the flr-io generator writes
+# from a stand-in for /etc/default/flr-io. systemd-analyze verify loads a
+# unit file without a running systemd, and reports a directive it would
+# ignore.
+same "containers.slice's IOReadIOPSMax" "$(unit_values containers.slice IOReadIOPSMax | tail -1)" "/ 1500"
+same "containers.slice's IOWriteIOPSMax" "$(unit_values containers.slice IOWriteIOPSMax | tail -1)" "/ 1500"
+same "containers.slice's IOReadBandwidthMax" "$(unit_values containers.slice IOReadBandwidthMax | tail -1)" "/ 60M"
+same "containers.slice's IOWriteBandwidthMax" "$(unit_values containers.slice IOWriteBandwidthMax | tail -1)" "/ 60M"
+# verify_slice FILE DESCRIPTION: systemd accepts every directive of FILE,
+# a slice unit, as it is.
+verify_slice() {
+	local out
+	out=$(systemd-analyze verify "$1" 2>&1)
+	if [ -z "$out" ]; then ok "systemd accepts $2"; else fail "systemd does not accept $2 as it is: $out"; fi
+}
+verify_slice /etc/systemd/system/containers.slice "containers.slice"
+if [ ! -f /etc/default/flr-io ]; then
+	ok "the image has no /etc/default/flr-io, so the slice's limits apply"
+else
+	fail "the image has /etc/default/flr-io: $(cat /etc/default/flr-io)"
+fi
+generator=/usr/lib/systemd/system-generators/flr-io
+if [ -x "$generator" ]; then ok "the flr-io generator is at $generator"; else fail "no generator at $generator"; fi
+# io_generator DEFAULTS runs the generator as systemd would at boot, with
+# DEFAULTS as the contents of /etc/default/flr-io, or no file when empty,
+# and prints the drop-in it wrote for containers.slice.
+io_generator() {
+	local dir=$work/generator defaults=$work/generator/flr-io
+	rm -rf "$dir"
+	mkdir -p "$dir/normal" "$dir/early" "$dir/late"
+	[ -z "$1" ] || printf '%s\n' "$1" >"$defaults"
+	FLR_IO_DEFAULTS=$defaults "$generator" "$dir/normal" "$dir/early" "$dir/late" >"$dir/log" 2>&1 ||
+		fail "the generator failed: $(cat "$dir/log")"
+	cat "$dir/normal/containers.slice.d/50-flr-io.conf" 2>/dev/null
+}
+got=$(io_generator "")
+if [ -z "$got" ]; then ok "with no /etc/default/flr-io, the generator writes no drop-in"; else fail "with no /etc/default/flr-io, the generator wrote: $got"; fi
+got=$(io_generator $'FLR_IO_READ_IOPS=6000\nFLR_IO_WRITE_IOPS=6000\nFLR_IO_READ_BPS=250M\nFLR_IO_WRITE_BPS=infinity')
+for want in '[Slice]' 'IOReadIOPSMax=/ 6000' 'IOWriteIOPSMax=/ 6000' 'IOReadBandwidthMax=/ 250M' 'IOWriteBandwidthMax=/ infinity'; do
+	if grep -qxF "$want" <<<"$got"; then ok "with every key set, the drop-in has $want"; else fail "with every key set, the drop-in is: $got"; fi
+done
+printf '%s\n' "$got" >"$work/generator/all.slice"
+verify_slice "$work/generator/all.slice" "the drop-in with every key set"
+got=$(io_generator $'FLR_IO_WRITE_IOPS="3000"\nFLR_IO_READ_IOPS=fast\nFLR_IO_READ_BPS=1K5')
+if [ "$(grep -c '^IO' <<<"$got")" = 1 ] && grep -qxF 'IOWriteIOPSMax=/ 3000' <<<"$got"; then
+	ok "with one key set and two malformed, the drop-in has the one, IOWriteIOPSMax=/ 3000"
+else
+	fail "with one key set and two malformed, the drop-in is: $got"
+fi
+if grep -q 'FLR_IO_READ_IOPS=fast' "$work/generator/log" && grep -q 'FLR_IO_READ_BPS=1K5' "$work/generator/log"; then
+	ok "the generator reports the malformed values"
+else
+	fail "the generator does not report the malformed values: $(cat "$work/generator/log")"
+fi
+
 if [ "$failures" -gt 0 ]; then
 	echo "$failures check(s) failed" >&2
 	exit 1

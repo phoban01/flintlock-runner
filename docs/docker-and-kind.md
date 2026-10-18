@@ -10,7 +10,7 @@ containers, and make a Kubernetes cluster, inside its MicroVM:
 | `guest-rootfs-kind` | `flr/kind-ready` | the same image; its Pool makes the kind cluster before a Job claims the MicroVM |
 
 `guest/README.md` lists the versions. `docs/requirements/13-guest-image.md`
-(GI-050 to GI-071) has the requirements. A Job asks for one with its
+(GI-050 to GI-072) has the requirements. A Job asks for one with its
 `image:`, and the Runner's Profile for that name boots it
 (`deploy/runner/config.yaml` has examples).
 
@@ -77,6 +77,37 @@ root disk can stall the MicroVM long enough for flintlock to drop the
 exec stream (#133). The node image stays on disk, where it is mostly
 read. The node's `/var` also holds the images the cluster pulls, so they
 are in memory too.
+
+### Block I/O in containers
+
+`containers.slice` also limits the containers' block I/O on the root
+disk: 1500 read and 1500 write IOPS, and 60 MB/s each way (GI-072).
+Firecracker serves a MicroVM's disk and its vsock from one thread. While
+a container keeps the disk's queue full, the guest agent's heartbeats wait
+behind the queue, and flintlock drops the exec stream after 15 s. On a
+Host whose thin pool is an EBS gp3 volume at its baseline, 3,000 IOPS and
+125 MB/s, a burst of small writes does that (#133). Below the limits the
+queue empties between requests, and the heartbeats get through.
+
+What this means for a Job:
+
+- `docker run`, `docker build` in the guest, and the kind node write at
+  the limit at most. A container that writes 50,000 small files takes at
+  least 33 s. `fio --rw=randwrite --bs=4k --direct=1` in a container
+  reports about 1500 IOPS.
+- The kind node's copy of its `/var` reads the node image from the root
+  disk at the limit. The volume it writes is on the tmpfs, which is not
+  limited.
+- A Stage's own processes, such as `go build` and `git clone`, run in the
+  guest agent's slice and are not limited. `docker buildx build` with
+  `BUILDKIT_HOST` builds on the Host, not in the guest.
+- `io.stat` and `io.max` of `/sys/fs/cgroup/containers.slice` show the
+  I/O and the limits in the guest.
+
+A Host with a faster thin pool, such as a gp3 volume with provisioned
+IOPS and throughput or an NVMe instance store, can take more. A derived
+image sets `/etc/default/flr-io` (`guest/README.md`, "Using them"), and a
+Profile names that image.
 
 ### MicroVM size for kind
 
@@ -161,6 +192,11 @@ the guest's Docker Engine. To push instead, log in and use `--push`.
   yet either (#133, #136).
 - A MicroVM's root disk is 10 GiB on the Host Image. The kind node image
   takes about 1 GiB of it, unpacked.
+- Containers read and write the root disk at 1500 IOPS and 60 MB/s at
+  most, each way, unless a derived image raises the limits
+  (`/etc/default/flr-io`). A Stage's own processes are not limited, so a
+  Stage that writes faster than the Host's thin pool completes can still
+  stall the MicroVM (#133).
 - `/etc/default/kind-bootstrap` pins the kind node image by digest. A Job
   that wants another Kubernetes version passes its own `--image`, and
   should take it by digest from kind's release notes.

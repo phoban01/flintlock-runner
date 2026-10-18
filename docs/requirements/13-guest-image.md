@@ -238,6 +238,10 @@ kind Profiles have 8 GiB.
 - **GI-071** The Guest Image's Docker image SHALL run containerd, Docker Engine
   and every container in a slice whose memory limit is 90 percent of the
   MicroVM's memory and whose CPU weight is the default of 100.
+- **GI-072** The Guest Image's Docker image SHALL limit the block I/O of the
+  containers' slice on the root filesystem's block device to 1500 read and
+  1500 write operations per second and to 60 MB/s of reads and 60 MB/s of
+  writes, or to the limits that `/etc/default/flr-io` sets in their place.
 
 flintlock drops an exec stream that sends nothing for 15 seconds, and the
 guest agent sends a heartbeat every 5 seconds. A guest agent that
@@ -247,6 +251,23 @@ inherits its slice and its OOM score adjustment, so a Stage's own processes
 keep memory and CPU too, and the containers take the pressure. At -999, not
 -1000, the kernel can still kill a Stage's process when nothing else is
 left.
+
+Block I/O starves the guest agent another way. Firecracker serves a
+MicroVM's block device and its vsock from one thread, and flintlock leaves
+the block engine synchronous with no rate limit. While the guest keeps the
+block queue full, that thread serves the queue and nothing else, and the
+guest agent's heartbeats wait behind it (#133). The limit keeps the
+containers' I/O below what a gp3 EBS volume completes at its baseline of
+3,000 IOPS and 125 MB/s, so the queue empties and the thread returns to the
+vsock. The limit is `io.max` of the slice's cgroup, which the kernel's
+block cgroup throttling enforces; cgroup writeback charges a container's
+buffered writes to its cgroup. Stage scripts run in the guest agent's slice
+and are not limited. The limit also slows a container that reads the root
+disk, such as the kind node's copy of its `/var`. `/etc/default/flr-io`
+sets `FLR_IO_READ_IOPS`, `FLR_IO_WRITE_IOPS`, `FLR_IO_READ_BPS` and
+`FLR_IO_WRITE_BPS`, with `infinity` for no limit; a generator writes them
+into a drop-in of the slice at boot. The image has no such file, so a Pool
+on a Host with a faster thin pool raises the limits in a derived image.
 
 ## Release {#guest-release}
 
