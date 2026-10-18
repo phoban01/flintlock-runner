@@ -61,6 +61,7 @@ ARG KUBECTL_SHA256_AMD64=65691ff77eb6fa44c908b77a1082c9f092c3b9733b5cefabec0d110
 ARG KUBECTL_SHA256_ARM64=ff749f4b78d9c4f1ec87307df9b50119ed819e2094aa9810cb9acffc3286c8c7
 COPY rootfs-kind/mirror-kind.sh /usr/libexec/flr-guest/registry-mirror.d/20-kind
 COPY rootfs-kind/kind-cluster.sh /usr/local/bin/flr-kind-cluster
+COPY rootfs-kind/var-lib-docker-volumes.mount /etc/systemd/system/var-lib-docker-volumes.mount
 COPY --from=node-image /out/docker/ /var/lib/docker/
 RUN --mount=type=bind,source=rootfs-kind/configure.sh,target=/tmp/configure.sh \
     bash /tmp/configure.sh

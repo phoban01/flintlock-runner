@@ -201,6 +201,10 @@ Engine's mirror, so the kind configuration gives it the same mirror.
 - **GI-068** The Fleet Manifests SHALL include a Profile for the Job Image
   `flr/kind-ready` that boots the kind image and whose Pool runs
   `flr-kind-cluster` as its create hook.
+- **GI-069** The Guest Image's kind image SHALL mount a tmpfs of 25 percent
+  of the MicroVM's memory, with mode 0700 and owned by root, at
+  `/var/lib/docker/volumes` before Docker Engine starts, so that the `/var`
+  volume of a kind node is in memory.
 
 A Pool of the `flr/kind-ready` Profile makes the cluster in each MicroVM
 before battery marks the MicroVM available, so a Job claims a MicroVM with
@@ -215,6 +219,16 @@ copy-on-write snapshot of the root filesystem image, so each MicroVM gets
 the unpacked image without writing it again. A `docker load` or a pull at
 boot writes the whole image to the guest's disk, which on a slow Host takes
 minutes.
+
+kind starts its node with `/var` as an anonymous Docker volume, and Docker
+Engine first copies the node image's `/var`, about 400 MB, into that
+volume. On the root disk that copy took minutes on a slow Host, and it can
+stall the MicroVM's block device long enough for flintlock to drop the
+exec stream (#133, #136). On a tmpfs it is a copy in memory. The tmpfs
+size is a ceiling: its pages count against `containers.slice` only once
+they are written. At 25 percent of a 4 GiB MicroVM it holds the node's
+`/var` and the images a small Job pulls into the cluster. The example
+kind Profiles have 8 GiB.
 
 ## Guest agent protection {#guest-agent-protection}
 

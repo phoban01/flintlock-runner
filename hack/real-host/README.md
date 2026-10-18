@@ -274,3 +274,28 @@ of 2 vCPUs and 2 GiB, one at a time (#132):
 - No exec stream timed out in eight Jobs of up to 12 minutes, most with
   kind running, on either Guest Image. With this branch the guest agent
   ran in `agent.slice`, at OOM score adjustment -999.
+
+### Docker's volumes on a tmpfs, 17 October 2026
+
+On the same Mac, with `hack/kubeadm-host` at battery-operator `main`
+40954f0 and the Guest Image built from #136's branch (`GUEST=build`),
+one Profile at a time (#136):
+
+- `dd if=/dev/zero of=/var/tmp/big bs=1M count=1024 oflag=direct` on
+  `flr/docker` (2 vCPUs, 2 GiB) wrote 1 GiB in 4.2 s, at 263 MB/s. With
+  `count=6144` it wrote 6 GiB in 45 s, at 24 to 145 MB/s. Both Jobs
+  succeeded. No exec stream dropped.
+- A `flr/kind` guest of 4 GiB missed battery's 30 s wait for its guest
+  agent in each of four boots. The kind runs used 2 vCPUs and 2 GiB.
+- The `kind` step failed as before: kind gave up waiting for the node's
+  systemd after 253 s.
+- A Job that ran `kind create cluster --retain` and looked at the node
+  showed why. The node's `/var` is an anonymous volume under
+  `/var/lib/docker/volumes`, now on the tmpfs. Docker Engine still took
+  4 minutes to copy 390 MB into it, about 1.6 MB/s: it reads the node
+  image from the guest's cold root disk. The node started 75 s later,
+  and its systemd was still starting containerd when kind gave up.
+  The tmpfs then held 390 MB of its 498 MB, and the guest had 1.36 GB
+  of memory available.
+- No exec stream dropped in any Job, including the 11-minute Job above.
+- `kind-ready` did not run: its create hook would fail at the same step.
