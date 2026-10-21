@@ -9,7 +9,7 @@
 # applies.
 #
 # This renders the Host Agent with the Host Services, and the Runner on the
-# claim backend. battery-operator v0.1.0's Manifests go to the same cluster
+# claim backend. battery-operator v0.5.0's Manifests go to the same cluster
 # first: they serve the Pool and MicroVMClaim resources and run battery,
 # the Exec Agent and the Inventory Controller (deploy/README.md, "Order of
 # application").

@@ -1,6 +1,6 @@
 # The permissions of the Runner of the claim design
 # (docs/requirements/12-cluster-fleet.md#cluster-least-privilege), next to
-# battery-operator v0.1.0's Manifests. Every rule has one user, named beside
+# battery-operator v0.5.0's Manifests. Every rule has one user, named beside
 # it. The Holder (holder.yaml) is bound to nothing.
 #
 # cmd/flr's end-to-end test of the claim backend applies this file
