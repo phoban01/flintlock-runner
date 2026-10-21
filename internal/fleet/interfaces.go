@@ -160,7 +160,7 @@ const (
 	StepPrepull      Step = "prepull"       // FL-028
 	StepPrewarm      Step = "prewarm"       // FL-112
 	StepVerifyActive Step = "verify_active" // FL-053
-	StepControlNode  Step = "control_node"  // FL-051, FL-055: Pool Manager daemon on the Control Node
+	StepControlNode  Step = "control_node"  // FL-125, FL-133: Pool Manager daemon on the Control Node
 	StepDrain        Step = "drain"         // FL-080, FL-084
 	StepTeardown     Step = "teardown"      // FL-081 to FL-083
 	StepUserData     Step = "user_data"     // FL-090, FL-091
@@ -175,8 +175,7 @@ type RenderInput struct {
 	HostServices config.HostServices
 	Profiles     []config.Profile
 	Instance     Instance
-	// Inventory is the current Inventory, for peer addresses (FL-046) and
-	// the Pool Manager host list (FL-051).
+	// Inventory is the current Inventory, for peer addresses (FL-046).
 	Inventory Inventory
 	// Options are step-specific flags such as terminate and purge (FL-082,
 	// FL-083).
@@ -237,13 +236,15 @@ type InventoryStore interface {
 }
 
 // ControlNode installs and reloads the Pool Manager daemon on the machine
-// running the Fleet Controller (FL-051, FL-055).
+// running the Fleet Controller (FL-125), and keeps its Hosts in step with
+// the Inventory through its HostAdmin API (FL-127 to FL-132).
 type ControlNode interface {
-	// InstallPoolManager installs the pinned daemon with a host list
-	// generated from inv, naming every Host as the Inventory does (FL-052).
+	// InstallPoolManager installs the pinned daemon and registers inv's
+	// Hosts with it, naming every Host as the Inventory does (FL-052).
 	InstallPoolManager(ctx context.Context, inv *Inventory) error
-	// ReloadPoolManager regenerates the host list and reloads the daemon
-	// without interrupting Leases (FL-055).
+	// ReloadPoolManager brings the daemon to the pinned version and its
+	// Hosts in step with inv, without restarting it for a change to the
+	// Hosts (FL-133).
 	ReloadPoolManager(ctx context.Context, inv *Inventory) error
 }
 
@@ -360,6 +361,9 @@ type Deps struct {
 	PoolManager poolmgr.Client
 	Hosts       flintlock.AdminDialer
 	Transports  transport.Factory
+	// HostAdmin is the Pool Manager daemon's HostAdmin service, through
+	// which the Control Node step registers the Inventory's Hosts (FL-127).
+	HostAdmin poolmgr.HostAdmin
 	// Out receives streamed command output (FL-014).
 	Out io.Writer
 }
