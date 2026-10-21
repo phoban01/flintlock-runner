@@ -241,9 +241,9 @@ func certificateAuthority(cfg *config.Config) ca.Authority {
 
 // fleetProvision is `fleet provision`: discover, provision only the new
 // instances, merge them into the Inventory, drop the vanished ones, write
-// the Inventory and the Runner configuration, and install or reload the
-// Pool Manager daemon with the new host list. With --dry-run it stops once
-// the plan is computed and reports it.
+// the Inventory and the Runner configuration, install or update the Pool
+// Manager daemon, and bring its Hosts in step with the Inventory. With
+// --dry-run it stops once the plan is computed and reports it.
 func fleetProvision(c *cli.Context, s fleetSeams) error {
 	ctx := context.Background()
 	// Every instance's output streams here at once (FL-014).
@@ -582,21 +582,30 @@ func (r parameterSecrets) Run(ctx context.Context, inst fleet.Instance, s fleet.
 	return r.Remote.Run(ctx, inst, s, out)
 }
 
-// applyPoolManager installs the Pool Manager daemon on the Control Node
-// with a host list generated from inv on the first run (FL-051), and
-// regenerates the host list and reloads the daemon on every later one
-// (FL-055); the script restarts the daemon only when the list changed.
+// applyPoolManager installs the pinned Pool Manager daemon on the Control
+// Node (FL-125), and then registers inv's Hosts with it, updates the ones it
+// holds differently and removes the ones gone from inv, over its HostAdmin
+// API (FL-127 to FL-132). The calls go from here, over the endpoint the
+// Runner dials, because battery takes Hosts only through that API, and the
+// Fleet Controller already reaches the daemon there to check it answers
+// (FL-054). Nothing restarts the daemon for a change to its Hosts (FL-133).
 func applyPoolManager(ctx context.Context, s fleetSeams, cfg *config.Config, out io.Writer, scr fleet.Scripts, authority ca.Authority, first bool, inv *fleet.Inventory) error {
 	pm, err := s.PoolManager(cfg)
 	if err != nil {
 		return err
 	}
 	defer func() { _ = pm.Close() }()
+	hosts, err := s.hostAdmin(cfg)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = hosts.Close() }()
 	ctl, err := s.control(ctx, cfg, fleet.Deps{
 		Scripts:     scr,
 		Inventory:   inventory.Store{},
 		Certs:       authority,
 		PoolManager: pm,
+		HostAdmin:   hosts,
 		Out:         out,
 	})
 	if err != nil {

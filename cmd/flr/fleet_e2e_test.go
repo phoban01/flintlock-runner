@@ -28,6 +28,7 @@ import (
 	"github.com/phoban01/flintlock-runner/internal/fleet/remote"
 	"github.com/phoban01/flintlock-runner/internal/fleet/remote/sshtest"
 	"github.com/phoban01/flintlock-runner/internal/fleet/scripts"
+	"github.com/phoban01/flintlock-runner/internal/poolmgr"
 )
 
 // These tests drive the fleet subcommands through the production wiring
@@ -209,7 +210,7 @@ fleet:
     flintlock: v0.9.0
     firecracker: v1.10.0
     containerd: v1.7.0
-    pool_manager: v0.1.0
+    pool_manager: v0.5.0
   thin_pool_device: /dev/nvme1n1
   host_reserve:
     vcpu: 2
@@ -359,22 +360,41 @@ func TestFleetProvisionOverSSMContinuesPastFailuresAndExitsNonZero(t *testing.T)
 		t.Errorf("reachability dialed %v, want i-2's flintlockd endpoint (FL-047)", dialed)
 	}
 
-	// The Pool Manager daemon was installed with the one Host, verifying
-	// it with the supplied CA, and its token went on standard input.
+	// The Pool Manager daemon was installed with a configuration that names
+	// no Host, and its token went on standard input. The one Host that
+	// provisioned was then registered with it over HostAdmin, verified with
+	// the supplied CA; the ones that failed were not.
 	runs := control.scripts()
 	if len(runs) != 1 || runs[0].Name != string(fleet.StepControlNode) || runs[0].Instance != controlNodeName {
 		t.Fatalf("Control Node scripts = %+v, want one control_node run", runs)
 	}
-	for _, want := range []string{"'i-2'", "'10.0.1.2:9090'", supplied.CAFile, stack.PoolManager.Addr()} {
-		if !strings.Contains(runs[0].Content, want) {
-			t.Errorf("the control_node script lacks %q", want)
-		}
+	if !strings.Contains(runs[0].Content, stack.PoolManager.Addr()) {
+		t.Errorf("the control_node script lacks the daemon's address %q", stack.PoolManager.Addr())
 	}
-	if strings.Contains(runs[0].Content, "'i-1'") || strings.Contains(runs[0].Content, "'i-3'") {
-		t.Error("the Pool Manager host list names a Host that failed to provision")
+	for _, host := range []string{"'i-1'", "'i-2'", "'i-3'", "'10.0.1.2:9090'"} {
+		if strings.Contains(runs[0].Content, host) {
+			t.Errorf("the control_node script names %s; the daemon's configuration names no Host", host)
+		}
 	}
 	if !strings.Contains(runs[0].Stdin, scripts.SecretFlintlockdToken+" ") || strings.Contains(runs[0].Content, "fleet-secret-token") {
 		t.Errorf("the control_node script's token: stdin %q", runs[0].Stdin)
+	}
+	admin, err := stack.PoolManager.HostAdmin()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = admin.Close() }()
+	st, err := admin.GetHost(context.Background(), "i-2")
+	if err != nil || st.Host.Address != "10.0.1.2:9090" || st.Host.TLS.CAFile != supplied.CAFile {
+		t.Errorf("the Pool Manager holds i-2 as %+v, %v; want it at 10.0.1.2:9090, verified with the supplied CA", st, err)
+	}
+	for _, failed := range []string{"i-1", "i-3"} {
+		if _, err := admin.GetHost(context.Background(), failed); !errors.Is(err, poolmgr.ErrNotFound) {
+			t.Errorf("GetHost(%s) = %v; a Host that failed to provision is registered", failed, err)
+		}
+	}
+	if !strings.Contains(out, "registered Host i-2 with the Pool Manager") {
+		t.Errorf("the output does not report the registration:\n%s", out)
 	}
 }
 
@@ -492,10 +512,19 @@ func TestFleetOverSSHStaticNeedsNoAWSAndTearsDown(t *testing.T) {
 		t.Errorf("the flintlockd step was not rendered for the machine's address")
 	}
 	// The Pool Manager daemon was installed on the Control Node, never over
-	// SSH, with host-1 in its host list.
+	// SSH, and host-1 registered with it at its endpoint, with no TLS.
 	cn := std.renderedFor(fleet.StepControlNode)
-	if runs := control.scripts(); len(runs) != 1 || len(cn) != 1 || !strings.Contains(cn[0].Content, "'host-1'") {
-		t.Errorf("Control Node scripts = %d, rendered %d, want the Pool Manager installed once with host-1", len(runs), len(cn))
+	if runs := control.scripts(); len(runs) != 1 || len(cn) != 1 || strings.Contains(cn[0].Content, "'host-1'") {
+		t.Errorf("Control Node scripts = %d, rendered %d, want the Pool Manager installed once, its configuration naming no Host", len(runs), len(cn))
+	}
+	admin, err := stack.PoolManager.HostAdmin()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = admin.Close() }()
+	if st, err := admin.GetHost(context.Background(), "host-1"); err != nil ||
+		st.Host != (poolmgr.Host{Name: "host-1", Address: stack.Inventory[0].Endpoint, TLS: poolmgr.HostTLS{Insecure: true}}) {
+		t.Errorf("the Pool Manager holds host-1 as %+v, %v; want it at its endpoint without TLS", st, err)
 	}
 
 	// Teardown without --purge keeps the thin pool; with it, removes it.

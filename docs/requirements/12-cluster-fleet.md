@@ -503,7 +503,8 @@ when it was written:
   `status.leaseID`.
 
 The claim backend builds on battery-operator's `api/v1alpha1` and its
-Client Library, `pkg/claimclient`, at v0.1.0. The Client Library creates the
+Client Library, `pkg/claimclient`, now at v0.5.0, which runs battery v0.5.0.
+The Client Library creates the
 claim, its Secret and its claim tokens, waits for `Bound`, renews the claim
 and deletes it.
 
@@ -583,8 +584,10 @@ the condition, never aborts a Job this way.
   (battery-operator IN-002). It was never implemented.
 
 The Inventory Controller runs in battery-operator from v0.1.0. It gives
-battery its Hosts by rewriting battery's configuration and restarting it,
-because battery v0.3.3 has no call to change them.
+battery its Hosts. Up to v0.4 it rewrote battery's configuration and
+restarted it, because battery v0.3.3 had no call to change them. From v0.5.0
+it calls battery's `HostAdmin` API instead, and never restarts battery
+(battery-operator ADR 0008).
 
 ## Exec Agent {#exec-agent}
 
@@ -758,7 +761,7 @@ This section is not normative.
 | Host provisioning, FL-020 to FL-027, FL-029, FL-030 | battery-operator's Host Image (its `11-host-image.md`) |
 | Pre-pull, FL-028 | battery's warm MicroVMs pull their own images |
 | Host networking, FL-040 to FL-046 | battery-operator HI-030 to HI-037, HI-075 to HI-080 |
-| Pool Manager install, FL-051 to FL-055 | battery-operator's Manifests |
+| Pool Manager install, FL-051 to FL-055 and FL-125 to FL-133 | battery-operator's Manifests |
 | Inventory, FL-060 to FL-064 | none; battery-operator's Inventory Controller gives battery its Hosts |
 | Verification, FL-070 to FL-073, FL-109 | not yet specified for the claim design |
 | Drain, FL-080, FL-084 | battery-operator's Exec Agent and Inventory Controller |

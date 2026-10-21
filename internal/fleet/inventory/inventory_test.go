@@ -57,7 +57,7 @@ fleet:
     flintlock: v0.9.0
     firecracker: v1.10.0
     containerd: v1.7.0
-    pool_manager: v0.1.0
+    pool_manager: v0.5.0
   thin_pool_device: /dev/nvme1n1
   host_reserve:
     vcpu: 2

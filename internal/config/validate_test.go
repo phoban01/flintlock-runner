@@ -918,7 +918,7 @@ func TestFleetSection(t *testing.T) {
 		"versions.firecracker":      "v1.10.1",
 		"versions.cloud_hypervisor": "v41.0",
 		"versions.containerd":       "v1.7.22",
-		"versions.pool_manager":     "v0.1.0",
+		"versions.pool_manager":     "v0.5.0",
 		"thin_pool_device":          "/dev/nvme1n1",
 		"guest_subnet":              "172.31.0.0/16",
 		"flintlockd.port":           9090,
@@ -994,6 +994,31 @@ func TestFleetSection(t *testing.T) {
 			t.Errorf("errors = %v, want none", errs)
 		}
 	})
+}
+
+//= docs/requirements/06-fleet.md#pool-manager-install
+//= type=test
+//# If the pinned Pool Manager version is older than v0.5.0, then
+//# the Fleet Controller SHALL refuse the configuration with an error that
+//# names v0.5.0 as the oldest version it supports.
+
+// TestFleetPoolManagerVersion checks that a battery release older than
+// v0.5.0, which reads its Hosts from its configuration file, is refused with
+// an error naming v0.5.0, and that v0.5.0, its release candidates and
+// later releases are accepted.
+func TestFleetPoolManagerVersion(t *testing.T) {
+	t.Parallel()
+	runRejectCases(t, []rejectCase{
+		{"battery v0.4.0", func(c *Config) { c.Fleet.Versions.PoolManager = "v0.4.0" }, "fleet.versions.pool_manager", "supports v0.5.0 or later"},
+		{"battery v0.3.3", func(c *Config) { c.Fleet.Versions.PoolManager = "v0.3.3" }, "fleet.versions.pool_manager", "supports v0.5.0 or later"},
+		{"not a release tag", func(c *Config) { c.Fleet.Versions.PoolManager = "main" }, "fleet.versions.pool_manager", "release tag such as v0.5.0"},
+	})
+	for _, v := range []string{"v0.5.0", "v0.5.0-rc.1", "v0.5.3", "v0.6.0", "v1.0.0"} {
+		cfg := fullWith(t, func(c *Config) { c.Fleet.Versions.PoolManager = v })
+		if errs := fieldErrors(t, cfg); errs != nil {
+			t.Errorf("pool_manager %s: errors = %v, want none", v, errs)
+		}
+	}
 }
 
 //= docs/requirements/07-configuration.md#fleet-section

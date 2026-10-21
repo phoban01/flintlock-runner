@@ -217,7 +217,10 @@ across jobs. Warm pools provide the latency win instead.
   Prometheus metrics, a Helm chart, an e2e suite and a release pipeline. PR
   #45 added `HostInfo{name, address}` to `ClaimVMResponse`, which is the
   field the runner needs for placement; the README status line still says
-  pre-alpha and is stale. Hosts are a static list; placement is round-robin
+  pre-alpha and is stale. Hosts were a static list in its configuration
+  file; from v0.5.0 battery holds them in its database and takes them only
+  through its `HostAdmin` API, which the Fleet Controller calls (FL-127).
+  Placement is round-robin
   or least-VMs. battery's host agent was removed on 2026-09-07 (b675a46a,
   superseded by flintlock's native `MicroVMExec` and `MicroVMSSHProxy`
   services) and is in no release, so nothing of battery's runs on a Host

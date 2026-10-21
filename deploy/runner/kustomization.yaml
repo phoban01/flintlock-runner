@@ -2,7 +2,7 @@
 # the Holder its claims name. deploy/kustomization.yaml lists this
 # directory, so `kustomize build deploy` renders it with the Host Agent.
 #
-# It needs battery-operator v0.1.0's Manifests in the cluster first: the
+# It needs battery-operator v0.5.0's Manifests in the cluster first: the
 # Pool and MicroVMClaim resources, and the namespace battery-operator-system,
 # where rbac.yaml lets the Runner read the serving CA (deploy/README.md).
 apiVersion: kustomize.config.k8s.io/v1beta1

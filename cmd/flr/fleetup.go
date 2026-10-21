@@ -192,9 +192,9 @@ func (p *provisionPlan) reportUp(out io.Writer, runnerPath string, install bool)
 	fmt.Fprintln(out, "then fleet up would:")
 	fmt.Fprintf(out, "  write the Inventory %s and the Runner configuration %s\n", fleetInventoryPath(p.cfg), runnerPath)
 	if len(p.current.Hosts) == 0 {
-		fmt.Fprintln(out, "  install the Pool Manager daemon on the Control Node with the provisioned Hosts")
+		fmt.Fprintln(out, "  install the Pool Manager daemon on the Control Node and register the provisioned Hosts with it")
 	} else {
-		fmt.Fprintln(out, "  reload the Pool Manager daemon on the Control Node with the new host list")
+		fmt.Fprintln(out, "  bring the Pool Manager daemon on the Control Node up to date and its Hosts in step with the Inventory")
 	}
 	fmt.Fprintf(out, "  run fleet verify --declare against %s\n", runnerPath)
 	if install {
