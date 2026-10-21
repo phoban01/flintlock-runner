@@ -373,7 +373,7 @@ func (p *Provisioner) entry(inst fleet.Instance, versions config.InstalledVersio
 	}
 	e := &config.HostEntry{
 		// FL-052: the Host's name is its instance id, here and in the Pool
-		// Manager's host list, which is generated from these entries.
+		// Manager, which registers it from these entries (FL-127).
 		Name:     inst.ID,
 		Endpoint: endpoint,
 		Arch:     inst.Arch,

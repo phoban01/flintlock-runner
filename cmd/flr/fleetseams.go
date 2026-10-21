@@ -64,6 +64,12 @@ type fleetSeams struct {
 	PoolManager func(cfg *config.Config) (poolmgr.Client, error)
 	Hosts       func() flintlock.Dialer
 	Transports  func() transport.Factory
+	// HostAdmin is the Pool Manager daemon's HostAdmin service, which the
+	// Fleet Controller registers the Inventory's Hosts with (FL-127); nil
+	// dials pool_manager.endpoint as PoolManager does.
+	HostAdmin func(cfg *config.Config) (poolmgr.HostAdminConn, error)
+	// HostSync tunes the retries of a refused Host removal (FL-131).
+	HostSync poolmgr.HostSyncOptions
 	// Leases counts leased MicroVMs on a drained Host.
 	Leases func(pm poolmgr.Client) drain.LeaseReporter
 	// Now is the clock for the Inventory's generated_at.
@@ -242,11 +248,25 @@ func (s fleetSeams) provisioner(cfg *config.Config, deps fleet.Deps, certs *flee
 // output and in the Pool Manager daemon's certificate.
 const controlNodeName = "control-node"
 
-// control installs and reloads the Pool Manager daemon on the Control Node
-// (FL-051, FL-055) with deps.Scripts, deps.PoolManager and deps.Certs. The
-// daemon listens where the Runner dials it, verifies flintlockd with the
-// fleet's CA, and, unless the Pool Manager is configured insecure, serves
-// TLS with a certificate from the same authority as the Hosts'.
+// hostAdmin is the HostAdmin client of the Pool Manager daemon at
+// pool_manager.endpoint, with the Runner's own TLS settings and deadline.
+func (s fleetSeams) hostAdmin(cfg *config.Config) (poolmgr.HostAdminConn, error) {
+	if s.HostAdmin != nil {
+		return s.HostAdmin(cfg)
+	}
+	return poolmgr.DialHostAdmin(poolmgr.ClientConfig{
+		Endpoint: cfg.PoolManager.Endpoint,
+		TLS:      cfg.PoolManager.TLS,
+		Deadline: cfg.PoolManager.Deadline,
+	})
+}
+
+// control installs the Pool Manager daemon on the Control Node and keeps
+// its Hosts in step with the Inventory (FL-125, FL-127 to FL-133) with
+// deps.Scripts, deps.PoolManager, deps.HostAdmin and deps.Certs. The daemon
+// listens where the Runner dials it, verifies flintlockd with the fleet's
+// CA, and, unless the Pool Manager is configured insecure, serves TLS with
+// a certificate from the same authority as the Hosts'.
 func (s fleetSeams) control(ctx context.Context, cfg *config.Config, deps fleet.Deps) (fleet.ControlNode, error) {
 	if s.Control != nil {
 		return s.Control(ctx, cfg, deps)
@@ -284,6 +304,8 @@ func (s fleetSeams) control(ctx context.Context, cfg *config.Config, deps fleet.
 		Fleet:        *cfg.Fleet,
 		Options:      opts,
 		PoolManager:  deps.PoolManager,
+		Hosts:        deps.HostAdmin,
+		HostSync:     s.HostSync,
 		ReadyTimeout: s.ControlReadyTimeout,
 		Out:          deps.Out,
 	})

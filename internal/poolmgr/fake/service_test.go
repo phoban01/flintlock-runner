@@ -318,6 +318,16 @@ func TestMicroVMsGoThroughTheHostClient(t *testing.T) {
 
 	t.Run("a host the source does not know is never created on", func(t *testing.T) {
 		h := newHarness(t, poolmgr.FakeConfig{}, "host-a")
+		// The fake holds "gone", added without validation, but its Host
+		// source cannot reach it.
+		admin, err := h.pm.HostAdmin()
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { _ = admin.Close() })
+		if _, err := admin.AddHost(h.ctx, poolmgr.Host{Name: "gone", Address: "10.0.0.9:9090"}); err != nil {
+			t.Fatalf("AddHost: %v", err)
+		}
 		if _, err := h.client.CreatePool(h.ctx, h.spec("pool", 2, "host-a", "gone")); err != nil {
 			t.Fatalf("CreatePool: %v", err)
 		}

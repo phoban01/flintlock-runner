@@ -16,7 +16,7 @@ func ptr[T any](v T) *T { return &v }
 func fullInput() fleet.RenderInput {
 	f := config.Fleet{
 		Region:         "eu-west-1",
-		Versions:       config.PinnedVersions{Flintlock: "v0.14.0", Firecracker: "v1.10.1", CloudHypervisor: "v41.0", Containerd: "v1.7.22", PoolManager: "v0.1.0"},
+		Versions:       config.PinnedVersions{Flintlock: "v0.14.0", Firecracker: "v1.10.1", CloudHypervisor: "v41.0", Containerd: "v1.7.22", PoolManager: "v0.5.0"},
 		ThinPoolDevice: "/dev/nvme1n1",
 		GuestSubnet:    "172.31.0.0/16",
 		Flintlockd:     config.Flintlockd{Port: 9090, Token: "fleet-token"},

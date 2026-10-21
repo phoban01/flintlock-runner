@@ -167,7 +167,7 @@ func TestRemovedProfileLeavesItsPoolAlone(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), testTimeout)
 	defer cancel()
 
-	pm := startPoolManager(t, ctx, poolmgr.FakeConfig{}, "host-a")
+	pm := startPoolManager(t, ctx, poolmgr.FakeConfig{}, "host-a", "arm-fast", "arm-slow")
 	c := pm.client()
 	tracker := newRecordingTracker()
 	logs := newLogRecorder(t)
@@ -229,7 +229,7 @@ func TestFailedDeclarationIsLoggedCountedEmptyAndRetried(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), testTimeout)
 	defer cancel()
 
-	pm := startPoolManager(t, ctx, poolmgr.FakeConfig{}, "host-a")
+	pm := startPoolManager(t, ctx, poolmgr.FakeConfig{}, "host-a", "arm-fast", "arm-slow")
 	c := pm.client()
 	clk := clock.NewFake(testEpoch)
 	tracker := newRecordingTracker()
@@ -307,7 +307,7 @@ func TestRedeclareBringsBackADeletedPool(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), testTimeout)
 	defer cancel()
 
-	pm := startPoolManager(t, ctx, poolmgr.FakeConfig{}, "host-a")
+	pm := startPoolManager(t, ctx, poolmgr.FakeConfig{}, "host-a", "arm-fast", "arm-slow")
 	c := pm.client()
 	d := declaration(t, c, clock.NewFake(testEpoch))
 
@@ -340,7 +340,7 @@ func TestDeclarationRejectsTwoProfilesSharingAPool(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), testTimeout)
 	defer cancel()
 
-	pm := startPoolManager(t, ctx, poolmgr.FakeConfig{}, "host-a")
+	pm := startPoolManager(t, ctx, poolmgr.FakeConfig{}, "host-a", "arm-fast", "arm-slow")
 	c := pm.client()
 	d := declaration(t, c, clock.NewFake(testEpoch))
 

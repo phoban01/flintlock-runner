@@ -8,7 +8,7 @@ require (
 	github.com/aws/aws-sdk-go-v2/credentials v1.20.4
 	github.com/aws/aws-sdk-go-v2/service/ec2 v1.332.0
 	github.com/aws/aws-sdk-go-v2/service/ssm v1.78.0
-	github.com/liquidmetal-dev/battery v0.3.3
+	github.com/liquidmetal-dev/battery v0.5.0
 	github.com/liquidmetal-dev/flintlock/api v0.0.0-20260922072746-f69bffbac45c
 	github.com/phoban01/battery-operator v0.1.1-0.20260929144144-8ee1299c41d3
 	github.com/prometheus/client_golang v1.24.1
@@ -16,7 +16,8 @@ require (
 	github.com/urfave/cli v1.22.17
 	gitlab.com/gitlab-org/gitlab-runner v1.11.1-0.20260907100838-7b010e09cf59
 	golang.org/x/crypto v0.55.0
-	google.golang.org/grpc v1.83.2
+	golang.org/x/mod v0.39.0
+	google.golang.org/grpc v1.84.0
 	google.golang.org/protobuf v1.36.12
 	gopkg.in/yaml.v3 v3.0.1
 	k8s.io/api v0.36.3

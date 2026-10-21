@@ -81,6 +81,9 @@ func (p *PoolManager) createPool(spec poolmgr.PoolSpec) (*poolmgr.Pool, error) {
 	if err := p.checkNamespace(spec.Ref.Namespace); err != nil {
 		return nil, err
 	}
+	if err := p.checkHostsLocked(spec); err != nil {
+		return nil, err
+	}
 	key := keyOf(spec.Ref)
 	if _, exists := p.pools[key]; exists {
 		return nil, status.Errorf(codes.AlreadyExists, "pool %s already exists", key)
@@ -99,6 +102,9 @@ func (p *PoolManager) updatePool(spec poolmgr.PoolSpec) (*poolmgr.Pool, error) {
 	}
 	p.mu.Lock()
 	defer p.mu.Unlock()
+	if err := p.checkHostsLocked(spec); err != nil {
+		return nil, err
+	}
 	ps, err := p.poolLocked(spec.Ref)
 	if err != nil {
 		return nil, err
@@ -126,13 +132,23 @@ func (p *PoolManager) deletePool(ctx context.Context, ref poolmgr.PoolRef) error
 			return status.Errorf(codes.FailedPrecondition, "pool %s has outstanding lease %s; release it first", ps.key, ls.rec.LeaseID)
 		}
 	}
-	delete(p.pools, ps.key)
 	var vms []*vmState
 	for _, vm := range p.vms {
 		if vm.pool == ps.key {
 			vms = append(vms, vm)
 		}
 	}
+	// battery v0.4.0 and later emit VM_DELETED_ON_POOL_DELETE for each
+	// MicroVM a pool delete removes. The fake emits it here, while the Pool
+	// still exists to number its events, rather than once each Host
+	// confirms the deletion: nothing waits on those events.
+	sort.Slice(vms, func(i, j int) bool { return vms[i].id < vms[j].id })
+	for _, vm := range vms {
+		if vm.uid != "" {
+			p.emitLocked(ps.key, vm.uid, poolmgrv1.EventType_VM_DELETED_ON_POOL_DELETE, map[string]any{"host": vm.host})
+		}
+	}
+	delete(p.pools, ps.key)
 	p.mu.Unlock()
 
 	var firstErr error

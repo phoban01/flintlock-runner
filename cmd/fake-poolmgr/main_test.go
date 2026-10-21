@@ -189,6 +189,7 @@ func TestParseFlags(t *testing.T) {
 				"-ready-timeout", "5s",
 				"-event-replay", "7",
 				"-omit-host-on-claim",
+				"-empty-host-registry",
 				"-namespace", "runner-ns",
 			},
 			want: poolmgr.FakeConfig{
@@ -198,6 +199,7 @@ func TestParseFlags(t *testing.T) {
 				ReadyTimeout:      5 * time.Second,
 				EventReplay:       7,
 				OmitHostOnClaim:   true,
+				EmptyHostRegistry: true,
 				Namespace:         "runner-ns",
 			},
 		},

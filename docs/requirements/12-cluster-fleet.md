@@ -758,7 +758,7 @@ This section is not normative.
 | Host provisioning, FL-020 to FL-027, FL-029, FL-030 | battery-operator's Host Image (its `11-host-image.md`) |
 | Pre-pull, FL-028 | battery's warm MicroVMs pull their own images |
 | Host networking, FL-040 to FL-046 | battery-operator HI-030 to HI-037, HI-075 to HI-080 |
-| Pool Manager install, FL-051 to FL-055 | battery-operator's Manifests |
+| Pool Manager install, FL-051 to FL-055 and FL-125 to FL-133 | battery-operator's Manifests |
 | Inventory, FL-060 to FL-064 | none; battery-operator's Inventory Controller gives battery its Hosts |
 | Verification, FL-070 to FL-073, FL-109 | not yet specified for the claim design |
 | Drain, FL-080, FL-084 | battery-operator's Exec Agent and Inventory Controller |
