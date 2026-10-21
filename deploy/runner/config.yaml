@@ -79,22 +79,23 @@ profiles:
     rootfs: ghcr.io/phoban01/flintlock-runner/guest-rootfs:REPLACE
     pool:
       size: 2
-  # An arm64 Host on Lima, as battery-operator's real hosts trial runs one
-  # (4 vCPUs and 6 GiB): one MicroVM at a time, for the first run on a real
-  # Host (#79). A Job asks for it with `image: flr-arm64`. On a fleet with
-  # only this Host, mark this Profile as the default instead, or remove the
-  # amd64 one, whose Pool no Host could fill.
-  - name: lima-arm64
-    arch: arm64
-    vcpu: 2
-    memory_mb: 2048
-    images: [flr-arm64]
-    kernel:
-      image: ghcr.io/phoban01/flintlock-runner/guest-kernel:REPLACE
-      filename: boot/vmlinux
-    rootfs: ghcr.io/phoban01/flintlock-runner/guest-rootfs:REPLACE
-    pool:
-      size: 1
+  # An arm64 Profile needs arm64 Hosts. The Runner pins each Pool to its
+  # Profile's architecture, so on a fleet of amd64 Hosts the Pool of an
+  # arm64 Profile never becomes Ready. With arm64 Hosts, add a Profile like
+  # the one below, and a Job asks for it with `image: flr/arm64`. It boots
+  # the same images as the default Profile: each is one index for both.
+  #
+  # - name: arm64
+  #   arch: arm64
+  #   vcpu: 2
+  #   memory_mb: 4096
+  #   images: [flr/arm64]
+  #   kernel:
+  #     image: <the default Profile's kernel image>
+  #     filename: boot/vmlinux
+  #   rootfs: <the default Profile's rootfs>
+  #   pool:
+  #     size: 1
   # Jobs that build and run containers ask for `image: flr/docker`: Docker
   # Engine with buildx, pointed at the Host's registry mirror at boot, and
   # Go. `docker buildx build` reaches the Host's buildkitd through
