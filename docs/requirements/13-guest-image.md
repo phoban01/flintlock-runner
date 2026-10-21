@@ -51,6 +51,9 @@ packages do.
   built in.
 - **GI-013** The Guest Image's kernel SHALL have virtio-pci built in beside
   virtio-mmio, with the virtio block, network and vsock drivers.
+- **GI-014** The Guest Image's kernel SHALL have pressure stall information
+  built in and turned on without a boot option, so that a guest has
+  `/proc/pressure/cpu`, `/proc/pressure/memory` and `/proc/pressure/io`.
 
 Firecracker's CI configuration has virtio-vsock, virtio-blk, ext4 and
 devtmpfs built in, and no loadable modules. The guest agent is reachable
@@ -62,6 +65,12 @@ kube-proxy, in a kind cluster's node, writes rules with the `comment`,
 `mark` and `statistic` matches, and Docker Engine 28 and later put rules in
 the `raw` table. Firecracker's devices are virtio-mmio; Cloud Hypervisor's
 are virtio-pci, so one kernel serves a Pool of either hypervisor.
+
+Firecracker's CI configuration builds pressure stall information in, but
+turns it off unless the kernel boots with `psi=1`. A Job reads
+`/proc/pressure` to tell whether CPU, memory or I/O slowed it, and the same
+figures help size a Profile. The build turns it on by default, so no
+Profile has to add a boot option.
 
 ## Root filesystem {#guest-rootfs}
 
