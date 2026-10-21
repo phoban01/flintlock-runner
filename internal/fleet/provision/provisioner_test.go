@@ -89,7 +89,7 @@ const (
 
 func testFleet() config.Fleet {
 	return config.Fleet{
-		Versions:       config.PinnedVersions{Flintlock: "v0.14.0", Firecracker: "v1.10.1", CloudHypervisor: "v41.0", Containerd: "v1.7.22", PoolManager: "v0.1.0"},
+		Versions:       config.PinnedVersions{Flintlock: "v0.14.0", Firecracker: "v1.10.1", CloudHypervisor: "v41.0", Containerd: "v1.7.22", PoolManager: "v0.5.0"},
 		ThinPoolDevice: "/dev/nvme1n1",
 		GuestSubnet:    "172.31.0.0/16",
 		Flintlockd:     config.Flintlockd{Port: 9090, Token: "s3cret-token"},
@@ -592,6 +592,62 @@ func (f *fakeAdmin) ListPools(context.Context, string) ([]*poolmgr.Pool, error) 
 	return nil, nil
 }
 
+// recordingHosts is a HostAdmin that holds what it is given and records
+// the order of the calls.
+type recordingHosts struct {
+	mu    sync.Mutex
+	held  map[string]poolmgr.Host
+	calls []string
+}
+
+func (r *recordingHosts) ListHosts(context.Context) ([]poolmgr.HostStatus, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.calls = append(r.calls, "ListHosts")
+	var out []poolmgr.HostStatus
+	for _, h := range r.held {
+		out = append(out, poolmgr.HostStatus{Host: h})
+	}
+	return out, nil
+}
+
+func (r *recordingHosts) GetHost(_ context.Context, name string) (*poolmgr.HostStatus, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	h, ok := r.held[name]
+	if !ok {
+		return nil, poolmgr.ErrNotFound
+	}
+	return &poolmgr.HostStatus{Host: h}, nil
+}
+
+func (r *recordingHosts) AddHost(_ context.Context, h poolmgr.Host) (*poolmgr.Host, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.calls = append(r.calls, "AddHost "+h.Name)
+	if r.held == nil {
+		r.held = map[string]poolmgr.Host{}
+	}
+	r.held[h.Name] = h
+	return &h, nil
+}
+
+func (r *recordingHosts) UpdateHost(_ context.Context, h poolmgr.Host) (*poolmgr.Host, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.calls = append(r.calls, "UpdateHost "+h.Name)
+	r.held[h.Name] = h
+	return &h, nil
+}
+
+func (r *recordingHosts) RemoveHost(_ context.Context, name string) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.calls = append(r.calls, "RemoveHost "+name)
+	delete(r.held, name)
+	return nil
+}
+
 //= docs/requirements/06-fleet.md#pool-manager-install
 //= type=test
 //# The Fleet Controller SHALL verify after installation that the
@@ -599,11 +655,15 @@ func (f *fakeAdmin) ListPools(context.Context, string) ([]*poolmgr.Pool, error) 
 
 //= docs/requirements/06-fleet.md#pool-manager-install
 //= type=test
-//# The Fleet Controller SHALL install the pinned Pool Manager daemon
-//# on the Control Node with a host list generated from the Inventory that
-//# names every Host with its `flintlockd` endpoint, token and TLS settings.
+//# The Fleet Controller SHALL name each Host identically in the
+//# Pool Manager's host list and in the Inventory, because the Runner joins
+//# the two by name when resolving Placement.
 
-func TestControlNodeInstallsAndWaitsForListPools(t *testing.T) {
+// TestControlNodeInstallsAndRegistersHosts checks that the Control Node step
+// runs the script, which names no Host, waits until the daemon answers
+// ListPools, and only then registers every Inventory Host under its
+// Inventory name, at its endpoint, with the fleet's TLS settings.
+func TestControlNodeInstallsAndRegistersHosts(t *testing.T) {
 	t.Parallel()
 	sc, err := scripts.New()
 	if err != nil {
@@ -611,15 +671,25 @@ func TestControlNodeInstallsAndWaitsForListPools(t *testing.T) {
 	}
 	r := &recordingRemote{}
 	admin := &fakeAdmin{fails: 1}
+	hosts := &recordingHosts{}
 	self := fleet.Instance{ID: "control-node", Arch: config.ArchARM64, PrivateIP: "10.0.0.5"}
+	f := testFleet()
+	f.Flintlockd.TLS = config.ServerTLSFiles{CAFile: "/supplied/ca.pem", CertFile: "/supplied/cert.pem", KeyFile: "/supplied/key.pem"}
+	var out strings.Builder
 	cn, err := NewControlNode(ControlNodeOptions{
-		Scripts: sc, Remote: r, Self: self, Fleet: testFleet(), PoolManager: admin, ReadyTimeout: 5 * time.Second,
-		Options: map[string]string{scripts.OptionPoolManagerListen: "10.0.0.5:9443"},
+		Scripts: sc, Remote: r, Self: self, Fleet: f, PoolManager: admin, Hosts: hosts, ReadyTimeout: 5 * time.Second,
+		Options: map[string]string{
+			scripts.OptionPoolManagerListen: "10.0.0.5:9443",
+			scripts.OptionHostCAFile:        "/etc/flintlock-runner/pki/ca.pem",
+			scripts.OptionPoolManagerCert:   "/etc/flintlock-runner/pki/control-node.pem",
+			scripts.OptionPoolManagerKey:    "/etc/flintlock-runner/pki/control-node.key",
+		},
+		Out: &out,
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	inv := &fleet.Inventory{Hosts: []config.HostEntry{{Name: "i-0aaa", Endpoint: "10.0.1.10:9090"}, {Name: "i-0bbb", Endpoint: "10.0.1.11:9090"}}}
+	inv := &fleet.Inventory{Hosts: []config.HostEntry{{Name: "i-0aaa", Endpoint: "10.0.1.10:9090"}, {Name: "renamed-host", Endpoint: "10.0.1.11:9090"}}}
 	if err := cn.InstallPoolManager(context.Background(), inv); err != nil {
 		t.Fatal(err)
 	}
@@ -628,8 +698,8 @@ func TestControlNodeInstallsAndWaitsForListPools(t *testing.T) {
 		t.Fatalf("control node script not run on the Control Node: %+v", c.Instance)
 	}
 	for _, h := range inv.Hosts {
-		if !strings.Contains(c.Script.Content, "'"+h.Name+"'") || !strings.Contains(c.Script.Content, "'"+h.Endpoint+"'") {
-			t.Errorf("host list lacks %s", h.Name)
+		if strings.Contains(c.Script.Content, h.Name) || strings.Contains(c.Script.Content, h.Endpoint) {
+			t.Errorf("the script names %s; the daemon's configuration names no Host", h.Name)
 		}
 	}
 	if strings.Contains(c.Script.Content, "s3cret-token") || !strings.Contains(c.Stdin, "flintlockd_token ") {
@@ -638,14 +708,62 @@ func TestControlNodeInstallsAndWaitsForListPools(t *testing.T) {
 	if admin.calls < 2 {
 		t.Errorf("ListPools called %d times, want a retry until it answered", admin.calls)
 	}
+	wantTLS := poolmgr.HostTLS{CAFile: "/etc/flintlock-runner/pki/ca.pem", CertFile: "/etc/flintlock-runner/pki/control-node.pem", KeyFile: "/etc/flintlock-runner/pki/control-node.key"}
+	for _, e := range inv.Hosts {
+		want := poolmgr.Host{Name: e.Name, Address: e.Endpoint, TLS: wantTLS}
+		if got := hosts.held[e.Name]; got != want {
+			t.Errorf("registered %+v, want %+v", got, want)
+		}
+		if !strings.Contains(out.String(), "registered Host "+e.Name+" with the Pool Manager") {
+			t.Errorf("output does not report %s:\n%s", e.Name, out.String())
+		}
+	}
+	if len(hosts.held) != len(inv.Hosts) {
+		t.Errorf("the Pool Manager holds %v, want only the Inventory's Hosts", hosts.held)
+	}
 
-	// A daemon that never answers fails the install.
-	cn, err = NewControlNode(ControlNodeOptions{Scripts: sc, Remote: r, Self: self, Fleet: testFleet(), PoolManager: &fakeAdmin{fails: 1 << 30}, ReadyTimeout: 1500 * time.Millisecond})
+	// A daemon that never answers fails the install, and no Host is
+	// registered with it.
+	hosts = &recordingHosts{}
+	cn, err = NewControlNode(ControlNodeOptions{Scripts: sc, Remote: r, Self: self, Fleet: testFleet(), PoolManager: &fakeAdmin{fails: 1 << 30}, Hosts: hosts, ReadyTimeout: 1500 * time.Millisecond})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if err := cn.ReloadPoolManager(context.Background(), inv); err == nil || !strings.Contains(err.Error(), "ListPools") {
 		t.Errorf("err = %v", err)
+	}
+	if len(hosts.calls) != 0 {
+		t.Errorf("HostAdmin called before the daemon answered: %v", hosts.calls)
+	}
+}
+
+// TestControlNodeHostTLS checks the TLS settings the daemon is given for
+// every Host: none for an insecure fleet, the CA alone when flintlockd
+// takes a token, and the daemon's own certificate as well when flintlockd
+// authenticates its clients by certificate.
+func TestControlNodeHostTLS(t *testing.T) {
+	t.Parallel()
+	opts := map[string]string{
+		scripts.OptionHostCAFile:      "/pki/ca.pem",
+		scripts.OptionPoolManagerCert: "/pki/cn.pem",
+		scripts.OptionPoolManagerKey:  "/pki/cn.key",
+	}
+	insecure := testFleet()
+	insecure.Flintlockd.Insecure = true
+	mutual := testFleet()
+	mutual.Flintlockd.TLS = config.ServerTLSFiles{CAFile: "/s/ca.pem", CertFile: "/s/c.pem", KeyFile: "/s/k.pem"}
+	for name, tc := range map[string]struct {
+		fleet config.Fleet
+		want  poolmgr.HostTLS
+	}{
+		"insecure":   {insecure, poolmgr.HostTLS{Insecure: true}},
+		"token":      {testFleet(), poolmgr.HostTLS{CAFile: "/pki/ca.pem"}},
+		"mutual TLS": {mutual, poolmgr.HostTLS{CAFile: "/pki/ca.pem", CertFile: "/pki/cn.pem", KeyFile: "/pki/cn.key"}},
+	} {
+		c := &ControlNode{o: ControlNodeOptions{Fleet: tc.fleet, Options: opts}}
+		if got := c.hostTLS(); got != tc.want {
+			t.Errorf("%s: host TLS = %+v, want %+v", name, got, tc.want)
+		}
 	}
 }
 

@@ -486,7 +486,8 @@ type Fleet struct {
 	Remote Remote `yaml:"remote"`
 	// Parallelism bounds concurrent provisioning (FL-012).
 	Parallelism int `yaml:"parallelism"`
-	// Versions pins every installed component (FL-020, FL-050, FL-051).
+	// Versions pins every installed component (FL-020, FL-050, FL-125). The
+	// Pool Manager has to be battery v0.5.0 or later (FL-126).
 	Versions PinnedVersions `yaml:"versions"`
 	// ThinPoolDevice is the block device for the containerd thin pool
 	// (FL-022, FL-023).

@@ -124,9 +124,9 @@ the Host, so no inbound path to the guest is needed.
 - **FL-050** (withdrawn) battery removed its Pool Manager host agent on
   2026-09-07 (commit b675a46a) because flintlock's native MicroVMExec and
   MicroVMSSHProxy services superseded it, and no battery release ships it.
-- **FL-051** The Fleet Controller SHALL install the pinned Pool Manager daemon
-  on the Control Node with a host list generated from the Inventory that
-  names every Host with its `flintlockd` endpoint, token and TLS settings.
+- **FL-051** (withdrawn) battery v0.5.0 reads no Hosts from its
+  configuration file and refuses to start with a `hosts` key in it.
+  Replaced by FL-125 for the daemon, and by FL-127 for its Hosts.
 - **FL-052** The Fleet Controller SHALL name each Host identically in the
   Pool Manager's host list and in the Inventory, because the Runner joins
   the two by name when resolving Placement.
@@ -135,14 +135,57 @@ the Host, so no inbound path to the guest is needed.
 - **FL-054** The Fleet Controller SHALL verify after installation that the
   Pool Manager daemon answers `ListPools` and reports every Host in the
   Inventory as reachable.
-- **FL-055** When run again after the Inventory changes, the Fleet Controller
-  SHALL regenerate the Pool Manager's host list and reload the daemon without
-  interrupting existing Leases.
+- **FL-055** (withdrawn) battery v0.5.0 changes its Hosts while it runs, so
+  the Fleet Controller no longer rewrites a host list or restarts the daemon
+  for a change to the Inventory. Replaced by FL-128 to FL-133.
+- **FL-125** The Fleet Controller SHALL install the pinned Pool Manager
+  daemon on the Control Node with a configuration that names no Host.
+- **FL-126** If the pinned Pool Manager version is older than v0.5.0, then
+  the Fleet Controller SHALL refuse the configuration with an error that
+  names v0.5.0 as the oldest version it supports.
+- **FL-127** When the Pool Manager daemon answers, the Fleet Controller SHALL
+  register with `AddHost` every Inventory Host that the Pool Manager does
+  not hold, with its `flintlockd` endpoint and TLS settings.
+- **FL-128** If `AddHost` answers that the Pool Manager already holds a Host
+  of that name, then the Fleet Controller SHALL read the Host with `GetHost`
+  and bring it in step as FL-129 says, without failing the run.
+- **FL-129** When the Pool Manager holds an Inventory Host with an endpoint
+  or TLS settings other than the Inventory's, the Fleet Controller SHALL
+  update the Host with `UpdateHost`.
+- **FL-130** When the Pool Manager holds a Host that is not in the
+  Inventory, the Fleet Controller SHALL remove the Host from the
+  `flintlock_hosts` of every Pool that names it.
+- **FL-131** When the Pool Manager holds a Host that is not in the
+  Inventory, the Fleet Controller SHALL remove the Host with `RemoveHost`,
+  and SHALL try again for up to one minute while the Pool Manager refuses
+  because a Pool names the Host or a MicroVM is on it.
+- **FL-132** If the Pool Manager still refuses to remove a Host when that
+  minute ends, then the Fleet Controller SHALL report the Host and the
+  reason, and SHALL NOT count the refusal as a failure of the run.
+- **FL-133** The Fleet Controller SHALL NOT restart the Pool Manager daemon
+  for a change to the Inventory's Hosts.
 
 The Pool Manager is the only component that places MicroVMs, so its host
 list is the fleet's definition of "eligible host". The Inventory the Runner
 reads is the same list with the additional detail the Runner needs to reach
 each Host for the Guest Transport.
+
+From battery v0.5.0 the host list is battery's own database, changed while
+the daemon runs through its `HostAdmin` API, and battery keeps each Host's
+TLS settings there. The Fleet Controller makes those calls itself, over the
+Pool Manager endpoint the Runner already dials, once the daemon answers.
+It registers a Host without asking battery to dial it first, so a Host whose
+`flintlockd` is down for a moment is still registered, and a Pool that names
+it is still accepted; FL-047 and FL-054 check reachability. battery removes
+a Host only once no Pool names it and no MicroVM is on it, so the Fleet
+Controller first takes the Host out of the Pools, as drain does (FL-080),
+and then retries for up to a minute while battery still counts MicroVMs
+there. A removal battery still refuses is tried again on the next run; a
+Host whose instance went away with MicroVMs on it may stay in battery for good, which
+the run reports. A fleet that ran battery v0.4 needs no separate step:
+battery v0.5.0 keeps the Hosts of a v0.4 database without TLS settings, and
+the first run updates them (FL-128, FL-129). There is no way back: battery
+v0.4 refuses a database that v0.5.0 has migrated.
 
 ## Inventory and Runner configuration {#inventory-and-runner-configuration}
 

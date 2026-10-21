@@ -1,8 +1,11 @@
 {{template "prelude" .}}
 
-# The Pool Manager daemon on the Control Node (FL-051), with a host list
-# generated from the Inventory (FL-052), regenerated and applied without
-# losing a Lease when the Inventory changes (FL-055).
+# The Pool Manager daemon on the Control Node, with a configuration that
+# names no Host (FL-125). battery v0.5.0 and later keep their Hosts in their
+# own database and refuse to start with a hosts key in the file; the
+# Fleet Controller registers the Inventory's Hosts through battery's
+# HostAdmin API once the daemon answers (FL-127). Nothing here depends on
+# the Inventory, so a change to it never restarts the daemon (FL-133).
 read_secrets
 version={{q .Versions.PoolManager}}
 [ -n "$version" ] || die "fleet.versions pins no pool_manager version"
@@ -15,10 +18,11 @@ ensure_user poolmgrd "$db_dir"
 
 {{- if and .PMCert .PMKey}}
 # The Pool Manager daemon serves TLS from the same certificate and key
-# every Host uses (FL-051), written 0600 root:root because until now only
+# every Host uses, written 0600 root:root because until now only
 # flintlockd, running as root, needed to read them. poolmgrd runs as its
 # own unprivileged system user, so grant that user's group read access
-# rather than widen the file to everyone.
+# rather than widen the file to everyone. The daemon also presents this
+# certificate to flintlockd when the fleet uses mutual TLS.
 if [ -e {{q .PMKey}} ] && [ "$(stat -c '%G:%a' {{q .PMKey}})" != "poolmgrd:640" ]; then
   chgrp poolmgrd {{q .PMKey}}
   chmod 0640 {{q .PMKey}}
@@ -41,51 +45,25 @@ if [ ! -x "$bin" ]; then
   restart=1
 fi
 
-# FL-051: every Inventory Host with its flintlockd endpoint and TLS
-# settings. FL-052: under exactly its Inventory name, because the Runner
-# joins Placement to the Inventory by name. No token: battery's own
-# HostConfig has no field for one, so it has never had a way to send one -
-# authentication is TLS-only (FL-024).
-{{- if .Insecure}}
-host_tls='{"insecure": true}'
-{{- else if and .HostCAFile .MutualTLS}}
-# flintlockd authenticates the Pool Manager by certificate, not a token
-# (FL-024) - it has no other way to send one - so it presents the same
-# certificate the Runner does (PMCert/PMKey, already the Control Node's
-# own identity for the Pool Manager's own API server).
-host_tls="{\"ca_file\": $(json_str {{q .HostCAFile}}), \"cert_file\": $(json_str {{q .PMCert}}), \"key_file\": $(json_str {{q .PMKey}})}"
-{{- else if .HostCAFile}}
-host_tls="{\"ca_file\": $(json_str {{q .HostCAFile}})}"
-{{- else}}
-host_tls='{}'
-{{- end}}
+# The daemon's own API server and nothing else. A file an older Fleet
+# Controller wrote still lists the Hosts; rewriting it here drops them,
+# and the database keeps the Hosts battery took over from it.
 new_config=$(mktemp)
-{
-  echo '{'
-  echo '  "hosts": ['
-  sep=' '
-{{- range .PoolManagerHosts}}
-  printf '   %s{"name": %s, "address": %s, "tls": %s}\n' "$sep" \
-    "$(json_str {{q .Name}})" "$(json_str {{q .Endpoint}})" "$host_tls"
-  sep=','
-{{- end}}
-  echo '  ],'
-  printf '  "api_server": {"addr": %s, "tls": %s}\n' "$(json_str {{q .PMListen}})" \
+printf '{\n  "api_server": {"addr": %s, "tls": %s}\n}\n' "$(json_str {{q .PMListen}})" \
 {{- if and .PMCert .PMKey}}
-    "{\"cert_file\": $(json_str {{q .PMCert}}), \"key_file\": $(json_str {{q .PMKey}})}"
+  "{\"cert_file\": $(json_str {{q .PMCert}}), \"key_file\": $(json_str {{q .PMKey}})}" \
 {{- else}}
-    '{"insecure": true}'
+  '{"insecure": true}' \
 {{- end}}
-  echo '}'
-} >"$new_config"
+  >"$new_config"
 if write_file "$etc/config.json" 0600 poolmgrd:poolmgrd <"$new_config"; then
   restart=1
 fi
 rm -f "$new_config"
 
-# The Lease state lives in the SQLite database under $db_dir, which is
-# never removed here: a restart for a changed host list keeps every Lease,
-# and the Runner's heartbeats resume against the same records (FL-055).
+# The Lease state and the Hosts live in the SQLite database under $db_dir,
+# which is never removed here: a restart for a new version keeps every
+# Lease and every Host.
 if write_file /etc/systemd/system/poolmgrd.service 0644 <<FLR_EOF
 [Unit]
 Description=battery Pool Manager daemon

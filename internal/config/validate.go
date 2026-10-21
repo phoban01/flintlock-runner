@@ -10,6 +10,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"golang.org/x/mod/semver"
 )
 
 // ErrInvalid is matched by every *ValidationError, so callers can write
@@ -657,7 +659,9 @@ func (v *validator) fleet(f *Fleet) {
 		v.errorf("fleet.versions", "at least one of firecracker and cloud_hypervisor has to be pinned")
 	}
 	v.required("fleet.versions.containerd", f.Versions.Containerd)
-	v.required("fleet.versions.pool_manager", f.Versions.PoolManager)
+	if v.required("fleet.versions.pool_manager", f.Versions.PoolManager) {
+		v.poolManagerVersion(f.Versions.PoolManager)
+	}
 	v.absPath("fleet.thin_pool_device", f.ThinPoolDevice)
 	if v.required("fleet.guest_subnet", f.GuestSubnet) {
 		if _, _, err := net.ParseCIDR(f.GuestSubnet); err != nil {
@@ -688,6 +692,31 @@ func (v *validator) fleet(f *Fleet) {
 	}
 	v.positive("fleet.drain_timeout", f.DrainTimeout)
 	v.positive("fleet.verification_timeout", f.VerificationTimeout)
+}
+
+// MinPoolManagerVersion is the oldest battery release the Fleet Controller
+// installs: the first that takes its Hosts through the HostAdmin API.
+const MinPoolManagerVersion = "v0.5.0"
+
+//= docs/requirements/06-fleet.md#pool-manager-install
+//# If the pinned Pool Manager version is older than v0.5.0, then
+//# the Fleet Controller SHALL refuse the configuration with an error that
+//# names v0.5.0 as the oldest version it supports.
+
+// poolManagerVersion refuses a pinned battery release older than
+// MinPoolManagerVersion. Older releases read their Hosts only from their
+// configuration file, which the Fleet Controller no longer writes, and
+// v0.5.0 and later refuse to start with Hosts in it, so no one
+// configuration serves both. A release candidate of v0.5.0 is accepted.
+// The pin is a release tag, because the Control Node downloads that
+// release's asset.
+func (v *validator) poolManagerVersion(version string) {
+	switch {
+	case !semver.IsValid(version):
+		v.errorf("fleet.versions.pool_manager", "must be a battery release tag such as %s, got %q", MinPoolManagerVersion, version)
+	case semver.Compare(version, MinPoolManagerVersion+"-0") < 0:
+		v.errorf("fleet.versions.pool_manager", "battery %s is too old: the Fleet Controller supports %s or later, which take their Hosts through the HostAdmin API", version, MinPoolManagerVersion)
+	}
 }
 
 // discovery validates the discovery selection and reports whether only the

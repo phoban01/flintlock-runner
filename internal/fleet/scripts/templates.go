@@ -230,12 +230,18 @@ const prewarmTemplate = "prewarm.sh.tmpl"
 const verifyActiveTemplate = "verify_active.sh.tmpl"
 
 //= docs/requirements/06-fleet.md#pool-manager-install
-//# The Fleet Controller SHALL name each Host identically in the
-//# Pool Manager's host list and in the Inventory, because the Runner joins
-//# the two by name when resolving Placement.
+//# The Fleet Controller SHALL install the pinned Pool Manager
+//# daemon on the Control Node with a configuration that names no Host.
 
-// controlNodeTemplate installs the Pool Manager daemon with a host list
-// generated from the Inventory entries, by their names (FL-051, FL-055).
+//= docs/requirements/06-fleet.md#pool-manager-install
+//# The Fleet Controller SHALL NOT restart the Pool Manager daemon
+//# for a change to the Inventory's Hosts.
+
+// controlNodeTemplate installs the pinned Pool Manager daemon with a
+// configuration that holds its own API server and no Host. It renders the
+// same whatever the Inventory holds, so it restarts the daemon only for a
+// new version, configuration or unit; the Fleet Controller registers the
+// Hosts over the daemon's HostAdmin API (FL-127).
 const controlNodeTemplate = "control_node.sh.tmpl"
 
 //= docs/requirements/06-fleet.md#drain-and-teardown

@@ -33,6 +33,7 @@ func (p *PoolManager) newGRPCServer() *grpc.Server {
 	poolmgrv1.RegisterPoolAdminServer(srv, &poolAdminServer{pm: p})
 	poolmgrv1.RegisterLeaseServer(srv, &leaseServer{pm: p})
 	poolmgrv1.RegisterEventsServer(srv, &eventsServer{pm: p})
+	poolmgrv1.RegisterHostAdminServer(srv, &hostAdminServer{pm: p})
 	return srv
 }
 

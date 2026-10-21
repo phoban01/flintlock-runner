@@ -234,7 +234,8 @@ func EndpointAddress(inst fleet.Instance, overrides map[string]string) string {
 }
 
 // Endpoint is inst's flintlockd endpoint, host:port, for the Inventory
-// (FL-060) and the Pool Manager host list (FL-051).
+// (FL-060), which is also the endpoint the Pool Manager holds for it
+// (FL-127).
 func Endpoint(inst fleet.Instance, f *config.Fleet) string {
 	port := config.DefaultFlintlockdPort
 	var overrides map[string]string

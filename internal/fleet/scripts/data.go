@@ -93,7 +93,9 @@ const (
 	// certificate and key on the Control Node; empty means insecure.
 	OptionPoolManagerCert = "pool_manager_tls_cert"
 	OptionPoolManagerKey  = "pool_manager_tls_key"
-	// OptionHostCAFile is the CA the daemon verifies flintlockd with.
+	// OptionHostCAFile is the CA the daemon verifies flintlockd with. The
+	// script does not read it: the Fleet Controller gives it to battery in
+	// each Host's TLS settings (FL-127).
 	OptionHostCAFile = "host_ca_file"
 	// OptionStopFlintlockd lets drain stop flintlockd once no MicroVM runs.
 	OptionStopFlintlockd = "stop_flintlockd"
@@ -184,13 +186,11 @@ type data struct {
 	GoPrewarm     []goModule
 	MirrorPrewarm []string
 
-	// PoolManagerConfig is the daemon's JSON config without secrets
-	// (control_node).
-	PoolManagerHosts []pmHost
-	PMListen         string
-	PMCert           string
-	PMKey            string
-	HostCAFile       string
+	// PMListen, PMCert and PMKey are the daemon's own API server in its
+	// JSON configuration (control_node), which names no Host (FL-125).
+	PMListen string
+	PMCert   string
+	PMKey    string
 
 	// Runner is the Runner's service on the Control Node (runner).
 	Runner runnerService
@@ -230,11 +230,6 @@ type goModule struct {
 type image struct {
 	Arch string
 	Ref  string
-}
-
-type pmHost struct {
-	Name     string
-	Endpoint string
 }
 
 type renderedStep struct {
@@ -360,7 +355,7 @@ func newData(step fleet.Step, in fleet.RenderInput, atBoot bool) (*data, error) 
 		return nil, err
 	}
 	d.images(in.Profiles)
-	d.poolManager(in)
+	d.poolManager()
 	if step == fleet.StepRunner {
 		if err := d.runner(); err != nil {
 			return nil, err
@@ -693,17 +688,15 @@ func (d *data) images(profiles []config.Profile) {
 	}
 }
 
-func (d *data) poolManager(in fleet.RenderInput) {
-	for _, h := range in.Inventory.Hosts {
-		d.PoolManagerHosts = append(d.PoolManagerHosts, pmHost{Name: h.Name, Endpoint: h.Endpoint})
-	}
+// poolManager is the daemon's own API server. The Inventory plays no part:
+// the daemon's Hosts go through battery's HostAdmin API (FL-127).
+func (d *data) poolManager() {
 	d.PMListen = d.Options[OptionPoolManagerListen]
 	if d.PMListen == "" {
 		d.PMListen = ":9443"
 	}
 	d.PMCert = d.Options[OptionPoolManagerCert]
 	d.PMKey = d.Options[OptionPoolManagerKey]
-	d.HostCAFile = d.Options[OptionHostCAFile]
 }
 
 // runnerService is what the runner template sees.
