@@ -86,21 +86,6 @@ update-alternatives --set iptables /usr/sbin/iptables-legacy
 update-alternatives --set ip6tables /usr/sbin/ip6tables-legacy
 
 #= docs/requirements/13-guest-image.md#guest-docker
-#/ The Guest Image's Docker image SHALL run Docker Engine without
-#/ the iptables `raw` table, which the kernel does not have.
-#
-# Docker Engine 28 and later drop packets to a container's address that
-# come from outside its bridge, with rules in the raw table. Without that
-# table every `docker run` with a network fails, unless
-# DOCKER_INSECURE_NO_IPTABLES_RAW=1 tells it to skip those rules. The
-# guest's only network is the Host's guest bridge, so what those rules
-# would stop is another guest on that bridge that routes to a container's
-# address in this guest.
-mkdir -p /etc/systemd/system/docker.service.d
-printf '[Service]\nEnvironment=DOCKER_INSECURE_NO_IPTABLES_RAW=1\n' \
-	>/etc/systemd/system/docker.service.d/20-no-iptables-raw.conf
-
-#= docs/requirements/13-guest-image.md#guest-docker
 #/ The Guest Image's Docker image SHALL contain Go at the version
 #/ pinned in its sources, on the `PATH`, with `GOTOOLCHAIN` set to `auto`.
 #

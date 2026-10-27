@@ -101,14 +101,12 @@ for tool in iptables ip6tables; do
 	if [[ $got == *"(legacy)"* ]]; then ok "$tool is $got"; else fail "$tool is '$got', not the legacy backend"; fi
 done
 
-#= docs/requirements/13-guest-image.md#guest-docker
-#= type=test
-#/ The Guest Image's Docker image SHALL run Docker Engine without
-#/ the iptables `raw` table, which the kernel does not have.
-if unit_values docker.service Environment | tr ' ' '\n' | grep -qx 'DOCKER_INSECURE_NO_IPTABLES_RAW=1'; then
-	ok "Docker Engine runs without the iptables raw table"
+# GI-058 is withdrawn: the kernel has the raw table (GI-012), so Docker
+# Engine writes its rules there. The setting that skipped them must be gone.
+if unit_values docker.service Environment | tr ' ' '\n' | grep -q '^DOCKER_INSECURE_NO_IPTABLES_RAW='; then
+	fail "docker.service sets DOCKER_INSECURE_NO_IPTABLES_RAW; the kernel has the raw table, so Docker Engine must write its rules there"
 else
-	fail "docker.service does not set DOCKER_INSECURE_NO_IPTABLES_RAW=1; docker run fails on a kernel with no raw table"
+	ok "Docker Engine writes its iptables raw table rules"
 fi
 
 #= docs/requirements/13-guest-image.md#guest-docker
