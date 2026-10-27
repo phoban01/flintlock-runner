@@ -505,7 +505,8 @@ when it was written:
   `status.leaseID`.
 
 The claim backend builds on battery-operator's `api/v1alpha1` and its
-Client Library, `pkg/claimclient`, at v0.1.0. The Client Library creates the
+Client Library, `pkg/claimclient`, now at v0.5.0, which runs battery v0.5.0.
+The Client Library creates the
 claim, its Secret and its claim tokens, waits for `Bound`, renews the claim
 and deletes it.
 
@@ -585,8 +586,10 @@ the condition, never aborts a Job this way.
   (battery-operator IN-002). It was never implemented.
 
 The Inventory Controller runs in battery-operator from v0.1.0. It gives
-battery its Hosts by rewriting battery's configuration and restarting it,
-because battery v0.3.3 has no call to change them.
+battery its Hosts. Up to v0.4 it rewrote battery's configuration and
+restarted it, because battery v0.3.3 had no call to change them. From v0.5.0
+it calls battery's `HostAdmin` API instead, and never restarts battery
+(battery-operator ADR 0008).
 
 ## Exec Agent {#exec-agent}
 

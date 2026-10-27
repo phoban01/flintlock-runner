@@ -5,7 +5,7 @@ The Kubernetes manifests of a cluster fleet, specified in
 resources: battery schedules MicroVMs and owns the Pools, the Runner claims
 a MicroVM with a `MicroVMClaim`, and the Exec Agent on each Host relays
 every Stage to that Host's `flintlockd`. The resources and the Exec Agent
-come from [battery-operator v0.1.0](https://github.com/phoban01/battery-operator/releases/tag/v0.1.0);
+come from [battery-operator v0.5.0](https://github.com/phoban01/battery-operator/releases/tag/v0.5.0);
 see [The Exec Agent](#the-exec-agent).
 
 The Hosts come from battery-operator too. They boot its
@@ -39,10 +39,10 @@ the one before it made.
 
 1. **cert-manager**, which battery-operator's Manifests need for the
    Operator's own certificates.
-2. **battery-operator v0.1.0**, `config/default` and `config/exec-agent`,
+2. **battery-operator v0.5.0**, `config/default` and `config/exec-agent`,
    with the images of that release
-   (`ghcr.io/phoban01/battery-operator:v0.1.0` and
-   `ghcr.io/phoban01/battery-operator/exec-agent:v0.1.0`). They make the
+   (`ghcr.io/phoban01/battery-operator:v0.5.0` and
+   `ghcr.io/phoban01/battery-operator/exec-agent:v0.5.0`). They make the
    namespace `battery-operator-system` and serve the `Pool` and
    `MicroVMClaim` resources (`battery.liquidmetal-x.dev/v1alpha1`). They
    run the Operator with battery as its sidecar, the Inventory Controller,
@@ -88,7 +88,7 @@ What each side provides:
 
 In the workload cluster:
 
-- **battery-operator v0.1.0**: its Manifests, `config/default` and
+- **battery-operator v0.5.0**: its Manifests, `config/default` and
   `config/exec-agent`, which run the Operator, battery, the Exec Agent on
   every Host and the Inventory Controller, and serve the `Pool` and
   `MicroVMClaim` resources. See [Order of application](#order-of-application).
@@ -133,7 +133,7 @@ templates, with the settings of [Host pools](#host-pools).
 
 The Exec Agent comes from battery-operator's Manifests, not from
 `deploy/`. `flr agent`, this repository's Exec Agent, is gone (KF-170 to
-KF-182 are withdrawn). Apply battery-operator v0.1.0's Manifests,
+KF-182 are withdrawn). Apply battery-operator v0.5.0's Manifests,
 `config/default` and `config/exec-agent`, to the same cluster before
 `deploy/` ([Order of application](#order-of-application)).
 battery-operator's documentation says what they need: cert-manager for the

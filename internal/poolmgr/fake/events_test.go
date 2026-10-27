@@ -115,7 +115,8 @@ func TestEveryEventTypeIsEmittedAtItsTransition(t *testing.T) {
 	// the next tick reports.
 	h.pm.SetFaults(poolmgr.Faults{HookFailures: []poolmgr.HookFailure{{Hook: poolmgr.HookCreate, Remaining: 1}}})
 	before, _ := host.counts()
-	if _, err := h.client.ClaimVM(h.ctx, h.ref("pool")); err != nil {
+	third, err := h.client.ClaimVM(h.ctx, h.ref("pool"))
+	if err != nil {
 		t.Fatalf("ClaimVM: %v", err)
 	}
 	failed := eventOfType(t, collect(poolmgrv1.EventType_VM_HOOK_FAILED), poolmgrv1.EventType_VM_HOOK_FAILED)
@@ -136,6 +137,29 @@ func TestEveryEventTypeIsEmittedAtItsTransition(t *testing.T) {
 	shortfall := eventOfType(t, collect(poolmgrv1.EventType_POOL_SIZE_BELOW_TARGET), poolmgrv1.EventType_POOL_SIZE_BELOW_TARGET)
 	if p := payloadOf(t, shortfall); p["target"] != float64(1) || p["available"] != float64(0) {
 		t.Fatalf("POOL_SIZE_BELOW_TARGET payload = %v, want target 1 and nothing available", p)
+	}
+
+	// Deleting the Pool once its Lease is released: every MicroVM it held
+	// goes with it, each with its own event.
+	if err := h.client.ReleaseVM(h.ctx, third.LeaseID); err != nil {
+		t.Fatalf("ReleaseVM: %v", err)
+	}
+	collect(poolmgrv1.EventType_VM_DELETED_ON_RELEASE)
+	held := map[string]bool{}
+	for _, vm := range h.pm.VMs() {
+		if vm.UID != "" {
+			held[vm.UID] = true
+		}
+	}
+	if len(held) == 0 {
+		t.Fatal("the pool holds no created microvm to delete with it")
+	}
+	if err := h.client.DeletePool(h.ctx, h.ref("pool")); err != nil {
+		t.Fatalf("DeletePool: %v", err)
+	}
+	onDelete := eventOfType(t, collect(poolmgrv1.EventType_VM_DELETED_ON_POOL_DELETE), poolmgrv1.EventType_VM_DELETED_ON_POOL_DELETE)
+	if !held[onDelete.VMUID] {
+		t.Fatalf("VM_DELETED_ON_POOL_DELETE names %q, want one of the pool's microvms %v", onDelete.VMUID, held)
 	}
 
 	// Every type the proto declares was seen at one of those transitions.

@@ -7,7 +7,7 @@
 # The Runner of a cluster fleet claims each MicroVM from battery-operator
 # with a MicroVMClaim (12-cluster-fleet.md#battery-claims), and runs each
 # Stage through the Exec Agent of the claim's Host over the agent-exec
-# Guest Transport (#agent-exec-transport). battery-operator v0.1.0's
+# Guest Transport (#agent-exec-transport). battery-operator v0.5.0's
 # Manifests provide the resources, battery and the Exec Agents
 # (deploy/README.md).
 #
@@ -33,7 +33,7 @@ pool_manager:
     holder_service_account: flintlock-runner-holder
     # The ConfigMap battery-operator writes its serving CA to, which every
     # Exec Agent is verified against (KF-186). These are battery-operator
-    # v0.1.0's names, and the defaults; deploy/runner/rbac.yaml lets the
+    # v0.5.0's names, and the defaults; deploy/runner/rbac.yaml lets the
     # Runner read this one ConfigMap.
     serving_ca:
       namespace: battery-operator-system
