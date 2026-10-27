@@ -7,12 +7,6 @@
 //
 //	run                 start the Runner (the gitlab-runner run loop with the flintlock executor)
 //	config show         print the effective configuration with secrets redacted
-//	fleet provision     turn discovered instances into Hosts and write the Inventory (--dry-run: print the plan)
-//	fleet verify        check Hosts, Pools and Host Services
-//	fleet up            provision, then verify with the Pools declared (--install-runner: run the Runner under systemd)
-//	fleet drain         remove a Host from every Pool and wait for its Leases
-//	fleet teardown      delete Pools, stop services, remove the Inventory
-//	fleet emit-userdata print the launch-template user-data, gzip-compressed
 //	host-services       publish the addresses of this Host's Host Services on its Node
 package main
 
@@ -84,11 +78,6 @@ func newApp() *cli.App {
 				Usage:  "print the effective configuration with every secret redacted (CF-006)",
 				Action: configShow,
 			}},
-		},
-		{
-			Name:        "fleet",
-			Usage:       "provision and operate the Host fleet",
-			Subcommands: fleetCommands(productionSeams()),
 		},
 		hostServicesCommand(),
 	}

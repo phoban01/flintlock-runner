@@ -9,10 +9,11 @@ the live state.
 ## Constraints this phase
 
 - **No EC2.** EC2 remains the production target, but no instances exist for
-  development or testing. The EC2 and Systems Manager code paths are built
-  behind narrow interfaces and tested against fakes (`TD-040` to `TD-043`).
-  A static discovery provider over SSH (`TD-044`) is the path that can be
-  exercised against any Linux machine.
+  development or testing. The EC2 and Systems Manager code paths were built
+  behind narrow interfaces and tested against fakes (`TD-040` to `TD-043`),
+  with a static discovery provider over SSH (`TD-044`) for any Linux
+  machine. #148 removed them with the fleet stack; battery-operator makes
+  the Hosts now, and `hack/real-host` runs Jobs on a real Host next to it.
 - **No KVM locally.** The development machine (an arm64 OrbStack VM) has no
   `/dev/kvm`, so no real `flintlockd` runs here. The fake Host (`TD-020` to
   `TD-026`) stands in. A hardware tier (`TD-052`) runs the same scenarios
@@ -71,14 +72,15 @@ script; six issues opened from the table below.
 | `scheduler` | `internal/scheduler` | SC | interfaces | capacity refusal, unknown image, placement both paths |
 | `config` | `internal/config` | CF | nothing | validation cases, defaults, reload |
 | `executor` | `internal/executor`, `cmd/flr run` | EX-001..EX-033, EX-060..EX-066, GL, OB, SE (runner-side) | all of the above | successful job, script failure, cancel, timeout, artifacts, cache, env injection |
-| `fleet` | `internal/fleet`, `cmd/flr fleet` | FL, TD-040..TD-044, SE (fleet-side) | `config` | static-provider provision against a local SSH target; script lint |
+| `fleet` | `internal/fleet`, `cmd/flr fleet`; removed in #148 | FL, TD-040..TD-044, SE (fleet-side) | `config` | static-provider provision against a local SSH target; script lint |
 | `harness` | `internal/testing/harness`, `make e2e` | TD-050..TD-054 | `fakes` to boot, `executor` to run a job | every TD-051 scenario; hardware tier gated by env var |
 
 `fakes` and `config` start immediately after Phase 0. `poolmgr`, `hosts` and
 `scheduler` start as soon as the corresponding fake exists, which is days
 not weeks since the fakes are the first thing `fakes` delivers. `executor`
 starts against interfaces and mocks and integrates as the others land.
-`fleet` is independent throughout.
+`fleet` is independent throughout. It was built, and #148 removed it once
+battery-operator made the Hosts (Phase 6).
 
 OB and SE requirements are cross-cutting; they are owned by the package
 that owns the behaviour (listed above as runner-side or fleet-side) rather
@@ -96,7 +98,9 @@ a tagged release when one exists; PR #45 already returns the host on the claim.
 
 Only when an account exists. The `ec2` discovery provider and the `ssm`
 remote against real services, the launch-template path, and a metal
-instance in the hardware tier.
+instance in the hardware tier. This phase did not happen as planned: the
+fleet moved to Kubernetes (Phase 4), and #148 removed the `ec2` and `ssm`
+code with the fleet stack (Phase 6).
 
 ### Phase 4: cluster fleet
 
@@ -205,6 +209,20 @@ no network does not. The held branches of Phase 4 are not merged as they stand:
 specified for the claim design. `wp/hardening-2` (HI-064..HI-066, KF-139)
 carried over; its HI part is battery-operator's now.
 
+### Phase 6: remove the fleet stack
+
+Decided with #148: battery-operator v0.5.0 makes the Hosts, so the fleet
+stack goes. Its Host Image boots a Host with `flintlockd`, containerd and
+the Host Services' gateway; its Cluster API templates make the Host pools
+on EC2; its Inventory Controller registers every Host with battery through
+battery's HostAdmin API (its ADR 0008), and battery runs as its sidecar.
+#148 removes the `flr fleet` subcommands, `internal/fleet`, the `fleet`
+configuration section, the Inventory refresh in `flr run` and
+`docs/fleet/`, and withdraws FL-001 to FL-093, FL-116 to FL-124, CF-060,
+CF-061 and TD-040 to TD-044. The Host services section of `06-fleet.md`
+stays in force for the Host Agent. The direct battery backend, the fake
+Pool Manager and `fake-poolmgr` stay as the test substrate.
+
 ## Running agents
 
 From a Claude Code session: one agent per work package, each with
@@ -225,6 +243,8 @@ interfaces PR becomes the bottleneck.
    committed.
 4. **M4 Fleet.** Static-provider provisioning of a real Linux host over
    SSH, host services included, verified by `fleet verify` against the
-   fake Pool Manager binary. Snapshot committed.
+   fake Pool Manager binary. Snapshot committed. Superseded: #148 removed
+   the fleet stack, and `hack/real-host` is the real-Host run now.
 5. **M5 Hardware.** Hardware tier green against at least one KVM host.
-6. **M6 EC2.** Deferred until an account exists.
+6. **M6 EC2.** Deferred until an account exists. The Hosts on EC2 are
+   battery-operator's Host pools.

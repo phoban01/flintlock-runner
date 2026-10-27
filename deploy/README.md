@@ -288,7 +288,7 @@ Settings per service, in `host-agent/services/<service>/`:
 | `registry_mirror` | zot | `registry-mirror.upstreams`, `prewarm.registry-mirror.images` |
 | `http_cache` | nginx | `http-cache.upstreams` |
 
-The software is what push provisioning runs (`internal/fleet/scripts`), at
+The software is what the removed fleet stack installed on a Host (#148), at
 the same versions, and each configuration is ported from there. The
 registry mirror is zot rather than distribution because one zot is a
 pull-through cache of every upstream, where a distribution registry proxies

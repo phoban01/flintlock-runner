@@ -2,7 +2,9 @@
 
 Every Host runs four Host Services on its guest bridge: `buildkitd`, a Go
 module proxy, a pull-through registry mirror and an HTTP cache
-(`docs/requirements/06-fleet.md`, section "Host services"). The Executor
+(`docs/requirements/06-fleet.md`, section "Host services"). The Host Agent
+of `deploy/host-agent` runs them (`docs/requirements/12-cluster-fleet.md`,
+KF-070 to KF-076). The Executor
 points each Job at the services of the Host its MicroVM runs on, and only
 that Host (SE-053). This page says what that sharing means for the Jobs on
 one Host, as `docs/requirements/09-security.md` requires the Runner to

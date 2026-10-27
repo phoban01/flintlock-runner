@@ -49,16 +49,6 @@ const (
 	DefaultPrepareTimeout                      = 5 * time.Minute
 	DefaultGracefulKillTimeout                 = 30 * time.Second
 	DefaultTransportDeadline                   = 30 * time.Second
-	DefaultFleetParallelism                    = 4
-	DefaultFlintlockdPort                      = 9090
-	DefaultGuestSubnet                         = "172.31.0.0/16"
-	DefaultHostReserveVCPU                     = 2
-	DefaultHostReserveMemoryMB                 = 4096
-	DefaultInventoryPath                       = "/etc/flintlock-runner/inventory.yaml"
-	DefaultRunnerConfigPath                    = "/etc/flintlock-runner/config.yaml"
-	DefaultDrainTimeout                        = 30 * time.Minute
-	DefaultVerificationTimeout                 = 10 * time.Minute
-	DefaultSSHPort                             = 22
 	DefaultBuildkitPort                        = 1234
 	DefaultGoProxyPort                         = 3000
 	DefaultRegistryMirrorPort                  = 5000
@@ -98,7 +88,6 @@ func ApplyDefaults(c *Config) {
 	applyProfileDefaults(c)
 	applyPoolManagerDefaults(&c.PoolManager)
 	applyExecutorDefaults(&c.Executor)
-	applyFleetDefaults(c.Fleet)
 	applyHostServicesDefaults(&c.HostServices)
 	applyDistributedCacheDefaults(c.DistributedCache)
 	applyObservabilityDefaults(&c.Observability)
@@ -311,51 +300,6 @@ func applyExecutorDefaults(e *Executor) {
 	}
 	if e.TransportDeadline == 0 {
 		e.TransportDeadline = DefaultTransportDeadline
-	}
-}
-
-func applyFleetDefaults(f *Fleet) {
-	if f == nil {
-		return
-	}
-	if f.Remote.Mode == "" {
-		// The static provider (TD-044) lists machines that have no Systems
-		// Manager agent, so it defaults to SSH; everything else to SSM.
-		f.Remote.Mode = RemoteSSM
-		d := &f.Discovery
-		if len(d.Static) > 0 && d.TagKey == "" && d.TagValue == "" && len(d.InstanceIDs) == 0 {
-			f.Remote.Mode = RemoteSSH
-		}
-	}
-	if f.Remote.Mode == RemoteSSH && f.Remote.SSH.Port == 0 {
-		f.Remote.SSH.Port = DefaultSSHPort
-	}
-	if f.Parallelism == 0 {
-		f.Parallelism = DefaultFleetParallelism
-	}
-	if f.GuestSubnet == "" {
-		f.GuestSubnet = DefaultGuestSubnet
-	}
-	if f.Flintlockd.Port == 0 {
-		f.Flintlockd.Port = DefaultFlintlockdPort
-	}
-	if f.HostReserve.VCPU == 0 {
-		f.HostReserve.VCPU = DefaultHostReserveVCPU
-	}
-	if f.HostReserve.MemoryMB == 0 {
-		f.HostReserve.MemoryMB = DefaultHostReserveMemoryMB
-	}
-	if f.InventoryPath == "" {
-		f.InventoryPath = DefaultInventoryPath
-	}
-	if f.RunnerConfigPath == "" {
-		f.RunnerConfigPath = DefaultRunnerConfigPath
-	}
-	if f.DrainTimeout == 0 {
-		f.DrainTimeout = DefaultDrainTimeout
-	}
-	if f.VerificationTimeout == 0 {
-		f.VerificationTimeout = DefaultVerificationTimeout
 	}
 }
 

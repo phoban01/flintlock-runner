@@ -86,7 +86,7 @@ func (s *poolAdminServer) UpdatePool(_ context.Context, req *poolmgrv1.UpdatePoo
 }
 
 // DeletePool implements poolmgrv1.PoolAdminServer. It refuses while a Lease
-// is outstanding and otherwise deletes the Pool's MicroVMs (FL-081).
+// is outstanding and otherwise deletes the Pool's MicroVMs.
 func (s *poolAdminServer) DeletePool(ctx context.Context, req *poolmgrv1.DeletePoolRequest) (*emptypb.Empty, error) {
 	if err := s.pm.deletePool(ctx, refFromProto(req.GetRef())); err != nil {
 		return nil, err

@@ -12,7 +12,7 @@ For `linux/amd64`, `linux/arm64`, `darwin/amd64` and `darwin/arm64`:
 
 | Archive | Contents |
 |---|---|
-| `flr_<version>_<os>_<arch>.tar.gz` | `flr`: the Runner, which a Control Node installs, and the `fleet` commands |
+| `flr_<version>_<os>_<arch>.tar.gz` | `flr`: the Runner, the same binary as the `flr` image, and `config show` |
 | `flintlock-devtools_<version>_<os>_<arch>.tar.gz` | `fake-poolmgr`, the stand-in Pool Manager an early fleet can run without battery (TD-009), and `flintlock-devstack`, the local demo stack |
 | `flintlock-runner-fleet.yaml` | the Fleet Manifests: `kustomize build deploy/`, with every image of this project by the digest this release pushed |
 | `images.txt` | each image tag this release pushed, next to the digest it names |
@@ -58,13 +58,12 @@ rather than the build's, so the same tag builds the same bytes.
 
 ### On macOS
 
-The darwin builds are for operating a fleet from a Mac: `config show` and
-the `fleet` commands that reach Hosts over SSH or Systems Manager. Two things
-still need Linux. `fleet provision` installs the Pool Manager daemon on the
-machine it runs on, as a systemd service, so run it on the Control Node.
-And the Hosts themselves need Linux with KVM. The unit tests run on macOS on
-every pull request that changes the packaging; the end-to-end harness runs
-on Linux only.
+The darwin builds are for working on a fleet from a Mac: `config show`,
+and `flr run` against the fake stack or a cluster the Mac can reach. The
+Hosts themselves need Linux with KVM, and the Runner of a cluster fleet
+runs from the `flr` image, not from an archive. The unit tests run on macOS
+on every pull request that changes the packaging; the end-to-end harness
+runs on Linux only.
 
 The binaries are not signed or notarized. A file downloaded with a browser
 carries the quarantine attribute, which Gatekeeper refuses to run; clear it

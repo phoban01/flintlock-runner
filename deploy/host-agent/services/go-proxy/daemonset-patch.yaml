@@ -4,7 +4,7 @@
 #/ The Host Agent SHALL configure each Host Service as FL-102 to
 #/ FL-107, FL-114 and FL-115 require.
 # athens.toml.tmpl and nginx-go-proxy.conf.tmpl carry the configuration of
-# internal/fleet/scripts/templates/host_services.sh.tmpl: modules on the
+# the removed fleet stack's host_services.sh.tmpl: modules on the
 # cache directory, the public proxy for public paths and the version control
 # host for the private patterns (FL-105), the checksum database for all but
 # the private patterns (FL-114), and private listings served from cache

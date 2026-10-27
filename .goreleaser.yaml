@@ -34,7 +34,7 @@ builds:
     binary: flintlock-devstack
 
 archives:
-  # The Runner on its own, which is what a Control Node installs.
+  # The Runner on its own.
   - id: runner
     ids: [flr]
     name_template: "flr_{{ .Version }}_{{ .Os }}_{{ .Arch }}"

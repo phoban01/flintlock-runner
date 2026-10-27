@@ -4,7 +4,7 @@
 #/ The Host Agent SHALL configure each Host Service as FL-102 to
 #/ FL-107, FL-114 and FL-115 require.
 # buildkitd.toml.tmpl carries the configuration of
-# internal/fleet/scripts/templates/host_services.sh.tmpl: rootless, the
+# the removed fleet stack's host_services.sh.tmpl: rootless, the
 # overlayfs snapshotter and a garbage collection limit (FL-102), the
 # registry mirror first (FL-103), storage under the cache directory
 # (FL-107). The push-provisioned firewall for the buildkit user (SE-030,

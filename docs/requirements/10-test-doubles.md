@@ -86,22 +86,22 @@ client together rather than letting them drift apart.
 
 ## Fake AWS {#fake-aws}
 
-- **TD-040** The Fleet Controller SHALL access EC2 and Systems Manager
-  through narrow interfaces of its own so that fakes can stand in for the
-  AWS SDK.
-- **TD-041** The project SHALL provide fakes for `DescribeInstances`,
-  `SendCommand`, `GetCommandInvocation`, `ListCommandInvocations` and
-  `GetParameter` that record every call and return results the test
-  configures.
-- **TD-042** The fake Systems Manager SHALL capture the script content of
-  every `SendCommand` so that tests can assert on what would have run on a
+- **TD-040** (withdrawn) Replaced by battery-operator's own tests of its
+  Host Image and Inventory Controller. The fleet stack, with its EC2 and
+  Systems Manager interfaces, was removed in #148.
+- **TD-041** (withdrawn) Replaced by battery-operator's own tests of its
+  Host Image and Inventory Controller; this project calls no AWS API.
+- **TD-042** (withdrawn) Replaced by battery-operator's own tests of its
+  Host Image; nothing sends a script to a Host.
+- **TD-043** (withdrawn) Replaced by battery-operator's own tests of its
+  Host Image (its HI-008 check stage); this project sends no script to a
   Host.
-- **TD-043** Every provisioning script the Fleet Controller sends to a Host
-  SHALL pass `bash -n` and `shellcheck` in continuous integration.
-- **TD-044** The Fleet Controller SHALL provide a static discovery provider
-  that reads Hosts from a list in the configuration, so that provisioning
-  over SSH can be exercised against any Linux machine without an AWS
-  account.
+- **TD-044** (withdrawn) Replaced by the claim harness, which runs every
+  TD-051 scenario over the claim stack (KF-192), and by `hack/real-host`,
+  which runs Jobs on a real Host next to battery-operator.
+
+The heading stays so that its identifier is kept. The project has no fake
+AWS any more.
 
 ## End-to-end harness {#end-to-end-harness}
 

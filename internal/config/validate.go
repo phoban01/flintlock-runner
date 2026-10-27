@@ -191,7 +191,6 @@ func Validate(c *Config) error {
 	v.poolManager(c)
 	v.scheduler(&c.Scheduler)
 	v.executor(&c.Executor)
-	v.fleet(c.Fleet)
 	v.hostServices(&c.HostServices)
 	v.distributedCache(c.DistributedCache)
 	v.observability(&c.Observability)
@@ -620,127 +619,6 @@ func (v *validator) executor(e *Executor) {
 	v.positive("executor.prepare_timeout", e.PrepareTimeout)
 	v.positive("executor.graceful_kill_timeout", e.GracefulKillTimeout)
 	v.positive("executor.transport_deadline", e.TransportDeadline)
-}
-
-//= docs/requirements/07-configuration.md#fleet-section
-//# The Fleet section SHALL contain the AWS region, the discovery
-//# tag key and value or explicit instance ids, the remote execution mode and
-//# its SSH settings, the provisioning parallelism, the pinned versions of
-//# flintlock, Firecracker, Cloud Hypervisor, containerd and the Pool Manager,
-//# the thin pool device, the guest subnet, the `flintlockd`
-//# port and auth settings, the Host reserve, and the paths for the generated
-//# Inventory and Runner configuration.
-
-func (v *validator) fleet(f *Fleet) {
-	if f == nil {
-		return
-	}
-	staticOnly := v.discovery(&f.Discovery)
-	if !staticOnly {
-		v.required("fleet.region", f.Region)
-	}
-	switch f.Remote.Mode {
-	case RemoteSSM:
-	case RemoteSSH:
-		v.required("fleet.remote.ssh.user", f.Remote.SSH.User)
-		v.required("fleet.remote.ssh.key_file", f.Remote.SSH.KeyFile)
-		v.port("fleet.remote.ssh.port", f.Remote.SSH.Port)
-	default:
-		v.errorf("fleet.remote.mode", "must be ssm or ssh, got %q", f.Remote.Mode)
-	}
-	if staticOnly && f.Remote.Mode == RemoteSSM {
-		v.errorf("fleet.remote.mode", "static discovery has no Systems Manager agent; set ssh")
-	}
-	v.positiveInt("fleet.parallelism", f.Parallelism)
-	v.required("fleet.versions.flintlock", f.Versions.Flintlock)
-	if f.Versions.Firecracker == "" && f.Versions.CloudHypervisor == "" {
-		v.errorf("fleet.versions", "at least one of firecracker and cloud_hypervisor has to be pinned")
-	}
-	v.required("fleet.versions.containerd", f.Versions.Containerd)
-	v.required("fleet.versions.pool_manager", f.Versions.PoolManager)
-	v.absPath("fleet.thin_pool_device", f.ThinPoolDevice)
-	if v.required("fleet.guest_subnet", f.GuestSubnet) {
-		if _, _, err := net.ParseCIDR(f.GuestSubnet); err != nil {
-			v.errorf("fleet.guest_subnet", "must be a CIDR such as 172.31.0.0/16, got %q", f.GuestSubnet)
-		}
-	}
-	v.port("fleet.flintlockd.port", f.Flintlockd.Port)
-	tls := f.Flintlockd.TLS
-	if (tls.CertFile == "") != (tls.KeyFile == "") || (tls.CAFile == "") != (tls.CertFile == "") {
-		v.errorf("fleet.flintlockd.tls", "ca_file, cert_file and key_file have to be set together or all left empty to generate them")
-	}
-	if f.Flintlockd.Insecure && tls.CAFile != "" {
-		v.errorf("fleet.flintlockd.insecure", "cannot be combined with TLS material")
-	}
-	v.nonNegativeInt("fleet.host_reserve.vcpu", f.HostReserve.VCPU)
-	v.nonNegativeInt("fleet.host_reserve.memory_mb", f.HostReserve.MemoryMB)
-	v.absPath("fleet.inventory_path", f.InventoryPath)
-	v.absPath("fleet.runner_config_path", f.RunnerConfigPath)
-	for id, addr := range f.EndpointOverrides {
-		if strings.TrimSpace(id) == "" || strings.TrimSpace(addr) == "" {
-			v.errorf("fleet.endpoint_overrides", "instance ids and addresses must not be empty")
-			break
-		}
-	}
-	v.launchTemplate(f)
-	for i, e := range f.EgressAllowList {
-		v.required(fmt.Sprintf("fleet.egress_allow_list[%d]", i), e)
-	}
-	v.positive("fleet.drain_timeout", f.DrainTimeout)
-	v.positive("fleet.verification_timeout", f.VerificationTimeout)
-}
-
-// discovery validates the discovery selection and reports whether only the
-// static provider is configured, in which case no AWS settings are needed.
-func (v *validator) discovery(d *Discovery) (staticOnly bool) {
-	hasTag := d.TagKey != "" || d.TagValue != ""
-	if hasTag && (d.TagKey == "" || d.TagValue == "") {
-		v.errorf("fleet.discovery", "tag_key and tag_value have to be set together")
-	}
-	for i, id := range d.InstanceIDs {
-		v.required(fmt.Sprintf("fleet.discovery.instance_ids[%d]", i), id)
-	}
-	names := map[string]int{}
-	for i := range d.Static {
-		s := &d.Static[i]
-		f := fmt.Sprintf("fleet.discovery.static[%d]", i)
-		if v.required(f+".name", s.Name) {
-			if j, dup := names[s.Name]; dup {
-				v.errorf(f+".name", "duplicates fleet.discovery.static[%d].name %q", j, s.Name)
-			} else {
-				names[s.Name] = i
-			}
-		}
-		v.required(f+".address", s.Address)
-		v.arch(f+".arch", s.Arch)
-		v.positiveInt(f+".vcpu", s.VCPU)
-		v.positiveInt(f+".memory_mb", s.MemoryMB)
-	}
-	if !hasTag && len(d.InstanceIDs) == 0 && len(d.Static) == 0 {
-		v.errorf("fleet.discovery", "one of tag_key/tag_value, instance_ids or static is required")
-	}
-	return len(d.Static) > 0 && !hasTag && len(d.InstanceIDs) == 0
-}
-
-//= docs/requirements/07-configuration.md#fleet-section
-//# The Fleet section MAY contain launch template settings naming
-//# the Systems Manager parameters that hold secrets.
-
-func (v *validator) launchTemplate(f *Fleet) {
-	lt := f.LaunchTemplate
-	if lt == nil {
-		return
-	}
-	v.required("fleet.launch_template.parameters.host_token", lt.Parameters.HostToken)
-	if !f.Flintlockd.Insecure {
-		v.required("fleet.launch_template.parameters.tls_ca", lt.Parameters.TLSCA)
-		v.required("fleet.launch_template.parameters.tls_cert", lt.Parameters.TLSCert)
-		v.required("fleet.launch_template.parameters.tls_key", lt.Parameters.TLSKey)
-	}
-	v.nonNegative("fleet.launch_template.inventory_refresh_interval", lt.InventoryRefreshInterval)
-	if lt.InventoryRefreshInterval > 0 && f.Discovery.TagKey == "" {
-		v.errorf("fleet.launch_template.inventory_refresh_interval", "needs tag discovery (fleet.discovery.tag_key and tag_value) to refresh the Inventory")
-	}
 }
 
 var envVarName = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)

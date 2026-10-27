@@ -12,7 +12,7 @@
 //	fake-poolmgr -listen :9440 -inventory /etc/flintlock-runner/inventory.yaml
 //	fake-poolmgr -host host-a=10.0.0.1:9090 -host host-b=10.0.0.2:9090 -insecure
 //
-// The inventory file is the Fleet Controller's Inventory (FL-060): a `hosts`
+// The inventory file is the Runner's Inventory file (CF-003): a `hosts`
 // list of entries with a name, a flintlockd endpoint, optional TLS material
 // and a token, of which fake-poolmgr reads the fields it needs and ignores
 // the rest. -host is the shorthand for an endpoint with no TLS material of

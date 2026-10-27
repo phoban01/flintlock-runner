@@ -62,7 +62,7 @@ func (s *Stack) ServiceAddr(name string) string {
 }
 
 // inventoryServices are the Host Service addresses of an Inventory entry,
-// as the Fleet Controller writes them (FL-110).
+// as an Inventory file records them.
 func (s *Stack) inventoryServices() config.HostServiceAddresses {
 	var out config.HostServiceAddresses
 	if a := s.ServiceAddr(kubelabels.HostServiceBuildkit); a != "" {

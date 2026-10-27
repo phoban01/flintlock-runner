@@ -48,7 +48,7 @@ type TLSOptions struct {
 // schema and the fake Host can be dialled from a literal.
 type Endpoint struct {
 	// Name is the Host name the Pool Manager uses in flintlock_hosts
-	// (HO-010, FL-052).
+	// (HO-010).
 	Name string
 	// Address is host:port of flintlockd.
 	Address string
@@ -77,7 +77,7 @@ type HostInfo struct {
 	BuildDate    string
 	Commit       string
 	Uptime       time.Duration
-	// Exec and SSHProxy report the guest-agent services (HO-012, FL-070).
+	// Exec and SSHProxy report the guest-agent services (HO-012).
 	Exec     GuestService
 	SSHProxy GuestService
 }
@@ -173,7 +173,7 @@ type Dialer interface {
 }
 
 // AdminDialer opens pool-manager-side connections. Only the fake Pool Manager
-// (TD-002, TD-009) and the Fleet Controller's verification use it.
+// (TD-002, TD-009) uses it.
 type AdminDialer interface {
 	DialAdmin(ctx context.Context, ep Endpoint) (PoolHostClient, error)
 }
