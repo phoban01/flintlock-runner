@@ -62,9 +62,10 @@ func TestClaimRetriesCarryOneRequestID(t *testing.T) {
 		h, err := e.sched.Allocate(ctx, r, JobInfo{ID: 2}, e.profile("default"))
 		done <- result{h, err}
 	}()
-	// The failed attempt arms the backoff timer next to the allocation
-	// deadline; the retry follows it.
-	e.advance(ctx, 2, time.Second)
+	// The failed attempt arms the backoff timer; waiting for that timer,
+	// not a count, keeps the held Lease's heartbeat timer out of it.
+	e.awaitTimer(ctx, time.Second)
+	e.clk.Advance(time.Second)
 	second := <-done
 	if second.err != nil {
 		t.Fatalf("second Allocate, after a retried claim = %v", second.err)
@@ -132,7 +133,8 @@ func TestAbortedClaimIsRetriedWithoutAMark(t *testing.T) {
 		h, err := e.sched.Allocate(ctx, r, JobInfo{ID: 3}, e.profile("default"))
 		done <- result{h, err}
 	}()
-	e.advance(ctx, 2, time.Second)
+	e.awaitTimer(ctx, time.Second)
+	e.clk.Advance(time.Second)
 	got := <-done
 	if got.err != nil {
 		t.Fatalf("Allocate after an ABORTED claim = %v", got.err)
