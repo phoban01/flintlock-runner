@@ -58,7 +58,6 @@ func TestSubcommandsAreRegistered(t *testing.T) {
 	want := map[string][]string{
 		"run":           nil,
 		"config":        {"show"},
-		"fleet":         {"provision", "verify", "up", "drain", "teardown", "emit-userdata"},
 		"host-services": nil,
 	}
 	for _, c := range app.Commands {

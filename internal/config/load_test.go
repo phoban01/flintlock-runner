@@ -92,7 +92,6 @@ func TestLoadFull(t *testing.T) {
 		{"pool manager", cfg.PoolManager.Endpoint == "10.0.0.5:9091" && cfg.PoolManager.ReleaseRetryLimit == 6},
 		{"scheduler", cfg.Scheduler.KeepOnFailure && cfg.Scheduler.KeepDuration == 30*time.Minute},
 		{"executor", cfg.Executor.PrepareTimeout == 6*time.Minute},
-		{"fleet", cfg.Fleet != nil && cfg.Fleet.LaunchTemplate != nil && cfg.Fleet.LaunchTemplate.Parameters.TLSKey == "/flintlock-runner/tls-key"},
 		{"host services", cfg.HostServices.Buildkit.StorageLimit == 40<<30 && len(cfg.HostServices.HTTPCache.Upstreams) == 2},
 		{"cache volume", cfg.HostServices.CacheVolume.Device == "/dev/nvme2n1" && cfg.HostServices.CacheVolume.SizeCap == 200<<30},
 		{"distributed cache", cfg.DistributedCache != nil && cfg.DistributedCache.Prefix == "metal-runner"},
@@ -177,7 +176,6 @@ func TestLoadMinimalAppliesDefaults(t *testing.T) {
 		{"executor.prepare_timeout", cfg.Executor.PrepareTimeout, DefaultPrepareTimeout},
 		{"executor.graceful_kill_timeout", cfg.Executor.GracefulKillTimeout, DefaultGracefulKillTimeout},
 		{"executor.transport_deadline", cfg.Executor.TransportDeadline, DefaultTransportDeadline},
-		{"fleet", cfg.Fleet == nil, true},
 		{"host_services.buildkit.enabled", cfg.HostServices.Buildkit.IsEnabled(), true},
 		{"host_services.buildkit.port", cfg.HostServices.Buildkit.Port, DefaultBuildkitPort},
 		{"host_services.go_proxy.port", cfg.HostServices.GoProxy.Port, DefaultGoProxyPort},
@@ -237,8 +235,7 @@ func equalYAML(t *testing.T, a, b *Config) bool {
 
 // TestLoadEnvOverridesSecrets sets every documented variable and checks the
 // environment wins over the file for each Secret: the GitLab token, one
-// Host's own token, the fleet-wide Host token for the other Host, and the
-// fleet flintlockd token.
+// Host's own token and the fleet-wide Host token for the other Host.
 func TestLoadEnvOverridesSecrets(t *testing.T) {
 	t.Parallel()
 	tests := []struct {
@@ -251,7 +248,7 @@ func TestLoadEnvOverridesSecrets(t *testing.T) {
 			env:  map[string]string{},
 			want: map[string]string{
 				"gitlab": "glrt-file-token", "host-a": "host-a-file-token",
-				"host-b": "host-b-file-token", "fleet": "fleet-file-token",
+				"host-b": "host-b-file-token",
 			},
 		},
 		{
@@ -260,11 +257,10 @@ func TestLoadEnvOverridesSecrets(t *testing.T) {
 				EnvGitLabToken:                          "glrt-env",
 				HostTokenEnv("host-a"):                  "a-env",
 				EnvHostToken:                            "fleet-wide-env",
-				EnvFleetHostToken:                       "fleet-env",
 				"FLINTLOCK_RUNNER_HOST_TOKEN_UNRELATED": "ignored",
 			},
 			want: map[string]string{
-				"gitlab": "glrt-env", "host-a": "a-env", "host-b": "fleet-wide-env", "fleet": "fleet-env",
+				"gitlab": "glrt-env", "host-a": "a-env", "host-b": "fleet-wide-env",
 			},
 		},
 		{
@@ -274,14 +270,14 @@ func TestLoadEnvOverridesSecrets(t *testing.T) {
 				HostTokenEnv("host-b"): "b-env",
 			},
 			want: map[string]string{
-				"gitlab": "glrt-file-token", "host-a": "fleet-wide-env", "host-b": "b-env", "fleet": "fleet-file-token",
+				"gitlab": "glrt-file-token", "host-a": "fleet-wide-env", "host-b": "b-env",
 			},
 		},
 		{
 			name: "a variable set to the empty string blanks the file value",
 			env:  map[string]string{HostTokenEnv("host-a"): ""},
 			want: map[string]string{
-				"gitlab": "glrt-file-token", "host-a": "", "host-b": "host-b-file-token", "fleet": "fleet-file-token",
+				"gitlab": "glrt-file-token", "host-a": "", "host-b": "host-b-file-token",
 			},
 		},
 	}
@@ -293,7 +289,6 @@ func TestLoadEnvOverridesSecrets(t *testing.T) {
 				"gitlab": string(cfg.GitLab.Token),
 				"host-a": string(cfg.Inventory.Hosts[0].Token),
 				"host-b": string(cfg.Inventory.Hosts[1].Token),
-				"fleet":  string(cfg.Fleet.Flintlockd.Token),
 			}
 			for k, want := range tt.want {
 				if got[k] != want {

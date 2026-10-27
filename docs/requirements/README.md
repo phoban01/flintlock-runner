@@ -17,11 +17,11 @@ the coverage report.
 | `03-scheduler.md` | `SC` | The scheduling component: capacity, profiles, claims, placement, leases |
 | `04-pool-manager.md` | `PL` | Integration with the flintlock warm pool manager (battery) |
 | `05-hosts.md` | `HO` | The flintlock host client used for the guest transport and placement lookup |
-| `06-fleet.md` | `FL` | Standing up and operating a fleet of EC2 hosts |
+| `06-fleet.md` | `FL` | Withdrawn in #148: the fleet stack is battery-operator's. Each requirement names its replacement. Only the Host services section stays in force, for the Host Agent |
 | `07-configuration.md` | `CF` | The configuration surface |
 | `08-observability.md` | `OB` | Logging, metrics, health, job-log annotations |
 | `09-security.md` | `SE` | Isolation, secrets, transport security |
-| `10-test-doubles.md` | `TD` | The fakes (Pool Manager, Host, GitLab, AWS) and the end-to-end harness that stand in for EC2, KVM and battery during development |
+| `10-test-doubles.md` | `TD` | The fakes (Pool Manager, Host, GitLab) and the end-to-end harness that stand in for KVM and battery during development |
 | `11-host-image.md` | `HI` | Withdrawn: the Host Image is battery-operator's. Each requirement names its replacement |
 | `12-cluster-fleet.md` | `KF` | Running the fleet from a Kubernetes cluster: what its Host pools set, battery-operator's `Pool` and `MicroVMClaim` resources, the Host Agent, the `agent-exec` Guest Transport |
 | `13-guest-image.md` | `GI` | The Guest Image: the kernel and root filesystem images a Profile names, and what a Job finds in the guest |
@@ -30,9 +30,10 @@ the coverage report.
 
 Use exactly one of these shapes per requirement. The subject is always one of
 the defined system names from the glossary (the Runner, the Executor, the
-Scheduler, the Guest Transport, the Fleet Controller, the Host Agent, the
-Fleet Manifests, the Release, the Exec Agent, the Inventory Controller, the
-Guest Image).
+Scheduler, the Guest Transport, the Host Agent, the Fleet Manifests, the
+Release, the Exec Agent, the Inventory Controller, the Guest Image). The
+Fleet Controller remains the subject of the Host services section of
+`06-fleet.md` only.
 
 | Pattern | Shape |
 |---------|-------|

@@ -108,7 +108,7 @@ type Pool struct {
 // MicroVM runs on (SC-030, PL-031).
 type HostRef struct {
 	// Name is the Host's configured name, which is also its Inventory name
-	// (CF-032, FL-052).
+	// (CF-032).
 	Name string
 	// Address is the Host's flintlockd gRPC endpoint. The Scheduler checks
 	// it against the Inventory entry's endpoint (SC-030).
@@ -162,15 +162,14 @@ type EventFilter struct {
 }
 
 // PoolAdmin mirrors the PoolAdmin service. The Declarer uses it to declare
-// Pools (PL-010) and Health to probe (PL-005); the Fleet Controller uses it
-// for verify, drain and teardown (FL-054, FL-080, FL-081).
+// Pools (PL-010) and Health to probe (PL-005).
 type PoolAdmin interface {
 	// CreatePool returns ErrAlreadyExists for a known name and namespace.
 	CreatePool(ctx context.Context, spec PoolSpec) (*Pool, error)
 	// UpdatePool returns ErrNotFound for an unknown name and namespace.
 	UpdatePool(ctx context.Context, spec PoolSpec) (*Pool, error)
 	// DeletePool returns ErrNotFound for an unknown Pool. The Runner never
-	// calls it on reload (PL-015); only teardown does (FL-081).
+	// calls it on reload (PL-015).
 	DeletePool(ctx context.Context, ref PoolRef) error
 	// GetPool returns ErrNotFound for an unknown Pool. It is the polling
 	// fallback for capacity (PL-051) and the source of a Pool's host list
@@ -230,7 +229,7 @@ type SpecInput struct {
 
 // GuestDeviceID is the device_id of the single network interface every Pool
 // MicroVM template carries (PL-020). It is a TAP interface on the Host's
-// guest bridge with DHCP addressing (FL-040, FL-041); the name is fixed
+// guest bridge with DHCP addressing; the name is fixed
 // because a Profile has no interface configuration and `eth0` is reserved by
 // Firecracker (PL-023).
 const GuestDeviceID = "net0"
@@ -326,7 +325,7 @@ type Health interface {
 type HostSource interface {
 	// Host returns the client for a name or flintlock.ErrUnknownHost.
 	Host(name string) (flintlock.PoolHostClient, error)
-	// Names lists every known Host, for FL-054 reachability reporting.
+	// Names lists every known Host.
 	Names() []string
 }
 

@@ -1,4 +1,4 @@
-# An Inventory file as the Fleet Controller writes it (FL-060) and as
+# An Inventory file, as
 # `inventory.file` references it (CF-003).
 generated_at: 2026-09-08T10:00:00Z
 hosts:

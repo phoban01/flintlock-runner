@@ -8,8 +8,7 @@ import "time"
 // overrides it (CF-002); the environment wins over the file.
 type Secret string
 
-// Architecture is a CPU architecture as used by Profiles, Hosts and the
-// Fleet Controller when selecting binaries and images (FL-027).
+// Architecture is a CPU architecture as used by Profiles and Hosts.
 type Architecture string
 
 // Architectures the project supports. EC2 metal instances are one of these.
@@ -39,9 +38,6 @@ type Config struct {
 	// carries the "configured" values referenced by EX-017, EX-024, EX-051
 	// and HO-003.
 	Executor Executor `yaml:"executor"`
-	// Fleet configures the Fleet Controller (CF-060). Only read by the
-	// `fleet` subcommands, optional for `run`.
-	Fleet *Fleet `yaml:"fleet,omitempty"`
 	// HostServices configures the per-Host services (CF-070).
 	HostServices HostServices `yaml:"host_services"`
 	// DistributedCache configures the S3-backed GitLab cache (CF-080). When
@@ -279,8 +275,7 @@ type PoolSettings struct {
 // is set; when File is set the referenced file holds a `hosts:` list of
 // HostEntry.
 type Inventory struct {
-	// File is the path of a separate Inventory file, as written by the Fleet
-	// Controller (FL-060).
+	// File is the path of a separate Inventory file.
 	File string `yaml:"file,omitempty"`
 	// Hosts is the inline Inventory.
 	Hosts []HostEntry `yaml:"hosts,omitempty"`
@@ -288,7 +283,7 @@ type Inventory struct {
 
 // HostEntry is one Inventory entry (CF-030). Names and endpoints are unique
 // (CF-031); the name is the one the Pool Manager uses in flintlock_hosts
-// (CF-032, FL-052), because the Runner joins Placement to a Host by name.
+// (CF-032), because the Runner joins Placement to a Host by name.
 type HostEntry struct {
 	// Name is the Host name shared with the Pool Manager.
 	Name string `yaml:"name"`
@@ -297,7 +292,7 @@ type HostEntry struct {
 	Endpoint string `yaml:"endpoint"`
 	// Arch is the Host architecture.
 	Arch Architecture `yaml:"arch"`
-	// VCPU and MemoryMB are the capacity after the Host reserve (FL-061).
+	// VCPU and MemoryMB are the capacity the Host offers to MicroVMs.
 	VCPU     int `yaml:"vcpu"`
 	MemoryMB int `yaml:"memory_mb"`
 	// Labels are matched by Profile Host selectors (CF-024).
@@ -311,7 +306,7 @@ type HostEntry struct {
 	TLS ClientTLS `yaml:"tls,omitempty"`
 	// Services holds the Host Service addresses (FL-110, EX-060).
 	Services HostServiceAddresses `yaml:"services,omitempty"`
-	// Versions records what the Fleet Controller installed (FL-029).
+	// Versions records the component versions found on the Host.
 	Versions InstalledVersions `yaml:"versions,omitempty"`
 }
 
@@ -331,7 +326,7 @@ type HostServiceAddresses struct {
 	HTTPCache map[string]string `yaml:"http_cache,omitempty"`
 }
 
-// InstalledVersions are the component versions found on a Host (FL-029).
+// InstalledVersions are the component versions found on a Host.
 type InstalledVersions struct {
 	Flintlock       string `yaml:"flintlock,omitempty"`
 	Firecracker     string `yaml:"firecracker,omitempty"`
@@ -464,153 +459,6 @@ type Executor struct {
 	// TransportDeadline bounds an in-flight Guest Transport operation once
 	// the Host stops answering (EX-051).
 	TransportDeadline time.Duration `yaml:"transport_deadline"`
-}
-
-// RemoteMode selects the Fleet Controller's remote execution channel
-// (FL-010, FL-011).
-type RemoteMode string
-
-// Remote execution modes. SSM is the default.
-const (
-	RemoteSSM RemoteMode = "ssm"
-	RemoteSSH RemoteMode = "ssh"
-)
-
-// Fleet is the Fleet section (CF-060, CF-061).
-type Fleet struct {
-	// Region is the AWS region.
-	Region string `yaml:"region"`
-	// Discovery selects how instances are found.
-	Discovery Discovery `yaml:"discovery"`
-	// Remote selects the remote execution mode and its SSH settings.
-	Remote Remote `yaml:"remote"`
-	// Parallelism bounds concurrent provisioning (FL-012).
-	Parallelism int `yaml:"parallelism"`
-	// Versions pins every installed component (FL-020, FL-050, FL-051).
-	Versions PinnedVersions `yaml:"versions"`
-	// ThinPoolDevice is the block device for the containerd thin pool
-	// (FL-022, FL-023).
-	ThinPoolDevice string `yaml:"thin_pool_device"`
-	// GuestSubnet is the host-local guest bridge subnet in CIDR form (FL-040).
-	GuestSubnet string `yaml:"guest_subnet"`
-	// Flintlockd configures the daemon's listener and auth (FL-024 to FL-026).
-	Flintlockd Flintlockd `yaml:"flintlockd"`
-	// HostReserve is subtracted from instance capacity (FL-061).
-	HostReserve HostReserve `yaml:"host_reserve"`
-	// InventoryPath and RunnerConfigPath are where the generated files are
-	// written (FL-060, FL-062).
-	InventoryPath    string `yaml:"inventory_path"`
-	RunnerConfigPath string `yaml:"runner_config_path"`
-	// EndpointOverrides maps an instance id to the Host address to use
-	// instead of the private IP (FL-005).
-	EndpointOverrides map[string]string `yaml:"endpoint_overrides,omitempty"`
-	// LaunchTemplate enables launch template mode (CF-061, FL-090).
-	LaunchTemplate *LaunchTemplate `yaml:"launch_template,omitempty"`
-	// EgressAllowList restricts guest outbound traffic when set (SE-032).
-	EgressAllowList []string `yaml:"egress_allow_list,omitempty"`
-	// DrainTimeout and VerificationTimeout bound drain (FL-080) and verify
-	// (FL-072).
-	DrainTimeout        time.Duration `yaml:"drain_timeout"`
-	VerificationTimeout time.Duration `yaml:"verification_timeout"`
-}
-
-// Discovery selects how the Fleet Controller finds instances. Exactly one of
-// tag discovery (FL-001), explicit InstanceIDs (FL-002) or Static (TD-044)
-// is used; Static takes precedence, then InstanceIDs, then the tag.
-type Discovery struct {
-	TagKey      string   `yaml:"tag_key,omitempty"`
-	TagValue    string   `yaml:"tag_value,omitempty"`
-	InstanceIDs []string `yaml:"instance_ids,omitempty"`
-	// Static lists machines directly, for provisioning over SSH without an
-	// AWS account (TD-044).
-	Static []StaticHost `yaml:"static,omitempty"`
-}
-
-// StaticHost is a machine listed for the static discovery provider (TD-044).
-type StaticHost struct {
-	Name     string            `yaml:"name"`
-	Address  string            `yaml:"address"`
-	Arch     Architecture      `yaml:"arch"`
-	VCPU     int               `yaml:"vcpu"`
-	MemoryMB int               `yaml:"memory_mb"`
-	Labels   map[string]string `yaml:"labels,omitempty"`
-}
-
-// Remote configures remote execution (FL-010, FL-011).
-type Remote struct {
-	// Mode is ssm (default) or ssh.
-	Mode RemoteMode `yaml:"mode"`
-	// SSH is read only when Mode is ssh.
-	SSH SSHRemote `yaml:"ssh,omitempty"`
-}
-
-// SSHRemote holds the SSH settings for remote execution (FL-011).
-type SSHRemote struct {
-	User    string `yaml:"user"`
-	KeyFile string `yaml:"key_file"`
-	Port    int    `yaml:"port,omitempty"`
-	// KnownHostsFile holds the Host keys SSH verifies against; empty means
-	// ~/.ssh/known_hosts. There is no option to skip verification.
-	KnownHostsFile string `yaml:"known_hosts_file,omitempty"`
-}
-
-// PinnedVersions are the component versions the Fleet Controller installs
-// (CF-060). FL-021 chooses flintlock-provision or provision.sh from the
-// flintlock version; FL-030 compares these against what is installed.
-type PinnedVersions struct {
-	Flintlock       string `yaml:"flintlock"`
-	Firecracker     string `yaml:"firecracker"`
-	CloudHypervisor string `yaml:"cloud_hypervisor"`
-	Containerd      string `yaml:"containerd"`
-	PoolManager     string `yaml:"pool_manager"`
-}
-
-// Flintlockd configures the daemon on every Host (FL-024 to FL-026).
-type Flintlockd struct {
-	// Port is the gRPC listen port on the private address.
-	Port int `yaml:"port"`
-	// Token is the basic auth token required of clients. Environment
-	// override: FLINTLOCK_RUNNER_FLEET_HOST_TOKEN. In launch template mode
-	// it comes from a Systems Manager parameter instead (FL-091).
-	Token Secret `yaml:"token,omitempty"`
-	// TLS names the CA, certificate and key to install; when empty the Fleet
-	// Controller generates them (SE-023).
-	TLS ServerTLSFiles `yaml:"tls,omitempty"`
-	// Insecure starts flintlockd without TLS. Explicit opt-in only (FL-026).
-	Insecure bool `yaml:"insecure,omitempty"`
-}
-
-// ServerTLSFiles are paths on the Control Node to TLS material to install on
-// Hosts (FL-024, SE-023).
-type ServerTLSFiles struct {
-	CAFile   string `yaml:"ca_file,omitempty"`
-	CertFile string `yaml:"cert_file,omitempty"`
-	KeyFile  string `yaml:"key_file,omitempty"`
-}
-
-// HostReserve is the capacity kept back for the Host itself (FL-061).
-type HostReserve struct {
-	VCPU     int `yaml:"vcpu"`
-	MemoryMB int `yaml:"memory_mb"`
-}
-
-// LaunchTemplate configures launch template mode (CF-061, FL-090 to FL-092).
-type LaunchTemplate struct {
-	// Parameters names the Systems Manager parameters holding secrets, read
-	// by the emitted script at first boot rather than embedded (FL-091,
-	// SE-014).
-	Parameters LaunchTemplateParameters `yaml:"parameters"`
-	// InventoryRefreshInterval is how often the Runner re-discovers Hosts by
-	// tag (FL-092, SE-041). Zero disables refresh.
-	InventoryRefreshInterval time.Duration `yaml:"inventory_refresh_interval,omitempty"`
-}
-
-// LaunchTemplateParameters are Systems Manager parameter names (FL-091).
-type LaunchTemplateParameters struct {
-	HostToken string `yaml:"host_token"`
-	TLSCA     string `yaml:"tls_ca"`
-	TLSCert   string `yaml:"tls_cert"`
-	TLSKey    string `yaml:"tls_key"`
 }
 
 // HostServices is the Host services section (CF-070 to CF-075).

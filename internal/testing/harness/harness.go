@@ -24,8 +24,8 @@ import (
 // Environment variables the harness reads through OptionsFromEnv and
 // nowhere else.
 const (
-	// EnvHardwareInventory names an Inventory file (the `hosts:` list the
-	// Fleet Controller writes) of real flintlockd Hosts. When it is set the
+	// EnvHardwareInventory names an Inventory file (a `hosts:` list, as
+	// CF-003 describes it) of real flintlockd Hosts. When it is set the
 	// scenarios run against those Hosts instead of fake Hosts (TD-052).
 	EnvHardwareInventory = "FLINTLOCK_RUNNER_E2E_INVENTORY"
 	// EnvPoolManager names a real Pool Manager endpoint, host:port. When it
@@ -116,7 +116,7 @@ type Options struct {
 	// HostServices makes the buildkit and Go module proxy Host Services
 	// available on every Host and enables them in the configuration. A
 	// listener on loopback stands in for each. The Hosts publish its
-	// address in the Inventory, as the Fleet Controller does (FL-110), or
+	// address in the Inventory, as an Inventory file does, or
 	// on their Node, as the Host Agent does (KF-194).
 	HostServices bool
 	// HelperBinary, when set, is the Profile's gitlab-runner-helper path

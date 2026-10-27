@@ -89,8 +89,8 @@ func (w ImageWarning) String() string {
 //# the Runner SHALL log a warning at startup naming the Profile and the image.
 
 // Warnings returns one ImageWarning per Profile image that carries a tag but
-// no digest. Load logs each at warn level; callers that build a Config
-// without Load (the Fleet Controller) may log them the same way. The Config
+// no digest. Load logs each at warn level; a caller that builds a Config
+// without Load may log them the same way. The Config
 // is expected to have passed Validate, so unparsable references are skipped.
 func Warnings(c *Config) []ImageWarning {
 	var out []ImageWarning

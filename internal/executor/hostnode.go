@@ -42,8 +42,8 @@ type hostNodes struct {
 // NewHostNodeInventory returns the InventoryLookup of the claim design of a
 // cluster fleet. Each lookup reads the named Host's Node and turns its Host
 // Service annotations into the Host Service addresses of an Inventory
-// entry, in the forms the Fleet Controller records for a Host it
-// provisioned, so that the HostServiceEnvResolver treats both alike.
+// entry, in the forms an Inventory records for a Host, so that the
+// HostServiceEnvResolver treats both alike.
 // upstreams are the configured HTTP cache upstreams, each of which the
 // Host's HTTP cache serves under its own name. A nil logger discards.
 // RBAC: get on Nodes.

@@ -15,9 +15,11 @@ the guest through the Exec Agent.
 Nothing here runs a Job in a container. The Host Agent runs the Host
 Services on every Host, and the Runner runs as a Deployment off the Hosts.
 
-This mode is an alternative to `04-pool-manager.md`, `05-hosts.md` and
-`06-fleet.md`, which stay in force for fleets that are not run from a
-cluster. The table at the end maps each of them to its counterpart here.
+This mode is the one way a fleet is run. `04-pool-manager.md` and
+`05-hosts.md` stay in force for the direct battery backend, which is the
+test substrate. `06-fleet.md` is withdrawn since #148, except its Host
+services section, which the Host Agent here implements. The table at the
+end maps each of them to its counterpart here.
 
 **The Virtual Node design is withdrawn.** This document first specified a
 different design. On each Host a Pod Provider registered a Virtual Node and
@@ -768,8 +770,7 @@ This section is not normative.
 | Certificate authority and Host mutual TLS, SE-023, FL-024 | battery-operator's Host certificates, its EA-060 to EA-068 |
 | IAM policy, SE-040 to SE-042 | KF-112, KF-196, and battery-operator HP-030 for the Hosts |
 
-This document withdraws no requirement of another document. Once a cluster
-fleet has passed the hardware tier, the battery client, the Host client,
-push provisioning and their requirements can be retired together, in the
-change that deletes the code, because a withdrawn requirement cannot keep
-its citations.
+This document withdraws no requirement of another document. #148 removed
+the fleet stack and withdrew the FL rows above in `06-fleet.md`, where each
+names its replacement; the Host services row stays in force. The battery
+client and the Host client stay as the test substrate.

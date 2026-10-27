@@ -1,248 +1,212 @@
 # Fleet {#fleet}
 
-This document specifies the Fleet Controller: the `flr fleet`
-subcommands that turn a set of EC2 instances with KVM into flintlock Hosts,
-install the Pool Manager daemon and the Host Services, and produce the
-Inventory and Runner configuration. The intent is that an operator launches
-instances with a known tag, runs one command from a Control
-Node, and ends with a working Runner. Nothing in the flintlock ecosystem is
-EC2-specific; the Fleet Controller supplies that layer.
+**The fleet stack is removed.** This document specified the Fleet
+Controller: the `flr fleet` subcommands that turned a set of EC2 instances
+with KVM into flintlock Hosts, installed the Pool Manager daemon and the
+Host Services, and produced the Inventory and Runner configuration. #148
+removed the `flr fleet` subcommands, `internal/fleet`, the `fleet`
+configuration section and `docs/fleet/`.
+
+The Hosts come from [battery-operator](https://github.com/phoban01/battery-operator)
+now. Its Host Image boots a Host with `flintlockd`, containerd and the
+guest network (its `11-host-image.md`, HI). Its Host Pool Templates make
+the Host pools on EC2 with Cluster API (its `12-host-pool.md`, HP, and
+`config/capi/` there). Its Inventory Controller registers every Host with
+battery through battery's HostAdmin API (its `04-inventory.md`, IN, and
+its ADR 0008), and battery runs as its sidecar. The Runner runs on the
+claim backend in that cluster, as `12-cluster-fleet.md` specifies. The
+direct battery backend and the fake Pool Manager stay as the test
+substrate.
+
+FL-001 to FL-093 and FL-116 to FL-124 are withdrawn. Each keeps its
+number and names its replacement, as #103 did. FL-100 to FL-115 keep their
+text and stay in force. The Host services section stays because the Host
+Agent of `12-cluster-fleet.md` implements it: KF-070 and KF-074 name
+FL-100 and FL-102 to FL-115, and `deploy/host-agent`, `deploy/tests` and
+`internal/hostservices` implement them for the Host Agent.
 
 ## Discovery {#discovery}
 
-- **FL-001** The Fleet Controller SHALL discover candidate instances with the
-  EC2 `DescribeInstances` API filtered by the configured tag key and value and
-  by the `running` instance state.
-- **FL-002** Where explicit instance ids are configured, the Fleet Controller
-  SHALL use them instead of tag discovery.
-- **FL-003** (withdrawn) Replaced by FL-116 and FL-117: an instance is no
-  longer excluded by the name of its type.
-- **FL-004** The Fleet Controller SHALL determine each instance's
-  architecture from the EC2 instance attributes and record it in the
-  Inventory.
-- **FL-005** The Fleet Controller SHALL use the instance's private IP address
-  as the Host endpoint address unless an override is configured.
-- **FL-006** The Fleet Controller SHALL obtain AWS credentials through the
-  default credential chain of the AWS SDK.
-- **FL-116** The Fleet Controller SHALL NOT exclude a discovered instance
-  from provisioning because of its instance type.
-- **FL-117** If provisioning finds no usable `/dev/kvm` on an instance, then
-  the Fleet Controller SHALL exclude it from the Inventory and report it as
-  unsupported because KVM is unavailable.
+- **FL-001** (withdrawn) Replaced by battery-operator's Inventory
+  Controller (its IN-001 and IN-017): a Host is a Node of the cluster that
+  carries the Host label and whose Exec Agent reports it ready, not an EC2
+  instance found by tag.
+- **FL-002** (withdrawn) Replaced by battery-operator IN-001; there is no
+  list of instance ids.
+- **FL-003** (withdrawn) Nothing replaces it: battery-operator HP-001 names
+  the instance type of each Host pool, so no instance is excluded by type.
+- **FL-004** (withdrawn) Replaced by battery-operator HI-002 and HP-001:
+  the Host Image is built for both architectures, and a Host pool names one
+  instance type.
+- **FL-005** (withdrawn) Replaced by battery-operator IN-003: battery
+  reaches a Host at the `flintlockd` address the Host's Node report gives.
+- **FL-006** (withdrawn) Replaced by battery-operator's Host Pool
+  Templates: Cluster API holds the AWS credentials, and nothing of the
+  cluster fleet holds any (KF-112).
+- **FL-116** (withdrawn) Nothing replaces it: battery-operator HP-001 names
+  the instance type of each Host pool, so no instance is excluded by type.
+- **FL-117** (withdrawn) Replaced by battery-operator HP-001: a Host pool
+  names a single instance type, one with KVM (its `config/capi`), so no
+  instance without KVM joins the Inventory.
 
 KVM is available on bare-metal instance types and, where nested
 virtualization is enabled, on some virtualized types too, so the name of an
 instance type does not say whether an instance can run MicroVMs. The check is
 therefore made on the host itself, before anything else is installed there.
+On battery-operator's Host Image the check is its HI-011: a Host without
+usable KVM does not start `flintlockd` and reports itself not ready, and the
+Inventory Controller gives it to no Pool (its IN-001).
 
 ## Remote execution {#remote-execution}
 
-- **FL-010** The Fleet Controller SHALL execute commands on instances through
-  AWS Systems Manager Run Command by default.
-- **FL-011** Where SSH is configured, the Fleet Controller SHALL execute
-  commands over SSH with the configured user and key instead of Systems
-  Manager.
-- **FL-012** The Fleet Controller SHALL provision instances in parallel with
-  the configured parallelism limit.
-- **FL-013** If provisioning fails on one instance, then the Fleet Controller
-  SHALL continue provisioning the others and SHALL exit with a non-zero
-  status that summarises every failure.
-- **FL-014** The Fleet Controller SHALL stream each instance's command output
-  to its log prefixed with the instance id.
+- **FL-010** (withdrawn) Nothing is pushed to a Host. A Host boots complete
+  from battery-operator's Host Image (its HI-001 to HI-008).
+- **FL-011** (withdrawn) Nothing is pushed to a Host, as for FL-010.
+- **FL-012** (withdrawn) Replaced by battery-operator HP-001: a Host pool is
+  a Cluster API MachineDeployment, which makes its Hosts in parallel.
+- **FL-013** (withdrawn) Replaced by battery-operator HP-005: a
+  MachineHealthCheck replaces a Host whose Node stays not ready.
+- **FL-014** (withdrawn) Replaced by battery-operator EA-034: the Exec
+  Agent publishes each Host's readiness and its reason on the Host's Node.
 
 ## Host provisioning {#host-provisioning}
 
-- **FL-020** The Fleet Controller SHALL provision each instance by running
-  the flintlock host provisioner in unattended mode, installing containerd,
-  Firecracker, Cloud Hypervisor and `flintlockd` at the versions pinned in the
-  configuration.
-- **FL-021** The Fleet Controller SHALL use the `flintlock-provision` binary
-  when the pinned flintlock release ships it and SHALL fall back to the
-  `provision.sh` script from the same release otherwise.
-- **FL-022** The Fleet Controller SHALL create the containerd devicemapper
-  thin pool on the block device named in the configuration.
-- **FL-023** If the configured thin pool already exists on an instance, then
-  the Fleet Controller SHALL NOT recreate it or wipe its device.
-- **FL-024** The Fleet Controller SHALL configure `flintlockd` to listen on
-  the instance's private address on the configured port. Unless
-  `fleet.flintlockd.insecure` is set, it SHALL serve TLS with the
-  configured certificates and require every client to present a
-  certificate from the same CA (mutual TLS) rather than a basic auth
-  token, because the Pool Manager has no way to send one; in insecure mode
-  it SHALL instead require the configured basic auth token.
-- **FL-025** The Fleet Controller SHALL enable the `flintlockd` exec API on
-  every Host and SHALL enable the SSH proxy API where any Profile uses the
-  proxied `ssh` Guest Transport.
-- **FL-026** The Fleet Controller SHALL NOT start `flintlockd` in insecure
-  mode unless the configuration explicitly requests it.
-- **FL-027** The Fleet Controller SHALL select binaries and images matching
-  the instance's architecture.
-- **FL-028** The Fleet Controller SHALL pre-pull the kernel and root
-  filesystem images of every Profile into the flintlock containerd namespace
-  on each Host after provisioning.
-- **FL-029** The Fleet Controller SHALL record the installed versions of
-  flintlock, Firecracker, Cloud Hypervisor and containerd in the Inventory.
-- **FL-030** When run against an instance that is already provisioned at the
-  pinned versions, the Fleet Controller SHALL make no changes to that
-  instance and report it as up to date.
+- **FL-020** (withdrawn) Replaced by battery-operator HI-003: the Host
+  Image contains containerd, Firecracker, Cloud Hypervisor and `flintlockd`
+  at the versions its versions file pins.
+- **FL-021** (withdrawn) Replaced by battery-operator HI-001: the Host
+  Image is built from one Containerfile, and no provisioner runs on a Host.
+- **FL-022** (withdrawn) Replaced by battery-operator HI-020.
+- **FL-023** (withdrawn) Replaced by battery-operator HI-021.
+- **FL-024** (withdrawn) Replaced by battery-operator HI-067 and HI-068:
+  `flintlockd` serves only TLS and requires a client certificate, with the
+  certificates the Exec Agent obtains (its ADR 0002 and ADR 0003).
+- **FL-025** (withdrawn) Replaced by battery-operator HI-043 for the exec
+  API. The SSH proxy API is not enabled: the Runner reaches a guest through
+  the Exec Agent with the `agent-exec` Guest Transport (KF-185 to KF-188).
+- **FL-026** (withdrawn) Replaced by battery-operator HI-067: `flintlockd`
+  has no insecure mode on a Host.
+- **FL-027** (withdrawn) Replaced by battery-operator HI-002 and HI-009:
+  the image is built for each architecture, and an AMI has one.
+- **FL-028** (withdrawn) Nothing pre-pulls images on a Host. battery's warm
+  MicroVMs pull their own images.
+- **FL-029** (withdrawn) Replaced by battery-operator HI-005 and HI-060:
+  the Host Image records its pinned versions as image labels and in a
+  versions file, and the kubelet registers one label per hypervisor.
+- **FL-030** (withdrawn) Nothing changes a Host in place. A Host is replaced
+  from a new image (battery-operator HI-062).
 
 ## Host networking {#host-networking}
 
-- **FL-040** The Fleet Controller SHALL create a Linux bridge on each Host
-  with the configured private guest subnet and SHALL configure `flintlockd`
-  to attach TAP interfaces to it.
-- **FL-041** The Fleet Controller SHALL install and configure a DHCP and DNS
-  service bound to the bridge so that guests obtain an address, gateway and
-  resolver without static configuration.
-- **FL-042** The Fleet Controller SHALL enable IPv4 forwarding persistently
-  on each Host.
-- **FL-043** The Fleet Controller SHALL configure source NAT from the guest
-  subnet to the Host's primary interface so that guests have outbound
-  connectivity.
-- **FL-044** The Fleet Controller SHALL configure each Host to drop traffic
-  from the guest subnet to the EC2 instance metadata service address.
-- **FL-045** The Fleet Controller SHALL configure each Host to drop traffic
-  from the guest subnet to the Host's own `flintlockd`, Pool Manager agent
-  and metrics ports.
-- **FL-046** The Fleet Controller SHALL configure each Host to drop traffic
-  from the guest subnet to the private addresses of other Hosts in the
-  Inventory.
-- **FL-047** The Fleet Controller SHALL verify TCP reachability from the
-  Control Node to each Host's `flintlockd` port after provisioning and SHALL
-  report any Host that is unreachable together with the security group
-  rule that would be needed.
-
-Guest networking is deliberately host-local. EC2 does not deliver frames to
-MAC addresses it has not assigned to an interface, so bridging guests
-directly onto the VPC does not work without per-guest secondary addresses.
-A NAT'd bridge gives every Job outbound access for cloning and package
-downloads, while the Guest Transport reaches the guest over vsock through
-the Host, so no inbound path to the guest is needed.
+- **FL-040** (withdrawn) Replaced by battery-operator HI-030 and HI-083:
+  the Host Image makes the bridge `virbr-battery`.
+- **FL-041** (withdrawn) Replaced by battery-operator HI-031.
+- **FL-042** (withdrawn) Replaced by battery-operator HI-032.
+- **FL-043** (withdrawn) Replaced by battery-operator HI-032.
+- **FL-044** (withdrawn) Replaced by battery-operator HI-033.
+- **FL-045** (withdrawn) Replaced by battery-operator HI-034.
+- **FL-046** (withdrawn) Replaced by battery-operator HI-035 and HI-075 to
+  HI-077: the Host drops guest traffic to the protected CIDRs its Host
+  configuration file lists, which the Host Pool Templates set (its HP-011).
+- **FL-047** (withdrawn) Replaced by battery-operator EA-030 and IN-015: the
+  Exec Agent reports a Host not ready while its `flintlockd` does not
+  answer, and the Inventory Controller cordons that Host in battery.
 
 ## Pool Manager {#pool-manager-install}
 
 - **FL-050** (withdrawn) battery removed its Pool Manager host agent on
   2026-09-07 (commit b675a46a) because flintlock's native MicroVMExec and
   MicroVMSSHProxy services superseded it, and no battery release ships it.
-- **FL-051** The Fleet Controller SHALL install the pinned Pool Manager daemon
-  on the Control Node with a host list generated from the Inventory that
-  names every Host with its `flintlockd` endpoint, token and TLS settings.
-- **FL-052** The Fleet Controller SHALL name each Host identically in the
-  Pool Manager's host list and in the Inventory, because the Runner joins
-  the two by name when resolving Placement.
-- **FL-053** The Fleet Controller SHALL verify that each installed service is
-  active before reporting an instance as provisioned.
-- **FL-054** The Fleet Controller SHALL verify after installation that the
-  Pool Manager daemon answers `ListPools` and reports every Host in the
-  Inventory as reachable.
-- **FL-055** When run again after the Inventory changes, the Fleet Controller
-  SHALL regenerate the Pool Manager's host list and reload the daemon without
-  interrupting existing Leases.
-
-The Pool Manager is the only component that places MicroVMs, so its host
-list is the fleet's definition of "eligible host". The Inventory the Runner
-reads is the same list with the additional detail the Runner needs to reach
-each Host for the Guest Transport.
+- **FL-051** (withdrawn) Replaced by battery-operator DP-001 and IN-017:
+  battery runs as a container of the Operator's pod, and the Inventory
+  Controller registers each Host with `AddHost` through battery's HostAdmin
+  API (its ADR 0008).
+- **FL-052** (withdrawn) Replaced by battery-operator IN-003 and KF-151:
+  battery holds each Host under its Node's name, and the Runner takes the
+  Host from the Bound claim.
+- **FL-053** (withdrawn) Replaced by battery-operator HI-008 and EA-030 to
+  EA-033: the image's check stage verifies every unit, and the Exec Agent
+  reports a Host not ready while a check fails.
+- **FL-054** (withdrawn) Replaced by battery-operator IN-018: the Inventory
+  Controller gives the Pool Controller a Host only once battery holds it
+  uncordoned.
+- **FL-055** (withdrawn) Replaced by battery-operator IN-017: battery's
+  Hosts change through `AddHost`, `UpdateHost` and `RemoveHost` while it
+  runs, and nothing reloads it (its ADR 0008).
 
 ## Inventory and Runner configuration {#inventory-and-runner-configuration}
 
-- **FL-060** When provisioning completes, the Fleet Controller SHALL write an
-  Inventory file listing every Host with its name, `flintlockd` endpoint,
-  architecture, vCPU and memory capacity, labels, Host Service addresses and
-  installed versions.
-- **FL-061** The Fleet Controller SHALL compute each Host's capacity as the
-  instance's vCPU and memory minus the configured Host reserve.
-- **FL-062** The Fleet Controller SHALL generate a Runner configuration file
-  that references the Inventory, names the Pool Manager endpoint and carries
-  the Profiles from its input.
-- **FL-063** When run again after new instances match the discovery filter,
-  the Fleet Controller SHALL provision only the new instances and SHALL merge
-  them into the existing Inventory.
-- **FL-064** When run again after an instance in the Inventory no longer
-  exists, the Fleet Controller SHALL remove it from the Inventory and report
-  the removal.
+- **FL-060** (withdrawn) The Runner reads no Inventory on the claim backend
+  (KF-063). battery's Hosts come from the Inventory Controller
+  (battery-operator IN-017).
+- **FL-061** (withdrawn) Replaced by battery-operator HI-050 and HI-061: the
+  Host reserve is a setting of the Host configuration file, and the kubelet
+  reserves everything beyond it for the MicroVMs.
+- **FL-062** (withdrawn) Replaced by the claim backend's configuration,
+  KF-150 to KF-156: the Runner's configuration names the cluster's `Pool`
+  resources, not an Inventory or a Pool Manager endpoint (KF-063).
+- **FL-063** (withdrawn) Replaced by battery-operator IN-017: a new Host
+  joins battery when its Node becomes a Host.
+- **FL-064** (withdrawn) Replaced by battery-operator IN-016: the Inventory
+  Controller cordons and removes a Host whose Node is gone.
 
 ## Verification {#verification}
 
-- **FL-070** The Fleet Controller SHALL provide a verification command that
-  checks every Host answers `ServerInfo` with the exec service enabled and
-  that the Pool Manager lists every declared Pool at its target size.
-- **FL-071** If verification fails on any Host or service, then the Fleet
-  Controller SHALL exit with a non-zero status naming each failure and the
-  step that failed.
-- **FL-072** The verification command SHALL claim warm MicroVMs from every
-  Pool, run a trivial command in each through the Guest Transport and
-  release them, continuing until it has exercised every Host in the Pool's
-  host list or the verification timeout elapses, and SHALL report the time
-  from claim to readiness per Host.
-- **FL-073** The verification command SHALL report any Host in a Pool's host
-  list on which no MicroVM could be exercised within the verification
-  timeout.
+- **FL-070** (withdrawn) Replaced by the claim harness (KF-192, TD-051 over
+  the claim stack) and `hack/real-host`, which runs Jobs through the Runner
+  on a real Host next to battery-operator.
+- **FL-071** (withdrawn) Replaced by the claim harness and
+  `hack/real-host`, as for FL-070.
+- **FL-072** (withdrawn) Replaced by the claim harness and
+  `hack/real-host`: each Job claims a MicroVM with a `MicroVMClaim` and runs
+  its script through the Exec Agent.
+- **FL-073** (withdrawn) Replaced by battery-operator EA-030 to EA-033 and
+  IN-015: a Host that cannot serve reports itself not ready, and the
+  Inventory Controller cordons it in battery.
 
 ## Drain and teardown {#drain-and-teardown}
 
-- **FL-080** The Fleet Controller SHALL provide a drain command that removes
-  a Host from every Pool's `flintlock_hosts` so that the Pool Manager places
-  nothing new there, and waits until the Pool Manager reports no leased
-  MicroVM on that Host or the configured drain timeout elapses.
-- **FL-084** The drain command SHALL NOT stop `flintlockd` on the drained
-  Host while any leased MicroVM remains on it.
-- **FL-081** The Fleet Controller SHALL provide a teardown command that
-  deletes the declared Pools through the Pool Manager, waits for their
-  MicroVMs to be removed, stops and disables the installed services on every
-  Host and removes the Inventory.
-- **FL-082** The teardown command SHALL NOT terminate EC2 instances unless
-  the terminate flag is passed explicitly.
-- **FL-083** The teardown command SHALL NOT remove the thin pool or its
-  backing device unless the purge flag is passed explicitly.
+- **FL-080** (withdrawn) Replaced by battery-operator's Node drain: the
+  Inventory Controller cordons a Host in battery when its Node is cordoned
+  (its IN-015), and the Exec Agent's guard holds the drain open while
+  claims are Bound on the Host (its EA-040).
+- **FL-084** (withdrawn) Replaced by battery-operator EA-040: the drain
+  completes only when no claim is Bound on the Host or the drain timeout
+  elapses, and nothing stops `flintlockd` before that.
+- **FL-081** (withdrawn) Replaced by deleting the Fleet Manifests and the
+  Host pool's MachineDeployment (battery-operator HP-001). battery removes
+  a Host once no Pool names it and no MicroVM is on it (its IN-016 and ADR
+  0008).
+- **FL-082** (withdrawn) Replaced by Cluster API: a Host pool's
+  MachineDeployment owns its instances (battery-operator HP-001), and
+  nothing here terminates one.
+- **FL-083** (withdrawn) Nothing purges a Host. Its thin pool is on its
+  instance store (battery-operator HI-020) and goes with the instance.
 
 ## Launch template mode {#launch-template-mode}
 
-- **FL-090** Where launch template mode is selected, the Fleet Controller
-  SHALL emit a cloud-init user-data script that performs the Host
-  provisioning steps unattended at first boot so that instances launched by
-  an auto scaling group self-provision.
-- **FL-091** Where launch template mode is selected, the Fleet Controller
-  SHALL read secrets for the emitted script from the configured Systems
-  Manager parameters rather than embedding them in the user-data.
-- **FL-092** Where launch template mode is selected, the Runner SHALL refresh
-  its Inventory from tag discovery at the configured interval so that
-  self-provisioned Hosts join without a restart.
+- **FL-090** (withdrawn) Replaced by battery-operator HP-001 and HP-010:
+  every Host boots complete from the Host Image, and the pool's
+  KubeadmConfigTemplate writes its Host configuration file. There is no
+  user-data script.
+- **FL-091** (withdrawn) Replaced by battery-operator HI-052 and HP-030: a
+  Host reads no secret from user-data and has no instance profile. The Exec
+  Agent obtains the Host's certificates through certificate signing
+  requests (its ADR 0003).
+- **FL-092** (withdrawn) Replaced by battery-operator's Inventory
+  Controller (its IN-017): a Host joins battery when its Node becomes a
+  Host, and the Runner reads no Inventory (KF-063).
 
 ## One-shot operation {#one-shot-operation}
 
-- **FL-118** Where the dry-run flag is passed, the provision command SHALL
-  report each instance it would provision, each Inventory Host it would leave
-  unchanged and each Host it would remove from the Inventory, and SHALL NOT
-  contact any Host, write the Inventory or the Runner configuration, or change
-  the Pool Manager.
-- **FL-119** The Fleet Controller SHALL provide an up command that runs the
-  provision command, then runs the verification command with the Profiles'
-  Pools declared against the Runner configuration that provisioning wrote,
-  and reports the outcome of both in one summary.
-- **FL-120** If provisioning fails, then the up command SHALL NOT run
-  verification and SHALL exit with a non-zero status.
-- **FL-121** If verification fails, then the up command SHALL exit with a
-  non-zero status.
-- **FL-122** Where the install-runner flag is passed, the up command SHALL
-  install the Runner as a systemd service on the Control Node that uses the
-  generated Runner configuration, and SHALL enable and start it and verify
-  that it is active.
-- **FL-123** Where the install-runner flag is not passed, the up command
-  SHALL print the command that starts the Runner with the generated Runner
-  configuration.
-- **FL-124** Where the dry-run flag is passed, the up command SHALL report
-  the provision plan and the steps it would run after provisioning, and
-  SHALL NOT provision, verify or install anything.
-
-The up command is the provision command followed by the verification
-command, so that an operator goes from tagged instances to a verified fleet
-with one invocation. It adds nothing of its own to either step: it stops
-before verification when provisioning failed, because verifying a fleet that
-did not provision only repeats the failure. A dry run computes its plan the
-same way a real run does, but the KVM check is made on each host during
-provisioning, so a dry run cannot say which of the instances it would
-provision would be excluded for want of KVM, and its output says so.
+- **FL-118** (withdrawn) Nothing replaces it. The provision command is gone.
+- **FL-119** (withdrawn) Nothing replaces it. The up command is gone.
+- **FL-120** (withdrawn) Nothing replaces it. The up command is gone.
+- **FL-121** (withdrawn) Nothing replaces it. The up command is gone.
+- **FL-122** (withdrawn) Nothing replaces it. The Fleet Manifests run the
+  Runner as a Deployment (KF-080); nothing installs it as a systemd service.
+- **FL-123** (withdrawn) Nothing replaces it. The up command is gone.
+- **FL-124** (withdrawn) Nothing replaces it. The up command is gone.
 
 ## Host services {#host-services}
 
@@ -299,6 +263,20 @@ provision would be excluded for want of KVM, and its output says so.
 - **FL-112** The Fleet Controller SHALL pre-warm the Go module proxy and the
   registry mirror on each Host with the modules and images listed in the
   configuration after provisioning.
+
+Since #148 no Fleet Controller installs anything. The Host Agent of
+`deploy/host-agent` runs the Host Services as a DaemonSet on every Host
+(KF-070, KF-071) and configures each one as FL-102 to FL-107, FL-114 and
+FL-115 say (KF-074). It keeps their storage in a volume of its own pod
+(KF-197) and publishes their addresses on the Host's Node (KF-194), where
+the Executor reads them, in place of the Inventory entry of FL-110. Its
+credentials come from Kubernetes Secrets (KF-073), not from Systems
+Manager parameters. battery-operator's Host Image opens the gateway to the
+Host Service ports (its HI-078) and keeps their user ids from the metadata
+service and the control ports (its HI-080), which is FL-108 on the Host.
+The verification MicroVM of FL-109 has no command to run it; the Job in
+`hack/real-host/job-host-services.json` exercises the four services on a
+real Host instead.
 
 Host Services exist so that a job in a fresh microVM does not start cold:
 base image layers, Go modules and package indexes are served from the

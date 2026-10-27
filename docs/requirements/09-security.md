@@ -5,6 +5,16 @@ Runner. The threat model assumes that Job scripts are untrusted: a Job runs
 arbitrary code inside its MicroVM and has network access through the Host.
 The Runner, the Hosts and the Control Node are trusted.
 
+The requirements that name the Fleet Controller (SE-014, SE-015, SE-023,
+SE-030 to SE-032, SE-040, SE-042, SE-050 and SE-052) keep their text, but
+#148 removed the Fleet Controller. battery-operator meets them now: its
+Host Image keeps guests from the metadata service and the control ports
+(its HI-033, HI-034 and HI-080), its Host certificates come through
+certificate signing requests (its ADR 0003), its Hosts have no instance
+profile (its HP-030), and no secret enters user-data (its HI-052). The
+Host Agent runs `buildkitd` rootless and holds the upstream credentials in
+Secrets (KF-073, KF-074).
+
 ## Isolation {#isolation}
 
 - **SE-001** The Runner SHALL NOT execute any part of a Job script on the

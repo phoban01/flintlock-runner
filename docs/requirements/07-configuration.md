@@ -1,7 +1,7 @@
 # Configuration {#configuration}
 
 This document specifies the Runner's configuration surface. One YAML file
-describes GitLab access, the Inventory, the Pool Manager, the Profiles, the Scheduler limits and the Fleet Controller inputs.
+describes GitLab access, the Inventory, the Pool Manager, the Profiles and the Scheduler limits.
 The Runner translates that file into the `RunnerConfig` structure the
 gitlab-runner packages expect, so operators never write a `config.toml`.
 
@@ -102,15 +102,19 @@ gitlab-runner packages expect, so operators never write a `config.toml`.
 
 ## Fleet section {#fleet-section}
 
-- **CF-060** The Fleet section SHALL contain the AWS region, the discovery
-  tag key and value or explicit instance ids, the remote execution mode and
-  its SSH settings, the provisioning parallelism, the pinned versions of
-  flintlock, Firecracker, Cloud Hypervisor, containerd and the Pool Manager,
-  the thin pool device, the guest subnet, the `flintlockd`
-  port and auth settings, the Host reserve, and the paths for the generated
-  Inventory and Runner configuration.
-- **CF-061** The Fleet section MAY contain launch template settings naming
-  the Systems Manager parameters that hold secrets.
+- **CF-060** (withdrawn) Replaced by the claim backend's configuration,
+  KF-150 to KF-156, and by battery-operator's Host pool settings (its
+  HP-002): a Host pool names its instance type, AMI, subnet and Host
+  configuration file, and the Runner's configuration names no Host
+  (KF-063). The `fleet` section was removed in #148.
+- **CF-061** (withdrawn) Replaced by battery-operator's Host pool settings.
+  A Host reads no secret from user-data (its HI-052), and the Exec Agent
+  obtains the Host's certificates through certificate signing requests (its
+  ADR 0003). The `fleet` section was removed in #148.
+
+The heading stays so that its identifier is kept. Nothing is configured
+under it any more, and a configuration file with a `fleet` section is
+refused as unknown.
 
 ## Host services section {#host-services-section}
 

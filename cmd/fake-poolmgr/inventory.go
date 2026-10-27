@@ -11,7 +11,7 @@ import (
 )
 
 // inventoryFile is the YAML the -inventory flag names. It is a subset of the
-// Fleet Controller's Inventory file (FL-060, CF-030) with one addition,
+// Runner's Inventory file (CF-003, CF-030) with one addition,
 // token_file, so that a token can be kept out of the document; every other
 // field of a Host entry, such as its architecture and capacity, is ignored
 // here because a pool manager only needs to reach the Host.
@@ -46,7 +46,7 @@ type inventoryTLS struct {
 
 // loadInventory reads the inventory file at path and converts it to the
 // endpoints the fake Pool Manager dials. Unknown fields are ignored, so the
-// Inventory the Fleet Controller writes can be passed as it is.
+// Runner's Inventory file can be passed as it is.
 func loadInventory(path string) ([]flintlock.Endpoint, error) {
 	body, err := os.ReadFile(path)
 	if err != nil {

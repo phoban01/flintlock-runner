@@ -41,26 +41,21 @@ make demo DEMO_ARGS='-keep'                # leave the stack up; type commands t
 make e2e                                   # the end-to-end scenarios (TD-050)
 ```
 
-## Bring up a fleet
+## Deploy a fleet
 
-On the Control Node, as root, with a configuration that has a `fleet`
-section (`docs/requirements/07-configuration.md`) and instances launched with
-its discovery tag, or listed statically for SSH:
+A fleet runs from a Kubernetes cluster next to
+[battery-operator](https://github.com/phoban01/battery-operator)
+(`docs/requirements/12-cluster-fleet.md`). battery-operator makes the
+Hosts: its Host Image boots each one with `flintlockd`, its Cluster API
+templates make the Host pools on EC2, and its Inventory Controller
+registers every Host with battery. This repository deploys the Runner and
+the Host Agent, which runs the Host Services, with the Fleet Manifests in
+`deploy/`; `deploy/README.md` is the procedure. `hack/real-host` runs Jobs
+through the Runner on one real Host with KVM.
 
-```sh
-flr --config fleet.yaml fleet provision --dry-run     # what would be provisioned, left alone and removed; changes nothing
-flr --config fleet.yaml fleet up                      # provision, then verify with the Pools declared; one summary at the end
-flr --config fleet.yaml fleet up --install-runner     # and run the Runner as the systemd service flr
-flr --config fleet.yaml fleet up --dry-run            # the plan and what up would do next
-```
-
-`fleet up` stops before verification when provisioning fails and exits
-non-zero when either step fails. Without `--install-runner` its summary ends
-with the command that starts the Runner with the generated configuration.
-With it, the Runner runs as the unprivileged user `flintlock-runner`, which
-is given read access to the files the Runner reads; `fleet teardown` stops
-and disables the service. `fleet provision`, `fleet verify [--declare]`,
-`fleet drain` and `fleet teardown` remain available one step at a time.
+The `flr fleet` subcommands that once provisioned EC2 instances over SSM
+or SSH were removed in #148. `docs/requirements/06-fleet.md` holds their
+withdrawn requirements, each with its replacement.
 
 ## Releases
 
@@ -94,7 +89,7 @@ make duvet-ci         # fails if .duvet/snapshot.txt is stale
 ## Layout
 
 ```
-cmd/flr/                main: run, config show, fleet {provision,verify,up,drain,teardown,emit-userdata}
+cmd/flr/                main: run, config show
 cmd/fake-poolmgr/       the fake Pool Manager as a standalone binary (TD-009)
 cmd/flintlock-devstack/ the end-to-end harness as a demo: fakes + the real runner + jobs (make demo)
 internal/clock/         Clock and Backoff interfaces shared by the scheduler, poolmgr and the fakes
@@ -103,7 +98,7 @@ internal/scheduler/     capacity, profiles, claims, placement resolution, lease 
 internal/transport/     Guest Transport: exec (MicroVMExec), ssh (MicroVMSSHProxy / TCP)
 internal/flintlock/     gRPC client for hosts (exec, ssh proxy, GetMicroVM, ServerInfo); fake/ is the fake host
 internal/poolmgr/       gRPC client for battery and the PL policy units; fake/ is itself a minimal pool manager
-internal/fleet/         EC2 discovery, SSM/SSH execution, host provisioning, host services, inventory
+internal/hostservices/  the Host Service settings the Executor and the Host Agent share
 internal/config/        YAML schema, validation, RunnerConfig translation
 internal/testing/       fakegitlab, fakes3 and harness (TD-050..TD-054); the harness exports the hardware-tier env var names
 hack/                   CI helper scripts

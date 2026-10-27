@@ -112,7 +112,7 @@ func (p *PoolManager) updatePool(spec poolmgr.PoolSpec) (*poolmgr.Pool, error) {
 // deletePool implements PoolAdmin.DeletePool. battery refuses while the Pool
 // owns any MicroVM; the fake refuses only while a Lease is outstanding and
 // otherwise deletes the Pool's MicroVMs from their Hosts, because that is
-// what teardown (FL-081) needs from it.
+// what a test that deletes a Pool needs from it.
 func (p *PoolManager) deletePool(ctx context.Context, ref poolmgr.PoolRef) error {
 	p.mu.Lock()
 	ps, err := p.poolLocked(ref)

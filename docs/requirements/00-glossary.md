@@ -21,10 +21,13 @@ directory. It contains no requirements.
   inside a MicroVM and streams its input and output. The default transport is
   the flintlock `MicroVMExec.ExecCommand` streaming RPC served by the Host
   that runs the MicroVM; an alternative transport is SSH.
-- **Fleet Controller** — the `flr fleet` subcommands that
-  discover, provision, verify and tear down Hosts on EC2, install the Pool
-  Manager and Host Services, and generate the Runner configuration from the
-  resulting inventory.
+- **Fleet Controller** — removed in #148. It was the `flr fleet`
+  subcommands that discovered, provisioned, verified and tore down Hosts on
+  EC2, installed the Pool Manager and Host Services, and generated the
+  Runner configuration from the resulting Inventory. battery-operator's
+  Host Image, Host Pool Templates and Inventory Controller take its place.
+  The term stays because withdrawn requirements, and the Host services
+  section of `06-fleet.md`, still name it.
 
 - **Host Image** — battery-operator's reference bootc Host Image
   (`hostimage/` there, its ADR 0007), and the AMI made from it, from which
@@ -102,15 +105,18 @@ directory. It contains no requirements.
   `ReleaseVM`), deletes them on release and provisions replacements. It is
   the source of every MicroVM a Job runs in; the Runner declares its Pools
   from the Profiles.
-- **Host Services** — the per-Host daemons the Fleet Controller installs for
-  jobs to use: rootless `buildkitd`, a Go module proxy for public and
-  private modules, a pull-through registry mirror and an HTTP cache for
-  configured upstreams, all bound to the guest bridge gateway address.
+- **Host Services** — the per-Host daemons that Jobs use: rootless
+  `buildkitd`, a Go module proxy for public and private modules, a
+  pull-through registry mirror and an HTTP cache for configured upstreams,
+  all bound to the guest bridge gateway address. The Host Agent runs them,
+  as the Host services section of `06-fleet.md` specifies.
 - **Distributed cache** — the GitLab `cache:` mechanism, backed by an S3
   bucket, through which build outputs move between Jobs on different Hosts.
-- **Control Node** — the machine running the Runner process and the Pool
-  Manager daemon. It can be a Host or a separate instance, which needs no
-  KVM, with network reachability to every Host.
+- **Control Node** — the machine that runs the Runner process. In a
+  cluster fleet it is the Node that runs the Runner's pod, which is never
+  a Host (KF-082). The term dates from the removed fleet stack (#148),
+  where it was a provisioned machine that also ran the Pool Manager daemon;
+  it stays because requirements of `09-security.md` still name it.
 
 ## Domain terms {#domain-terms}
 
@@ -140,8 +146,10 @@ directory. It contains no requirements.
   Manager or resolved by asking the Pool's Hosts.
 - **Slot** — one unit of Runner concurrency; the number of Slots equals the
   configured maximum number of concurrent Jobs.
-- **Inventory** — the Fleet Controller's record of Hosts: name, endpoint,
-  architecture, capacity, labels, Host Service addresses, installed versions.
+- **Inventory** — the Runner's record of Hosts on the direct battery
+  backend: name, endpoint, architecture, capacity, labels, Host Service
+  addresses, installed versions. The claim backend reads none (KF-063);
+  battery-operator's Inventory Controller gives battery its Hosts instead.
 - **Stage** — one of the gitlab-runner build stages (`prepare_script`,
   `get_sources`, `restore_cache`, `download_artifacts`, `step_*`,
   `after_script`, `archive_cache`, `upload_artifacts_on_*`,
