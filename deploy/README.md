@@ -121,6 +121,10 @@ In the manifests:
 - `runner/config.yaml`: the GitLab URL and the Profiles. Applied from
   source, the Profiles' Guest Image says `:REPLACE`; pin it by the digests
   of a release's `images.txt`. A release's fleet asset has them already.
+  Every Profile there is amd64. An arm64 Profile needs arm64 Hosts: the
+  Runner pins each Pool to its Profile's architecture, so on amd64 Hosts
+  its Pool never becomes Ready. `runner/config.yaml` has a commented
+  arm64 Profile to add when the fleet has arm64 Hosts.
 
 In the management cluster: the Host pools, from battery-operator's
 templates, with the settings of [Host pools](#host-pools).
