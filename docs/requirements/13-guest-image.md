@@ -141,8 +141,9 @@ every guest, every guest would ask DHCP for the same address.
   no registry mirror.
 - **GI-057** The Guest Image's Docker image SHALL configure Docker Engine with
   the overlay2 storage driver.
-- **GI-058** The Guest Image's Docker image SHALL run Docker Engine without
-  the iptables `raw` table, which the kernel does not have.
+- **GI-058** (withdrawn) Replaced by GI-012: the kernel has the iptables
+  `raw` table, and Docker Engine writes its rules there. The Docker image
+  needs the kernel of the same release.
 
 A Profile that names the Docker image serves Jobs that build and run
 containers: `docker build`, `docker buildx build` against the Host's
@@ -158,9 +159,10 @@ releases had no `nf_tables`, and the legacy backend works on every kernel.
 The kernel has the bridge, veth, overlayfs, NAT, conntrack and the
 `addrtype` and `conntrack` matches, which Docker Engine needs. Docker
 Engine 28 and later put the rules that keep other hosts off a container's
-address in the iptables `raw` table. The Guest Image's kernel has it now
-(GI-012); Docker Engine still runs without it, so the Docker image also
-boots on a kernel without one.
+address in the iptables `raw` table, which the kernel has (GI-012). On a
+kernel without one, every `docker run` with a network fails, so the Docker
+image needs the kernel of the same release. The images of one release ship
+together, so a Profile mixes releases only by mistake.
 Docker Engine 29 would keep images in containerd's image store; overlay2
 keeps them where its registry mirror applies.
 
