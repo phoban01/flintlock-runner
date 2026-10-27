@@ -41,7 +41,8 @@ profiles:
   # The kernel's console is quiet: each line it writes to the serial port
   # costs the guest time under nested virtualization.
   #
-  # BEGIN profile arm64: as deploy/runner/config.yaml's lima-arm64.
+  # BEGIN profile arm64: the run's own arm64 Profile. deploy/runner/config.yaml
+  # has none, since a release's fleet may have no arm64 Host.
   - name: real-host-arm64
     default: true
     arch: arm64

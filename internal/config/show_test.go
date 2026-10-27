@@ -21,11 +21,10 @@ var secretValues = map[string]string{
 	EnvGitLabToken:         "glrt-env-token",
 	HostTokenEnv("host-a"): "host-a-env-token",
 	HostTokenEnv("host-b"): "host-b-env-token",
-	EnvFleetHostToken:      "fleet-env-token",
 }
 
 // fileSecrets are the plaintext secrets written in testdata/full.yaml.
-var fileSecrets = []string{"glrt-file-token", "host-a-file-token", "host-b-file-token", "fleet-file-token"}
+var fileSecrets = []string{"glrt-file-token", "host-a-file-token", "host-b-file-token"}
 
 //= docs/requirements/07-configuration.md#file-and-precedence
 //= type=test

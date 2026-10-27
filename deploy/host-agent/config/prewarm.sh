@@ -2,7 +2,7 @@
 # prewarm.sh go-proxy|registry-mirror: pre-warm one Host Service with the
 # modules or images listed in its ConfigMap entry, through the service itself
 # so that they land in this Host's cache (KF-076, ported from
-# internal/fleet/scripts/templates/prewarm.sh.tmpl). Fetching what is already
+# the removed fleet stack's prewarm.sh.tmpl). Fetching what is already
 # cached is a cache hit and changes nothing, so a restart of the container
 # costs nothing.
 #

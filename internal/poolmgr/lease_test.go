@@ -437,9 +437,7 @@ func TestPackageNeverCallsDeleteMicroVM(t *testing.T) {
 	// interface that has them may only be named by interfaces.go, and there
 	// only as the HostSource seam the fake Pool Manager in the subpackage
 	// takes: a Pool Manager creates and deletes MicroVMs, the Runner does
-	// not (HO-007). battery's generated HostAdminClient, the client of the
-	// Pool Manager's own Host registry, shares a name with flintlock's and
-	// creates nothing, so poolmgrv1.HostAdminClient is allowed.
+	// not (HO-007).
 	forbidden := []string{"DeleteMicroVM", "CreateMicroVM", "HostAdminClient"}
 	hostClientAllowedIn := map[string]bool{"interfaces.go": true}
 	checked := 0
@@ -453,22 +451,13 @@ func TestPackageNeverCallsDeleteMicroVM(t *testing.T) {
 			t.Fatalf("parsing %s: %v", path, err)
 		}
 		checked++
-		battery := map[*ast.Ident]bool{}
-		ast.Inspect(file, func(n ast.Node) bool {
-			if sel, ok := n.(*ast.SelectorExpr); ok {
-				if x, ok := sel.X.(*ast.Ident); ok && x.Name == "poolmgrv1" {
-					battery[sel.Sel] = true
-				}
-			}
-			return true
-		})
 		ast.Inspect(file, func(n ast.Node) bool {
 			ident, ok := n.(*ast.Ident)
 			if !ok {
 				return true
 			}
 			for _, bad := range forbidden {
-				if ident.Name == bad && (bad != "HostAdminClient" || !battery[ident]) {
+				if ident.Name == bad {
 					t.Errorf("%s names %s; the runner never creates or deletes a microvm", path, bad)
 				}
 			}

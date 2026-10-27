@@ -38,20 +38,15 @@ var (
 	// (PL-033), an unknown lease on ReleaseVM (PL-042) or Heartbeat
 	// (SC-061).
 	ErrNotFound = errors.New("poolmgr: not found")
-	// ErrAlreadyExists is ALREADY_EXISTS from CreatePool, on which the
-	// Declarer calls UpdatePool (PL-010), and from AddHost, on which the
-	// Fleet Controller reads and updates the Host instead (FL-128).
-	ErrAlreadyExists = errors.New("poolmgr: already exists")
+	// ErrAlreadyExists is ALREADY_EXISTS from CreatePool; the Declarer then
+	// calls UpdatePool (PL-010).
+	ErrAlreadyExists = errors.New("poolmgr: pool already exists")
 	// ErrUnavailable is UNAVAILABLE or a connection error (PL-004, PL-034,
 	// PL-006).
 	ErrUnavailable = errors.New("poolmgr: unavailable")
 	// ErrInvalid is INVALID_ARGUMENT, for a spec the Pool Manager rejects
 	// (PL-016).
 	ErrInvalid = errors.New("poolmgr: invalid request")
-	// ErrFailedPrecondition is FAILED_PRECONDITION: a request the Pool
-	// Manager refuses in its current state, such as RemoveHost while a Pool
-	// names the Host or a MicroVM is on it (FL-130).
-	ErrFailedPrecondition = errors.New("poolmgr: refused in the current state")
 )
 
 // PoolRef identifies a Pool (proto PoolRef). The namespace is the Runner
@@ -113,7 +108,7 @@ type Pool struct {
 // MicroVM runs on (SC-030, PL-031).
 type HostRef struct {
 	// Name is the Host's configured name, which is also its Inventory name
-	// (CF-032, FL-052).
+	// (CF-032).
 	Name string
 	// Address is the Host's flintlockd gRPC endpoint. The Scheduler checks
 	// it against the Inventory entry's endpoint (SC-030).
@@ -167,15 +162,14 @@ type EventFilter struct {
 }
 
 // PoolAdmin mirrors the PoolAdmin service. The Declarer uses it to declare
-// Pools (PL-010) and Health to probe (PL-005); the Fleet Controller uses it
-// for verify, drain and teardown (FL-054, FL-080, FL-081).
+// Pools (PL-010) and Health to probe (PL-005).
 type PoolAdmin interface {
 	// CreatePool returns ErrAlreadyExists for a known name and namespace.
 	CreatePool(ctx context.Context, spec PoolSpec) (*Pool, error)
 	// UpdatePool returns ErrNotFound for an unknown name and namespace.
 	UpdatePool(ctx context.Context, spec PoolSpec) (*Pool, error)
 	// DeletePool returns ErrNotFound for an unknown Pool. The Runner never
-	// calls it on reload (PL-015); only teardown does (FL-081).
+	// calls it on reload (PL-015).
 	DeletePool(ctx context.Context, ref PoolRef) error
 	// GetPool returns ErrNotFound for an unknown Pool. It is the polling
 	// fallback for capacity (PL-051) and the source of a Pool's host list
@@ -207,62 +201,6 @@ type Events interface {
 	Subscribe(ctx context.Context, filter EventFilter) (EventStream, error)
 }
 
-// HostTLS is the proto HostTLS: how the Pool Manager reaches one Host's
-// flintlockd. The files are paths on the machine that runs the Pool
-// Manager, not on the caller's.
-type HostTLS struct {
-	Insecure bool
-	CAFile   string
-	CertFile string
-	KeyFile  string
-}
-
-// Host is one Host as the Pool Manager holds it (proto Host): its name,
-// which is its Inventory name (FL-052), and its flintlockd endpoint and TLS
-// settings.
-type Host struct {
-	Name    string
-	Address string
-	TLS     HostTLS
-}
-
-// HostStatus is the proto HostStatus: a Host the Pool Manager holds,
-// whether it is cordoned, and the number of MicroVMs and placements still
-// counted against it.
-type HostStatus struct {
-	Host     Host
-	Cordoned bool
-	VMCount  int32
-}
-
-// HostAdmin mirrors the part of the HostAdmin service the Fleet Controller
-// uses to keep the Pool Manager's Hosts in step with the Inventory (FL-127
-// to FL-131). battery v0.5.0 and later hold their Hosts only through it.
-type HostAdmin interface {
-	// ListHosts lists every Host the Pool Manager holds.
-	ListHosts(ctx context.Context) ([]HostStatus, error)
-	// GetHost returns ErrNotFound for a Host the Pool Manager does not hold.
-	GetHost(ctx context.Context, name string) (*HostStatus, error)
-	// AddHost registers h without the Pool Manager dialling it first. It
-	// returns ErrAlreadyExists for a Host the Pool Manager already holds.
-	AddHost(ctx context.Context, h Host) (*Host, error)
-	// UpdateHost replaces the endpoint and TLS settings of the Host named
-	// h.Name, without the Pool Manager dialling it first. It returns
-	// ErrNotFound for a Host the Pool Manager does not hold.
-	UpdateHost(ctx context.Context, h Host) (*Host, error)
-	// RemoveHost returns ErrNotFound for a Host the Pool Manager does not
-	// hold, and ErrFailedPrecondition while a Pool names the Host or a
-	// MicroVM is on it.
-	RemoveHost(ctx context.Context, name string) error
-}
-
-// HostAdminConn is a HostAdmin behind a connection of its own.
-type HostAdminConn interface {
-	HostAdmin
-	// Close closes the connection.
-	Close() error
-}
-
 // Client is the whole Pool Manager surface behind one long-lived connection
 // with keepalive (PL-006) and the configured deadline on every unary call
 // (PL-002). Implementations are safe for concurrent use. Consumers that need
@@ -291,7 +229,7 @@ type SpecInput struct {
 
 // GuestDeviceID is the device_id of the single network interface every Pool
 // MicroVM template carries (PL-020). It is a TAP interface on the Host's
-// guest bridge with DHCP addressing (FL-040, FL-041); the name is fixed
+// guest bridge with DHCP addressing; the name is fixed
 // because a Profile has no interface configuration and `eth0` is reserved by
 // Firecracker (PL-023).
 const GuestDeviceID = "net0"
@@ -387,7 +325,7 @@ type Health interface {
 type HostSource interface {
 	// Host returns the client for a name or flintlock.ErrUnknownHost.
 	Host(name string) (flintlock.PoolHostClient, error)
-	// Names lists every known Host, for FL-054 reachability reporting.
+	// Names lists every known Host.
 	Names() []string
 }
 
@@ -430,11 +368,6 @@ type FakeConfig struct {
 	// Namespace, when set, restricts the fake to Pools in that namespace and
 	// rejects others with ErrInvalid; the harness uses it to prove PL-017.
 	Namespace string
-	// EmptyHostRegistry starts the fake holding no Host, as battery v0.5.0
-	// starts on a new database, so that it holds a Host only once AddHost
-	// registers it. Otherwise it holds every name Hosts knows until
-	// RemoveHost removes it, as if a client had added each one (TD-055).
-	EmptyHostRegistry bool
 }
 
 // HookKind names a Pool hook for fault injection (TD-010).

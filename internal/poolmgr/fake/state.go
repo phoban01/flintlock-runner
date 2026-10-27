@@ -167,17 +167,13 @@ func (p *PoolManager) oldestAvailableLocked(key poolKey) *vmState {
 //# `flintlock_hosts` by least MicroVM count, matching battery's design.
 
 // pickHostLocked chooses the Host for a new MicroVM in ps (TD-007). Only
-// names the fake holds (TD-057) and the HostSource knows are candidates.
-// PlacementLeastVMs picks the candidate with the fewest MicroVMs of this
-// Pool that are not DELETING or FAILED, ties broken by the order of
-// flintlock_hosts, which is battery's PickHost; PlacementRoundRobin cycles
-// through the candidates.
+// names the HostSource knows are candidates. PlacementLeastVMs picks the
+// candidate with the fewest MicroVMs of this Pool that are not DELETING or
+// FAILED, ties broken by the order of flintlock_hosts, which is battery's
+// PickHost; PlacementRoundRobin cycles through the candidates.
 func (p *PoolManager) pickHostLocked(ps *poolState) (string, error) {
 	var candidates []string
 	for _, name := range ps.spec.FlintlockHosts {
-		if _, held := p.heldLocked(name); !held {
-			continue
-		}
 		if _, err := p.cfg.Hosts.Host(name); err == nil {
 			candidates = append(candidates, name)
 		}

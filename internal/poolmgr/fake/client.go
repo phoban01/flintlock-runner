@@ -324,8 +324,6 @@ func mapErr(ctx context.Context, err error) error {
 		sentinel = poolmgr.ErrUnavailable
 	case codes.InvalidArgument:
 		sentinel = poolmgr.ErrInvalid
-	case codes.FailedPrecondition:
-		sentinel = poolmgr.ErrFailedPrecondition
 	case codes.Canceled, codes.DeadlineExceeded:
 		if ctxErr := ctx.Err(); ctxErr != nil {
 			return ctxErr

@@ -26,8 +26,6 @@ const (
 	// EnvHostTokenPrefix + the normalised Host name overrides one Host's
 	// token.
 	EnvHostTokenPrefix = "FLINTLOCK_RUNNER_HOST_TOKEN_"
-	// EnvFleetHostToken overrides fleet.flintlockd.token.
-	EnvFleetHostToken = "FLINTLOCK_RUNNER_FLEET_HOST_TOKEN"
 )
 
 // LookupEnv is the shape of os.LookupEnv, injected so that tests run in
@@ -140,9 +138,8 @@ func decodeStrict(data []byte, out any) error {
 	return nil
 }
 
-// InventoryFile is the schema of a separate Inventory file (CF-003), as the
-// Fleet Controller writes it (FL-060): the Host list plus when it was
-// generated.
+// InventoryFile is the schema of a separate Inventory file (CF-003): the
+// Host list plus when it was generated.
 type InventoryFile struct {
 	Hosts       []HostEntry `yaml:"hosts"`
 	GeneratedAt time.Time   `yaml:"generated_at,omitempty"`
@@ -216,11 +213,6 @@ func (l *loader) applyEnv(cfg *Config) {
 			h.Token = Secret(v)
 		} else if hasFleetWide {
 			h.Token = Secret(fleetWide)
-		}
-	}
-	if cfg.Fleet != nil {
-		if v, ok := l.env(EnvFleetHostToken); ok {
-			cfg.Fleet.Flintlockd.Token = Secret(v)
 		}
 	}
 }

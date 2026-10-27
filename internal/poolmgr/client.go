@@ -119,20 +119,6 @@ type client struct {
 // established lazily: NewClient does not fail because the Pool Manager is
 // down, the first call does, and Health drives the retry (PL-004).
 func NewClient(cfg ClientConfig) (Client, error) {
-	conn, err := dial(cfg)
-	if err != nil {
-		return nil, err
-	}
-	return &client{
-		conn:   conn,
-		admin:  poolmgrv1.NewPoolAdminClient(conn),
-		lease:  poolmgrv1.NewLeaseClient(conn),
-		events: poolmgrv1.NewEventsClient(conn),
-	}, nil
-}
-
-// dial builds the gRPC ClientConn behind NewClient and DialHostAdmin.
-func dial(cfg ClientConfig) (*grpc.ClientConn, error) {
 	cfg = cfg.withDefaults()
 	if cfg.Endpoint == "" {
 		return nil, errors.New("poolmgr: endpoint is required")
@@ -165,7 +151,12 @@ func dial(cfg ClientConfig) (*grpc.ClientConn, error) {
 	if err != nil {
 		return nil, fmt.Errorf("poolmgr: dial %s: %w", cfg.Endpoint, err)
 	}
-	return conn, nil
+	return &client{
+		conn:   conn,
+		admin:  poolmgrv1.NewPoolAdminClient(conn),
+		lease:  poolmgrv1.NewLeaseClient(conn),
+		events: poolmgrv1.NewEventsClient(conn),
+	}, nil
 }
 
 //= docs/requirements/04-pool-manager.md#client
@@ -438,8 +429,6 @@ func mapErr(ctx context.Context, err error) error {
 		sentinel = ErrUnavailable
 	case codes.InvalidArgument:
 		sentinel = ErrInvalid
-	case codes.FailedPrecondition:
-		sentinel = ErrFailedPrecondition
 	case codes.Canceled, codes.DeadlineExceeded:
 		if ctxErr := ctx.Err(); ctxErr != nil {
 			return ctxErr

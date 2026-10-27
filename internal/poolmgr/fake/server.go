@@ -33,7 +33,6 @@ func (p *PoolManager) newGRPCServer() *grpc.Server {
 	poolmgrv1.RegisterPoolAdminServer(srv, &poolAdminServer{pm: p})
 	poolmgrv1.RegisterLeaseServer(srv, &leaseServer{pm: p})
 	poolmgrv1.RegisterEventsServer(srv, &eventsServer{pm: p})
-	poolmgrv1.RegisterHostAdminServer(srv, &hostAdminServer{pm: p})
 	return srv
 }
 
@@ -87,7 +86,7 @@ func (s *poolAdminServer) UpdatePool(_ context.Context, req *poolmgrv1.UpdatePoo
 }
 
 // DeletePool implements poolmgrv1.PoolAdminServer. It refuses while a Lease
-// is outstanding and otherwise deletes the Pool's MicroVMs (FL-081).
+// is outstanding and otherwise deletes the Pool's MicroVMs.
 func (s *poolAdminServer) DeletePool(ctx context.Context, req *poolmgrv1.DeletePoolRequest) (*emptypb.Empty, error) {
 	if err := s.pm.deletePool(ctx, refFromProto(req.GetRef())); err != nil {
 		return nil, err

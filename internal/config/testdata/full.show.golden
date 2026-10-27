@@ -167,47 +167,6 @@ executor:
   prepare_timeout: 6m0s
   graceful_kill_timeout: 20s
   transport_deadline: 25s
-fleet:
-  region: eu-west-1
-  discovery:
-    tag_key: flintlock-runner:fleet
-    tag_value: metal
-  remote:
-    mode: ssm
-  parallelism: 6
-  versions:
-    flintlock: v0.12.1
-    firecracker: v1.10.1
-    cloud_hypervisor: v41.0
-    containerd: v1.7.22
-    pool_manager: v0.5.0
-  thin_pool_device: /dev/nvme1n1
-  guest_subnet: 172.31.0.0/16
-  flintlockd:
-    port: 9090
-    token: '[REDACTED]'
-    tls:
-      ca_file: /etc/flintlock-runner/fleet-ca.pem
-      cert_file: /etc/flintlock-runner/fleet-host.pem
-      key_file: /etc/flintlock-runner/fleet-host.key
-  host_reserve:
-    vcpu: 2
-    memory_mb: 8192
-  inventory_path: /etc/flintlock-runner/inventory.yaml
-  runner_config_path: /etc/flintlock-runner/config.yaml
-  endpoint_overrides:
-    i-0123456789abcdef0: 10.0.9.10:9090
-  launch_template:
-    parameters:
-      host_token: /flintlock-runner/host-token
-      tls_ca: /flintlock-runner/tls-ca
-      tls_cert: /flintlock-runner/tls-cert
-      tls_key: /flintlock-runner/tls-key
-    inventory_refresh_interval: 5m0s
-  egress_allow_list:
-    - 0.0.0.0/0
-  drain_timeout: 20m0s
-  verification_timeout: 15m0s
 host_services:
   buildkit:
     enabled: true

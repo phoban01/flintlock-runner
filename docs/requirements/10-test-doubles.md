@@ -38,22 +38,6 @@ client together rather than letting them drift apart.
 - **TD-010** The fake Pool Manager SHALL support fault injection for claim
   latency, a period of `UNAVAILABLE`, hook failure and a dropped `Events`
   stream.
-- **TD-055** The fake Pool Manager SHALL serve `AddHost`, `UpdateHost`,
-  `RemoveHost`, `GetHost` and `ListHosts` of the `poolmgr.v1alpha1`
-  `HostAdmin` service, and SHALL answer `ALREADY_EXISTS` to `AddHost` for a
-  Host it holds and `NOT_FOUND` to the others for a Host it does not hold.
-- **TD-056** The fake Pool Manager SHALL refuse with `FAILED_PRECONDITION` to
-  remove a Host that a Pool names or that a MicroVM is on.
-- **TD-057** The fake Pool Manager SHALL refuse with `INVALID_ARGUMENT` a
-  Pool whose `flintlock_hosts` names a Host it does not hold, and SHALL
-  place MicroVMs only on Hosts it holds.
-
-The `HostAdmin` rules are battery v0.5.0's. Unlike battery, the fake records
-a Host's endpoint and TLS settings but does not dial them: it reaches a
-Host through its Host source (TD-002), by name. Unless it is told to start
-empty, it holds every Host its Host source knows, as if each had been added,
-so that a test that does not care about registration declares Pools as
-before.
 
 ## Fake Host {#fake-host}
 
@@ -102,22 +86,22 @@ before.
 
 ## Fake AWS {#fake-aws}
 
-- **TD-040** The Fleet Controller SHALL access EC2 and Systems Manager
-  through narrow interfaces of its own so that fakes can stand in for the
-  AWS SDK.
-- **TD-041** The project SHALL provide fakes for `DescribeInstances`,
-  `SendCommand`, `GetCommandInvocation`, `ListCommandInvocations` and
-  `GetParameter` that record every call and return results the test
-  configures.
-- **TD-042** The fake Systems Manager SHALL capture the script content of
-  every `SendCommand` so that tests can assert on what would have run on a
+- **TD-040** (withdrawn) Replaced by battery-operator's own tests of its
+  Host Image and Inventory Controller. The fleet stack, with its EC2 and
+  Systems Manager interfaces, was removed in #148.
+- **TD-041** (withdrawn) Replaced by battery-operator's own tests of its
+  Host Image and Inventory Controller; this project calls no AWS API.
+- **TD-042** (withdrawn) Replaced by battery-operator's own tests of its
+  Host Image; nothing sends a script to a Host.
+- **TD-043** (withdrawn) Replaced by battery-operator's own tests of its
+  Host Image (its HI-008 check stage); this project sends no script to a
   Host.
-- **TD-043** Every provisioning script the Fleet Controller sends to a Host
-  SHALL pass `bash -n` and `shellcheck` in continuous integration.
-- **TD-044** The Fleet Controller SHALL provide a static discovery provider
-  that reads Hosts from a list in the configuration, so that provisioning
-  over SSH can be exercised against any Linux machine without an AWS
-  account.
+- **TD-044** (withdrawn) Replaced by the claim harness, which runs every
+  TD-051 scenario over the claim stack (KF-192), and by `hack/real-host`,
+  which runs Jobs on a real Host next to battery-operator.
+
+The heading stays so that its identifier is kept. The project has no fake
+AWS any more.
 
 ## End-to-end harness {#end-to-end-harness}
 

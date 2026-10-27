@@ -2,9 +2,7 @@
 // (docs/requirements/10-test-doubles.md#fake-pool-manager): a minimal but
 // real pool manager on the battery protos. It serves the poolmgr.v1alpha1
 // PoolAdmin, Lease and Events services over gRPC with the generated server
-// stubs (TD-001), and the Host calls of HostAdmin with battery v0.5.0's
-// rules (TD-055 to TD-057). It creates, places and deletes MicroVMs only
-// through
+// stubs (TD-001), creates, places and deletes MicroVMs only through
 // flintlock.PoolHostClient values obtained from a poolmgr.HostSource
 // (TD-002), and is usable in process through PoolManager.Client, which is a
 // loopback gRPC client over the same handlers so that Scheduler tests
@@ -86,12 +84,7 @@ type PoolManager struct {
 	vms              map[int64]*vmState
 	vmByUID          map[string]*vmState
 	leases           map[string]*leaseState
-	// hosts are the Hosts the fake holds, and removedHosts the names
-	// RemoveHost removed, which the HostSource no longer makes held
-	// (TD-055).
-	hosts        map[string]*hostRecord
-	removedHosts map[string]bool
-	nextVM       int64
+	nextVM           int64
 	// runCtx is the control loop's context: nil before Run, done after it.
 	runCtx context.Context
 	// started is set by Run, stopped once it has begun shutting down. Both
@@ -145,17 +138,15 @@ func New(cfg poolmgr.FakeConfig) *PoolManager {
 		cfg.Hosts = NewHosts()
 	}
 	p := &PoolManager{
-		cfg:          cfg,
-		log:          slog.Default().With("component", "fake-poolmgr"),
-		pools:        make(map[poolKey]*poolState),
-		vms:          make(map[int64]*vmState),
-		vmByUID:      make(map[string]*vmState),
-		leases:       make(map[string]*leaseState),
-		hosts:        make(map[string]*hostRecord),
-		removedHosts: make(map[string]bool),
-		events:       newEventBus(cfg.EventReplay),
-		kick:         make(chan struct{}, 1),
-		ready:        make(chan struct{}),
+		cfg:     cfg,
+		log:     slog.Default().With("component", "fake-poolmgr"),
+		pools:   make(map[poolKey]*poolState),
+		vms:     make(map[int64]*vmState),
+		vmByUID: make(map[string]*vmState),
+		leases:  make(map[string]*leaseState),
+		events:  newEventBus(cfg.EventReplay),
+		kick:    make(chan struct{}, 1),
+		ready:   make(chan struct{}),
 	}
 	p.loop = p.newLoopback()
 	return p

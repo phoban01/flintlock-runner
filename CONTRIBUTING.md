@@ -14,7 +14,7 @@ long one and `docs/PLAN.md` is the coordination contract.
   ID. The issue assignee owns them until the PR merges.
 - **Branches are `wp/<key>`**, one per work package from the table in
   `docs/PLAN.md` (`wp/fakes`, `wp/poolmgr`, `wp/hosts`, `wp/scheduler`,
-  `wp/config`, `wp/executor`, `wp/fleet`). One branch, one worktree, one PR.
+  `wp/config`, `wp/executor`). One branch, one worktree, one PR.
   Nobody pushes to `main`.
 - **Interfaces change through one PR.** `internal/*/interfaces.go` and
   `internal/config/types.go` are owned by the lead. If you need a change,
