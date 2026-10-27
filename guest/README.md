@@ -43,7 +43,7 @@ battery-operator's demo. A Job on them fails, because they have no
 |---|---|---|
 | Linux, at `boot/vmlinux` | 6.1.190, from kernel.org's tarball | The 6.1 long-term series, which Firecracker's CI kernels follow. On amd64 it is an ELF `vmlinux`, on arm64 the uncompressed `Image` that Firecracker loads. |
 | Firecracker's CI kernel configuration | `microvm-kernel-ci-<arch>-6.1.config` of Firecracker v1.16.1, the Host Image's Firecracker | virtio-mmio, virtio-vsock, virtio-blk, ext4 and devtmpfs built in, and no loadable modules, so the guest agent is reachable over vsock and systemd boots with no initrd. |
-| `kernel/flr.config`, and `flr-amd64.config` or `flr-arm64.config` | | The iptables `raw` table and the `comment`, `mark`, `statistic` and `multiport` matches and `MARK` target, for kube-proxy and Docker Engine. virtio-pci with the block, network and vsock drivers, and on arm64 the PCI host bridge, GICv3 ITS and PL011 console, for Cloud Hypervisor. |
+| `kernel/flr.config`, and `flr-amd64.config` or `flr-arm64.config` | | The iptables `raw` table and the `comment`, `mark`, `statistic` and `multiport` matches and `MARK` target, for kube-proxy and Docker Engine. virtio-pci with the block, network and vsock drivers, and on arm64 the PCI host bridge, GICv3 ITS and PL011 console, for Cloud Hypervisor. Pressure stall information on without a boot option, so a Job can read `/proc/pressure`. |
 
 The build stage cross-compiles on the build machine, so no platform is
 emulated; it takes a few minutes per architecture. The tarball's sha256 is
@@ -170,7 +170,8 @@ image that fails its checks is never produced (GI-003):
   architecture, the pinned 6.1 version, and alone in the image. Its
   `.config` has the options of Firecracker's configuration that the guest
   needs, among them the block cgroup options the I/O limits need, no
-  loadable modules, and every option of the fragments.
+  loadable modules, pressure stall information on without a boot option,
+  and every option of the fragments.
 - `rootfs/check.sh`: runs inside the built root filesystem, under QEMU for
   the platform that is not the build machine's. It checks everything in
   the table above: the tools run, the helper reports the pinned version and

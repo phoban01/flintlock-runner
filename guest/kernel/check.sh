@@ -130,6 +130,23 @@ done ;;
 amd64) if built CONFIG_PCI_MMCONFIG; then ok "CONFIG_PCI_MMCONFIG=y"; else fail "CONFIG_PCI_MMCONFIG is not built in"; fi ;;
 esac
 
+#= docs/requirements/13-guest-image.md#guest-kernel
+#= type=test
+#/ The Guest Image's kernel SHALL have pressure stall information
+#/ built in and turned on without a boot option, so that a guest has
+#/ `/proc/pressure/cpu`, `/proc/pressure/memory` and `/proc/pressure/io`.
+#
+# No guest boots in the build, so this reads the built .config. The kernel
+# makes /proc/pressure only when PSI is on at boot, and
+# CONFIG_PSI_DEFAULT_DISABLED, which Firecracker's configuration sets,
+# leaves it off unless the kernel boots with psi=1.
+if built CONFIG_PSI; then ok "CONFIG_PSI=y"; else fail "CONFIG_PSI is not built in: the guest has no /proc/pressure"; fi
+if grep -qx '# CONFIG_PSI_DEFAULT_DISABLED is not set' "$config"; then
+	ok "PSI is on without psi=1: the guest has /proc/pressure/cpu"
+else
+	fail "CONFIG_PSI_DEFAULT_DISABLED is set: the guest has no /proc/pressure/cpu without psi=1"
+fi
+
 # Every option the fragments ask for made it through olddefconfig: one that
 # a dependency drops would otherwise vanish without a word.
 for frag in "$confdir/flr.config" "$confdir/flr-$arch.config"; do

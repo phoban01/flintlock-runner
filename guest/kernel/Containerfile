@@ -9,8 +9,8 @@
 # The kernel is Linux 6.1 from kernel.org's tarball, configured with
 # Firecracker's CI configuration for the Firecracker release that the Host
 # Image runs, plus flr.config and the fragment of the image's architecture:
-# the iptables options that kube-proxy needs, and virtio-pci for Cloud
-# Hypervisor. Firecracker's configuration has virtio-mmio, virtio-vsock,
+# the iptables options that kube-proxy needs, virtio-pci for Cloud
+# Hypervisor, and pressure stall information on by default. Firecracker's configuration has virtio-mmio, virtio-vsock,
 # virtio-blk, ext4 and devtmpfs built in and no loadable modules, so the
 # guest agent is reachable and systemd boots without an initrd. The output
 # is an ELF vmlinux on amd64 and the uncompressed Image on arm64, which is
@@ -84,6 +84,11 @@ COPY flr.config flr-amd64.config flr-arm64.config /src/
 #= docs/requirements/13-guest-image.md#guest-kernel
 #/ The Guest Image's kernel SHALL have virtio-pci built in beside
 #/ virtio-mmio, with the virtio block, network and vsock drivers.
+#
+#= docs/requirements/13-guest-image.md#guest-kernel
+#/ The Guest Image's kernel SHALL have pressure stall information
+#/ built in and turned on without a boot option, so that a guest has
+#/ `/proc/pressure/cpu`, `/proc/pressure/memory` and `/proc/pressure/io`.
 RUN case "${TARGETARCH}" in \
       amd64) karch=x86_64; image=vmlinux; cross=x86_64-linux-gnu- ;; \
       arm64) karch=arm64; image=arch/arm64/boot/Image; cross=aarch64-linux-gnu- ;; \
