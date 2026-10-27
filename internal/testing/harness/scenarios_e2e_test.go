@@ -459,6 +459,66 @@ var scenarios = []scenario{
 				"GOFLAGS=-modcacherw")
 		},
 	},
+	{
+		//= docs/requirements/10-test-doubles.md#end-to-end-harness
+		//= type=test
+		//# The harness SHALL cover a `ClaimVM` whose answer is lost, and
+		//# SHALL check that the Job runs in the MicroVM of the first Lease and that
+		//# no second Lease is created.
+
+		// The Pool Manager claims a MicroVM for the Job, and its answer never
+		// reaches the Runner, as a ClaimVM that times out after battery
+		// claimed looks to it. The Runner marks the Pool Manager unhealthy
+		// for the backoff and retries with the same request id (PL-036), and
+		// the Pool Manager answers with the Lease it already made. The Job
+		// runs in that MicroVM, and no second one is claimed. The claim
+		// backend has no answer to lose: the Client Library deletes a claim
+		// it stops waiting for.
+		name:          "claim response lost",
+		fakeHostsOnly: true,
+		run: func(t *testing.T, s *Stack) {
+			if s.PoolManager == nil {
+				t.Skip("the claim backend has no ClaimVM answer to lose")
+			}
+			s.PoolManager.SetFaults(poolmgr.Faults{LoseClaimResponses: 1})
+			defer s.PoolManager.SetFaults(poolmgr.Faults{})
+
+			gate := s.NewGate("lost-claim")
+			defer func() { _ = gate.Open() }()
+			id, err := s.Enqueue(Job{Name: "lost-claim", Script: []string{`echo "job started"`, gate.Wait(), `echo "job finished"`}})
+			if err != nil {
+				t.Fatal(err)
+			}
+			waitTrace(t, s, id, "job started")
+
+			leases := s.PoolManager.Leases()
+			if len(leases) != 1 {
+				t.Fatalf("leases while the job runs = %+v, want the one the lost answer made", leases)
+			}
+			if leases[0].RequestID == "" {
+				t.Error("the job's lease carries no request id")
+			}
+			var leased int
+			for _, vm := range s.PoolManager.VMs() {
+				if vm.LeaseID != "" {
+					leased++
+				}
+			}
+			if leased != 1 {
+				t.Errorf("leased microvms while the job runs = %d, want 1", leased)
+			}
+
+			if err := gate.Open(); err != nil {
+				t.Fatal(err)
+			}
+			rec := wait(t, s, id)
+			wantStatus(t, rec, fakegitlab.StatusSuccess, "")
+			wantTrace(t, rec, "job finished")
+			if f := s.PoolManager.Faults(); f.LoseClaimResponses != 0 {
+				t.Errorf("LoseClaimResponses after the job = %d, want 0: the lost answer was the first claim's", f.LoseClaimResponses)
+			}
+		},
+	},
 }
 
 // wantAgentExecs checks that the Stages reached the fake Hosts through

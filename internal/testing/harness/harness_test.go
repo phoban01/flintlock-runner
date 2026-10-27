@@ -68,7 +68,7 @@ func claim(t *testing.T, c poolmgr.Client, hosts []string) *poolmgr.Claim {
 		t.Fatalf("CreatePool: %v", err)
 	}
 	for {
-		cl, err := c.ClaimVM(ctx, poolmgr.PoolRef{Namespace: Namespace, Name: ProfileName})
+		cl, err := c.ClaimVM(ctx, poolmgr.PoolRef{Namespace: Namespace, Name: ProfileName}, "")
 		if err == nil {
 			return cl
 		}

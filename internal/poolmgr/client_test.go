@@ -62,7 +62,7 @@ func TestClientSpeaksEveryService(t *testing.T) {
 	}
 
 	// Lease: claim, heartbeat, release.
-	claim, err := c.ClaimVM(ctx, spec.Ref)
+	claim, err := c.ClaimVM(ctx, spec.Ref, "")
 	if err != nil {
 		t.Fatalf("ClaimVM: %v", err)
 	}
@@ -112,7 +112,7 @@ func TestClaimCarriesEveryFieldOfTheResponse(t *testing.T) {
 	spec := specFor(t, testProfile("small", 1), "host-a")
 	pm.fillPool(c, spec)
 
-	claim, err := c.ClaimVM(ctx, spec.Ref)
+	claim, err := c.ClaimVM(ctx, spec.Ref, "")
 	if err != nil {
 		t.Fatalf("ClaimVM: %v", err)
 	}
@@ -193,7 +193,7 @@ func TestEveryUnaryCallCarriesTheConfiguredDeadline(t *testing.T) {
 	}
 	// The Pool is empty, so this claim is refused; the call still
 	// reaches the server, which is what is being recorded.
-	if _, err := c.ClaimVM(ctx, spec.Ref); !errors.Is(err, poolmgr.ErrExhausted) {
+	if _, err := c.ClaimVM(ctx, spec.Ref, ""); !errors.Is(err, poolmgr.ErrExhausted) {
 		t.Fatalf("ClaimVM = %v, want ErrExhausted", err)
 	}
 	if _, err := c.Heartbeat(ctx, "no-such-lease"); !errors.Is(err, poolmgr.ErrNotFound) {
@@ -429,7 +429,7 @@ func TestErrorsMapToSentinels(t *testing.T) {
 	}{
 		{
 			name: "claiming an unknown pool is not found",
-			call: func() error { _, err := c.ClaimVM(ctx, ref("nothing-here")); return err },
+			call: func() error { _, err := c.ClaimVM(ctx, ref("nothing-here"), ""); return err },
 			want: poolmgr.ErrNotFound,
 		},
 		{
@@ -439,7 +439,7 @@ func TestErrorsMapToSentinels(t *testing.T) {
 				if _, err := c.CreatePool(ctx, empty); err != nil {
 					return err
 				}
-				_, err := c.ClaimVM(ctx, empty.Ref)
+				_, err := c.ClaimVM(ctx, empty.Ref, "")
 				return err
 			},
 			want: poolmgr.ErrExhausted,

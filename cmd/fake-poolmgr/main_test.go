@@ -81,7 +81,7 @@ hosts:
 	if _, err := client.GetPool(ctx, ref); !errors.Is(err, poolmgr.ErrNotFound) {
 		t.Fatalf("GetPool on an undeclared pool = %v, want ErrNotFound", err)
 	}
-	if _, err := client.ClaimVM(ctx, ref); !errors.Is(err, poolmgr.ErrNotFound) {
+	if _, err := client.ClaimVM(ctx, ref, ""); !errors.Is(err, poolmgr.ErrNotFound) {
 		t.Fatalf("ClaimVM on an undeclared pool = %v, want ErrNotFound", err)
 	}
 	stream, err := client.Subscribe(ctx, poolmgr.EventFilter{})

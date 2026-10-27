@@ -271,13 +271,21 @@ func (c *client) ListPools(ctx context.Context, namespace string) ([]*Pool, erro
 //# `lease_id`, `vm_uid`, `network_interfaces` and the `host` name and
 //# address on the Allocation.
 
+//= docs/requirements/04-pool-manager.md#claiming
+//# The Scheduler SHALL send a `request_id` on every `ClaimVM`, chosen
+//# once for the allocation and sent unchanged on every retry of it.
+
 // ClaimVM implements Lease. Every field of ClaimVMResponse the Scheduler
 // needs for an Allocation is carried over: the lease id it heartbeats and
 // releases with, the MicroVM uid, the guest's network interfaces and the
 // Host that runs it. Host is left zero by a Pool Manager that predates the
 // field, which is what sends the Scheduler to the fan-out of SC-031.
-func (c *client) ClaimVM(ctx context.Context, pool PoolRef) (*Claim, error) {
-	resp, err := c.lease.ClaimVM(ctx, &poolmgrv1.ClaimVMRequest{Pool: refToProto(pool)})
+//
+// requestID goes on the wire as request_id (PL-036). A call that times out
+// after battery claimed a MicroVM is retried with the same id, and battery
+// answers with the Lease it already made instead of a second one.
+func (c *client) ClaimVM(ctx context.Context, pool PoolRef, requestID string) (*Claim, error) {
+	resp, err := c.lease.ClaimVM(ctx, &poolmgrv1.ClaimVMRequest{Pool: refToProto(pool), RequestId: requestID})
 	if err != nil {
 		return nil, mapErr(ctx, err)
 	}
@@ -429,6 +437,8 @@ func mapErr(ctx context.Context, err error) error {
 		sentinel = ErrUnavailable
 	case codes.InvalidArgument:
 		sentinel = ErrInvalid
+	case codes.Aborted:
+		sentinel = ErrAborted
 	case codes.Canceled, codes.DeadlineExceeded:
 		if ctxErr := ctx.Err(); ctxErr != nil {
 			return ctxErr

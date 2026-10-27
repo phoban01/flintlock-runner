@@ -58,7 +58,7 @@ func TestAvailabilityFollowsTheEventStream(t *testing.T) {
 	// replacement boot.
 	pm.host("host-a").SetFaults(flintlock.HostFaults{CreateFails: true})
 
-	claim, err := c.ClaimVM(ctx, spec.Ref)
+	claim, err := c.ClaimVM(ctx, spec.Ref, "")
 	if err != nil {
 		t.Fatalf("ClaimVM: %v", err)
 	}
@@ -134,7 +134,7 @@ func TestPollingWhileTheEventStreamIsDown(t *testing.T) {
 		t.Error("the tracker never tried to subscribe")
 	}
 
-	claim, err := c.ClaimVM(ctx, spec.Ref)
+	claim, err := c.ClaimVM(ctx, spec.Ref, "")
 	if err != nil {
 		t.Fatalf("ClaimVM: %v", err)
 	}
@@ -198,7 +198,7 @@ func TestPoolBelowTargetIsWarned(t *testing.T) {
 
 	pm.host("host-a").SetFaults(flintlock.HostFaults{CreateFails: true})
 	for i := 0; i < 2; i++ {
-		if _, err := c.ClaimVM(ctx, spec.Ref); err != nil {
+		if _, err := c.ClaimVM(ctx, spec.Ref, ""); err != nil {
 			t.Fatalf("ClaimVM %d: %v", i, err)
 		}
 	}

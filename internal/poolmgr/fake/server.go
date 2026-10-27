@@ -129,7 +129,7 @@ type leaseServer struct {
 // (TD-008); with FakeConfig.OmitHostOnClaim the field stays unset, as it is
 // from a battery that predates it.
 func (s *leaseServer) ClaimVM(ctx context.Context, req *poolmgrv1.ClaimVMRequest) (*poolmgrv1.ClaimVMResponse, error) {
-	res, err := s.pm.claimVM(ctx, refFromProto(req.GetPool()))
+	res, err := s.pm.claimVM(ctx, refFromProto(req.GetPool()), req.GetRequestId())
 	if err != nil {
 		return nil, err
 	}

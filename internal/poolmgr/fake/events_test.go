@@ -61,7 +61,7 @@ func TestEveryEventTypeIsEmittedAtItsTransition(t *testing.T) {
 	}
 
 	// Claiming: the MicroVM is leased, and the strategy replaces it.
-	claim, err := h.client.ClaimVM(h.ctx, h.ref("pool"))
+	claim, err := h.client.ClaimVM(h.ctx, h.ref("pool"), "")
 	if err != nil {
 		t.Fatalf("ClaimVM: %v", err)
 	}
@@ -91,7 +91,7 @@ func TestEveryEventTypeIsEmittedAtItsTransition(t *testing.T) {
 	}
 
 	// A second claim held past the warning window and then past expiry.
-	second, err := h.client.ClaimVM(h.ctx, h.ref("pool"))
+	second, err := h.client.ClaimVM(h.ctx, h.ref("pool"), "")
 	if err != nil {
 		t.Fatalf("ClaimVM: %v", err)
 	}
@@ -115,7 +115,7 @@ func TestEveryEventTypeIsEmittedAtItsTransition(t *testing.T) {
 	// the next tick reports.
 	h.pm.SetFaults(poolmgr.Faults{HookFailures: []poolmgr.HookFailure{{Hook: poolmgr.HookCreate, Remaining: 1}}})
 	before, _ := host.counts()
-	third, err := h.client.ClaimVM(h.ctx, h.ref("pool"))
+	third, err := h.client.ClaimVM(h.ctx, h.ref("pool"), "")
 	if err != nil {
 		t.Fatalf("ClaimVM: %v", err)
 	}
@@ -235,10 +235,10 @@ func TestSubscribeFilterAndReplay(t *testing.T) {
 
 	// Live delivery is filtered the same way: the claim on the other Pool is
 	// not delivered, the claim on this one is.
-	if _, err := h.client.ClaimVM(h.ctx, h.ref("two")); err != nil {
+	if _, err := h.client.ClaimVM(h.ctx, h.ref("two"), ""); err != nil {
 		t.Fatalf("ClaimVM(two): %v", err)
 	}
-	claim, err := h.client.ClaimVM(h.ctx, ref)
+	claim, err := h.client.ClaimVM(h.ctx, ref, "")
 	if err != nil {
 		t.Fatalf("ClaimVM(one): %v", err)
 	}

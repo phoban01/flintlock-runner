@@ -37,7 +37,11 @@ const releaseTimeout = 30 * time.Second
 // declare the Pool again (PL-033). The Client Library deletes a claim it
 // stops waiting for. A claim that neither binds nor says why within the
 // deadline is poolmgr.ErrUnavailable: battery-operator is not answering.
-func (b *Backend) ClaimVM(ctx context.Context, ref poolmgr.PoolRef) (*poolmgr.Claim, error) {
+//
+// The request id is not used: the claim is a MicroVMClaim with a generated
+// name, and the Client Library deletes a claim it stops waiting for, so a
+// retry never finds one it made earlier still bound.
+func (b *Backend) ClaimVM(ctx context.Context, ref poolmgr.PoolRef, _ string) (*poolmgr.Claim, error) {
 	claims, err := b.claimClient(ctx)
 	if err != nil {
 		return nil, err

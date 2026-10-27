@@ -22,7 +22,7 @@ func claimOne(t *testing.T, ctx context.Context, pm *poolManager, c poolmgr.Clie
 	t.Helper()
 	spec := specFor(t, testProfile("small", 1), "host-a")
 	pm.fillPool(c, spec)
-	claim, err := c.ClaimVM(ctx, spec.Ref)
+	claim, err := c.ClaimVM(ctx, spec.Ref, "")
 	if err != nil {
 		t.Fatalf("ClaimVM: %v", err)
 	}

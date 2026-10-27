@@ -478,12 +478,14 @@ func (c *countingHost) holds(uid string) {
 // stubClient is a poolmgr.Client whose every call a test scripts. Only the
 // calls the Scheduler makes are implemented.
 type stubClient struct {
-	mu         sync.Mutex
-	claimFn    func(ctx context.Context, ref poolmgr.PoolRef) (*poolmgr.Claim, error)
-	beatFn     func(ctx context.Context, leaseID string) (time.Time, error)
-	releaseFn  func(ctx context.Context, leaseID string) error
-	getPoolFn  func(ctx context.Context, ref poolmgr.PoolRef) (*poolmgr.Pool, error)
-	claims     int
+	mu        sync.Mutex
+	claimFn   func(ctx context.Context, ref poolmgr.PoolRef) (*poolmgr.Claim, error)
+	beatFn    func(ctx context.Context, leaseID string) (time.Time, error)
+	releaseFn func(ctx context.Context, leaseID string) error
+	getPoolFn func(ctx context.Context, ref poolmgr.PoolRef) (*poolmgr.Pool, error)
+	claims    int
+	// requestIDs is the request_id of every ClaimVM call, in order.
+	requestIDs []string
 	beats      int
 	releases   []string
 	getPools   int
@@ -521,9 +523,10 @@ func (c *stubClient) GetPool(ctx context.Context, ref poolmgr.PoolRef) (*poolmgr
 
 func (c *stubClient) ListPools(context.Context, string) ([]*poolmgr.Pool, error) { return nil, nil }
 
-func (c *stubClient) ClaimVM(ctx context.Context, ref poolmgr.PoolRef) (*poolmgr.Claim, error) {
+func (c *stubClient) ClaimVM(ctx context.Context, ref poolmgr.PoolRef, requestID string) (*poolmgr.Claim, error) {
 	c.mu.Lock()
 	c.claims++
+	c.requestIDs = append(c.requestIDs, requestID)
 	fn := c.claimFn
 	c.mu.Unlock()
 	if fn == nil {
@@ -574,6 +577,13 @@ func (c *stubClient) claimCount() int {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	return c.claims
+}
+
+// requestIDsSeen is the request id of every ClaimVM call so far, in order.
+func (c *stubClient) requestIDsSeen() []string {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return append([]string(nil), c.requestIDs...)
 }
 
 func (c *stubClient) beatCount() int {
@@ -628,11 +638,11 @@ func (c *countingClient) awaitRelease(t *testing.T, ctx context.Context) string 
 	}
 }
 
-func (c *countingClient) ClaimVM(ctx context.Context, ref poolmgr.PoolRef) (*poolmgr.Claim, error) {
+func (c *countingClient) ClaimVM(ctx context.Context, ref poolmgr.PoolRef, requestID string) (*poolmgr.Claim, error) {
 	c.mu.Lock()
 	c.claims++
 	c.mu.Unlock()
-	return c.Client.ClaimVM(ctx, ref)
+	return c.Client.ClaimVM(ctx, ref, requestID)
 }
 
 func (c *countingClient) ReleaseVM(ctx context.Context, leaseID string) error {

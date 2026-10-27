@@ -158,11 +158,11 @@ func (c *Client) ListPools(ctx context.Context, namespace string) ([]*poolmgr.Po
 }
 
 // ClaimVM implements poolmgr.Lease.
-func (c *Client) ClaimVM(ctx context.Context, pool poolmgr.PoolRef) (*poolmgr.Claim, error) {
+func (c *Client) ClaimVM(ctx context.Context, pool poolmgr.PoolRef, requestID string) (*poolmgr.Claim, error) {
 	if c.err != nil {
 		return nil, c.err
 	}
-	resp, err := c.lease.ClaimVM(ctx, &poolmgrv1.ClaimVMRequest{Pool: refToProto(pool)})
+	resp, err := c.lease.ClaimVM(ctx, &poolmgrv1.ClaimVMRequest{Pool: refToProto(pool), RequestId: requestID})
 	if err != nil {
 		return nil, mapErr(ctx, err)
 	}
@@ -324,6 +324,8 @@ func mapErr(ctx context.Context, err error) error {
 		sentinel = poolmgr.ErrUnavailable
 	case codes.InvalidArgument:
 		sentinel = poolmgr.ErrInvalid
+	case codes.Aborted:
+		sentinel = poolmgr.ErrAborted
 	case codes.Canceled, codes.DeadlineExceeded:
 		if ctxErr := ctx.Err(); ctxErr != nil {
 			return ctxErr

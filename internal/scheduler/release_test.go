@@ -185,7 +185,7 @@ func TestStartupLeavesAPreviousIncarnationsLeaseAlone(t *testing.T) {
 	e.sched.declareAll(ctx)
 	pool := e.poolOf("default")
 	waitForClaimable(t, ctx, raw, pool)
-	previous, err := raw.ClaimVM(ctx, pool)
+	previous, err := raw.ClaimVM(ctx, pool, "")
 	if err != nil {
 		t.Fatalf("the previous incarnation could not claim: %v", err)
 	}

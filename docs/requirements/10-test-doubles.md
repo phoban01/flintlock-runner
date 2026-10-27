@@ -38,6 +38,17 @@ client together rather than letting them drift apart.
 - **TD-010** The fake Pool Manager SHALL support fault injection for claim
   latency, a period of `UNAVAILABLE`, hook failure and a dropped `Events`
   stream.
+- **TD-011** The fake Pool Manager SHALL answer a `ClaimVM` whose `request_id` names
+  an existing Lease with that Lease, without extending its expiry; with
+  `INVALID_ARGUMENT` when that Lease is from another Pool; and with
+  `ABORTED` while that Lease's MicroVM is being deleted.
+- **TD-012** The fake Pool Manager SHALL support fault injection that claims a
+  MicroVM and answers `UNAVAILABLE` instead of the Lease, for a set number
+  of claims.
+
+TD-011 is battery v0.4.0's idempotent claim (PL-036, PL-037), and TD-012 is
+how a `ClaimVM` that timed out after battery claimed is produced: the Lease
+exists, and its answer never reached the Runner.
 
 ## Fake Host {#fake-host}
 
@@ -124,6 +135,9 @@ AWS any more.
   Manager.
 - **TD-054** The harness SHALL fail if any scenario leaves a Lease held or
   a sandbox directory behind after the Runner has shut down.
+- **TD-055** The harness SHALL cover a `ClaimVM` whose answer is lost, and
+  SHALL check that the Job runs in the MicroVM of the first Lease and that
+  no second Lease is created.
 
 The hardware tier in TD-052 and TD-053 is how the project moves from fakes
 to metal without rewriting tests: the same scenarios, pointed at a static

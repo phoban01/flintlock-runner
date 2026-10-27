@@ -446,7 +446,7 @@ func TestTwoRunnersDoNotCollide(t *testing.T) {
 		t.Fatalf("both runners declared %s", specs[0].Ref)
 	}
 
-	claim, err := c.ClaimVM(ctx, specs[0].Ref)
+	claim, err := c.ClaimVM(ctx, specs[0].Ref, "")
 	if err != nil {
 		t.Fatalf("ClaimVM from %s: %v", specs[0].Ref, err)
 	}
