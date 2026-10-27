@@ -40,11 +40,11 @@ func TestHostNotReadyIsErrNotFound(t *testing.T) {
 	b := f.backend()
 	ref := f.declare(b)
 
-	first, err := b.ClaimVM(f.ctx, ref)
+	first, err := b.ClaimVM(f.ctx, ref, "")
 	if err != nil {
 		t.Fatal(err)
 	}
-	second, err := b.ClaimVM(f.ctx, ref)
+	second, err := b.ClaimVM(f.ctx, ref, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -102,7 +102,7 @@ func TestHeartbeatSeesHostNotReadyAtOnce(t *testing.T) {
 	b := f.backend()
 	ref := f.declare(b)
 
-	c, err := b.ClaimVM(f.ctx, ref)
+	c, err := b.ClaimVM(f.ctx, ref, "")
 	if err != nil {
 		t.Fatal(err)
 	}

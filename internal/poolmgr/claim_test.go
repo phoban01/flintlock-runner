@@ -2,6 +2,7 @@ package poolmgr_test
 
 import (
 	"context"
+	"crypto/rand"
 	"errors"
 	"slices"
 	"testing"
@@ -55,7 +56,7 @@ func TestClaimTakesFromThePoolOfThatProfile(t *testing.T) {
 
 	cl := claimer(t, c, nil, nil, nil, nil)
 	for _, spec := range []poolmgr.PoolSpec{small, large} {
-		claim, err := cl.Claim(ctx, spec.Ref)
+		claim, err := cl.Claim(ctx, spec.Ref, rand.Text())
 		if err != nil {
 			t.Fatalf("Claim from %s: %v", spec.Ref, err)
 		}
@@ -113,10 +114,10 @@ func TestExhaustedPoolCountsAsEmpty(t *testing.T) {
 	pm.host("host-a").SetFaults(flintlock.HostFaults{CreateFails: true})
 
 	cl := claimer(t, c, tracker, nil, nil, nil)
-	if _, err := cl.Claim(ctx, spec.Ref); err != nil {
+	if _, err := cl.Claim(ctx, spec.Ref, rand.Text()); err != nil {
 		t.Fatalf("first Claim: %v", err)
 	}
-	if _, err := cl.Claim(ctx, spec.Ref); !errors.Is(err, poolmgr.ErrExhausted) {
+	if _, err := cl.Claim(ctx, spec.Ref, rand.Text()); !errors.Is(err, poolmgr.ErrExhausted) {
 		t.Fatalf("second Claim = %v, want ErrExhausted", err)
 	}
 	if got := tracker.Available(spec.Ref); got != 0 {
@@ -159,7 +160,7 @@ func TestClaimOnAnUnknownPoolRedeclaresIt(t *testing.T) {
 
 	tracker := newRecordingTracker()
 	cl := claimer(t, c, tracker, nil, d, nil)
-	_, err := cl.Claim(ctx, ref("small"))
+	_, err := cl.Claim(ctx, ref("small"), rand.Text())
 	if !errors.Is(err, poolmgr.ErrExhausted) {
 		t.Errorf("Claim on a deleted pool = %v, want it treated as an exhausted pool", err)
 	}
@@ -205,7 +206,7 @@ func TestUnavailableClaimMarksThePoolManagerUnhealthy(t *testing.T) {
 
 	pm.setFaults(poolmgr.Faults{UnavailableFor: time.Hour})
 	cl := claimer(t, c, nil, health, nil, nil)
-	if _, err := cl.Claim(ctx, ref("small")); !errors.Is(err, poolmgr.ErrUnavailable) {
+	if _, err := cl.Claim(ctx, ref("small"), rand.Text()); !errors.Is(err, poolmgr.ErrUnavailable) {
 		t.Fatalf("Claim while the pool manager is away = %v, want ErrUnavailable", err)
 	}
 	if health.Healthy() {
@@ -239,7 +240,7 @@ func TestClaimWithoutPolicyUnitsStillWorks(t *testing.T) {
 	logs := newLogRecorder(t)
 	cl := claimer(t, c, nil, nil, nil, logs)
 
-	if _, err := cl.Claim(ctx, ref("no-such-pool")); !errors.Is(err, poolmgr.ErrExhausted) {
+	if _, err := cl.Claim(ctx, ref("no-such-pool"), rand.Text()); !errors.Is(err, poolmgr.ErrExhausted) {
 		t.Errorf("Claim on an unknown pool = %v, want ErrExhausted", err)
 	}
 	if !logs.contains("nothing can re-declare it") {

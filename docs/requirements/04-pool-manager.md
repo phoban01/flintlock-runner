@@ -106,6 +106,22 @@ size is the amount of idle warm capacity, not a ceiling on concurrent Jobs.
   backoff period.
 - **PL-035** While the Pool Manager is unhealthy, the Scheduler SHALL count
   the available warm MicroVMs of every Pool as zero when computing capacity.
+- **PL-036** The Scheduler SHALL send a `request_id` on every `ClaimVM`, chosen
+  once for the allocation and sent unchanged on every retry of it.
+- **PL-037** If `ClaimVM` returns `ABORTED`, then the Scheduler SHALL
+  retry the claim after the backoff, without marking the Pool Manager
+  unhealthy or the Pool exhausted.
+
+battery v0.4.0 made `ClaimVM` idempotent: a repeat with the `request_id` of a
+Lease that still exists gets that Lease back, not a second MicroVM. Without
+the id, a `ClaimVM` that reached its deadline after battery had claimed
+leaves a MicroVM leased to nobody until its Lease expires, and the retry
+claims another. The Scheduler chooses one id per allocation and keeps it
+across the retries of PL-032 to PL-034. `ABORTED` is battery's answer while
+the Lease the id names is being released: the MicroVM of an earlier attempt
+is on its way out, and once it is gone the same id claims a new one. The
+claim backend of chapter 12 ignores the id: a `MicroVMClaim` the Client
+Library stops waiting for is deleted, so a retry never finds one still bound.
 
 ## Heartbeat and release {#heartbeat-and-release}
 

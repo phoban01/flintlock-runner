@@ -47,6 +47,9 @@ var (
 	// ErrInvalid is INVALID_ARGUMENT, for a spec the Pool Manager rejects
 	// (PL-016).
 	ErrInvalid = errors.New("poolmgr: invalid request")
+	// ErrAborted is ABORTED from ClaimVM: the Lease the request_id names is
+	// being released, and the claim is to be retried (PL-037).
+	ErrAborted = errors.New("poolmgr: aborted")
 )
 
 // PoolRef identifies a Pool (proto PoolRef). The namespace is the Runner
@@ -183,9 +186,12 @@ type PoolAdmin interface {
 // Lease mirrors the Lease service (PL-030 to PL-043).
 type Lease interface {
 	// ClaimVM returns ErrExhausted when no MicroVM is AVAILABLE (PL-032),
-	// ErrNotFound for an unknown Pool (PL-033) and ErrUnavailable when the
-	// Pool Manager cannot be reached (PL-034).
-	ClaimVM(ctx context.Context, pool PoolRef) (*Claim, error)
+	// ErrNotFound for an unknown Pool (PL-033), ErrUnavailable when the
+	// Pool Manager cannot be reached (PL-034) and ErrAborted when the Lease
+	// that requestID names is being released (PL-037). requestID makes the
+	// call safe to retry: battery answers a repeat of it with the Lease the
+	// first call created, for as long as that Lease exists (PL-036).
+	ClaimVM(ctx context.Context, pool PoolRef, requestID string) (*Claim, error)
 	// Heartbeat extends the lease and returns the new expiry (PL-040,
 	// SC-060). ErrNotFound means the lease no longer exists (SC-061).
 	Heartbeat(ctx context.Context, leaseID string) (expiresAt time.Time, err error)
@@ -406,6 +412,11 @@ type Faults struct {
 	// which is how "a Lease expiring during a Job" (TD-051, SC-061) is
 	// produced without waiting out the expiry threshold.
 	RefuseHeartbeats bool
+	// LoseClaimResponses makes the next n ClaimVM calls claim a MicroVM and
+	// then answer UNAVAILABLE instead of the Lease, as a call that timed out
+	// after battery claimed looks to its caller (TD-012). Each lost response
+	// counts it down.
+	LoseClaimResponses int
 }
 
 // FaultInjector is implemented by the fake Pool Manager so that tests and
@@ -423,6 +434,8 @@ type LeaseRecord struct {
 	ClaimedAt       time.Time
 	LastHeartbeatAt time.Time
 	ExpiresAt       time.Time
+	// RequestID is the ClaimVM request_id that created the Lease (TD-011).
+	RequestID string
 }
 
 // VMRecord is the proto VMRecord, exposed by Inspector.

@@ -199,25 +199,59 @@ type claimResult struct {
 	leaseID string
 	vmUID   string
 	ifaces  map[string]*types.NetworkInterfaceStatus
-	// host is nil when OmitHostOnClaim is set (TD-008).
-	host *poolmgr.HostRef
+	// host is nil when OmitHostOnClaim is set (TD-008); hostName is the
+	// Host either way, for fetchInterfaces.
+	host     *poolmgr.HostRef
+	hostName string
 }
 
 //= docs/requirements/10-test-doubles.md#fake-pool-manager
 //# The fake Pool Manager SHALL return `RESOURCE_EXHAUSTED` from `ClaimVM`
 //# when the Pool has no MicroVM in the `AVAILABLE` phase.
 
+// maxRequestIDLength is battery's bound on ClaimVMRequest.request_id.
+const maxRequestIDLength = 255
+
+//= docs/requirements/10-test-doubles.md#fake-pool-manager
+//# The fake Pool Manager SHALL answer a `ClaimVM` whose `request_id` names
+//# an existing Lease with that Lease, without extending its expiry; with
+//# `INVALID_ARGUMENT` when that Lease is from another Pool; and with
+//# `ABORTED` while that Lease's MicroVM is being deleted.
+
+//= docs/requirements/10-test-doubles.md#fake-pool-manager
+//# The fake Pool Manager SHALL support fault injection that claims a
+//# MicroVM and answers `UNAVAILABLE` instead of the Lease, for a set number
+//# of claims.
+
 // claimVM implements Lease.ClaimVM: after the injected claim latency it
 // takes the longest-available MicroVM, runs the pre-lease hooks, creates the
 // Lease and starts the strategy's replacement (TD-003). It returns
 // RESOURCE_EXHAUSTED when nothing is AVAILABLE (TD-005) and NOT_FOUND for an
 // unknown Pool.
-func (p *PoolManager) claimVM(ctx context.Context, ref poolmgr.PoolRef) (*claimResult, error) {
+//
+// A requestID that an existing Lease carries is a retry of the call that
+// made it, and gets that Lease back as battery's replay does (TD-011): from
+// the same Pool, or INVALID_ARGUMENT; while its MicroVM is not being
+// deleted, or ABORTED. A replay is not a heartbeat. With
+// Faults.LoseClaimResponses set, the Lease is made and UNAVAILABLE is
+// answered instead of it (TD-012).
+func (p *PoolManager) claimVM(ctx context.Context, ref poolmgr.PoolRef, requestID string) (*claimResult, error) {
+	if len(requestID) > maxRequestIDLength {
+		return nil, status.Errorf(codes.InvalidArgument, "request_id is %d bytes, at most %d allowed", len(requestID), maxRequestIDLength)
+	}
 	if err := p.claimLatency(ctx); err != nil {
 		return nil, err
 	}
 
 	p.mu.Lock()
+	if res, err, replayed := p.replayLocked(ref, requestID); replayed {
+		p.mu.Unlock()
+		if err != nil {
+			return nil, err
+		}
+		p.fetchInterfaces(ctx, res)
+		return res, nil
+	}
 	ps, err := p.poolLocked(ref)
 	if err != nil {
 		p.mu.Unlock()
@@ -251,26 +285,66 @@ func (p *PoolManager) claimVM(ctx context.Context, ref poolmgr.PoolRef) (*claimR
 		ClaimedAt:       now,
 		LastHeartbeatAt: now,
 		ExpiresAt:       now.Add(ps.spec.HeartbeatExpiryThreshold),
+		RequestID:       requestID,
 	}}
 	vm.leaseID = leaseID
 	p.setPhaseLocked(vm, poolmgrv1.VMPhase_LEASED)
 	p.emitLocked(ps.key, vm.uid, poolmgrv1.EventType_VM_CLAIMED, map[string]any{"lease_id": leaseID, "host": vm.host})
 	p.provisionNLocked(ps, strategyOf(ps.spec).onClaimed(), "claim")
-	res := &claimResult{leaseID: leaseID, vmUID: vm.uid}
+	if p.faults.LoseClaimResponses > 0 {
+		p.faults.LoseClaimResponses--
+		p.mu.Unlock()
+		return nil, status.Error(codes.Unavailable, "fault injection: claim response lost")
+	}
+	res := p.claimResultLocked(vm, leaseID)
+	p.mu.Unlock()
+
+	p.fetchInterfaces(ctx, res)
+	return res, nil
+}
+
+// replayLocked answers a ClaimVM whose requestID an existing Lease carries
+// (TD-011). replayed is false when no Lease carries it, and the claim goes
+// on as a new one.
+func (p *PoolManager) replayLocked(ref poolmgr.PoolRef, requestID string) (res *claimResult, err error, replayed bool) {
+	if requestID == "" {
+		return nil, nil, false
+	}
+	for _, ls := range p.leases {
+		if ls.rec.RequestID != requestID {
+			continue
+		}
+		if keyOf(ls.rec.Pool) != keyOf(ref) {
+			return nil, status.Errorf(codes.InvalidArgument, "request_id %q was used to claim from pool %s, not %s", requestID, ls.rec.Pool, ref), true
+		}
+		vm := p.vmByUID[ls.rec.VMUID]
+		if vm == nil || vm.released || vm.phase == poolmgrv1.VMPhase_DELETING {
+			return nil, status.Errorf(codes.Aborted, "lease %s for request_id %q is being released, retry", ls.rec.LeaseID, requestID), true
+		}
+		return p.claimResultLocked(vm, ls.rec.LeaseID), nil, true
+	}
+	return nil, nil, false
+}
+
+// claimResultLocked is the ClaimVMResponse for a leased MicroVM, without
+// the interfaces, which fetchInterfaces adds outside the lock.
+func (p *PoolManager) claimResultLocked(vm *vmState, leaseID string) *claimResult {
+	res := &claimResult{leaseID: leaseID, vmUID: vm.uid, hostName: vm.host}
 	if !p.cfg.OmitHostOnClaim {
 		res.host = &poolmgr.HostRef{Name: vm.host, Address: p.hostAddress(vm.host)}
 	}
-	host := vm.host
-	p.mu.Unlock()
+	return res
+}
 
-	// Best effort, as in battery: the Lease exists whether or not the Host
-	// answers, so a failure here only leaves the interfaces empty.
-	if hc, err := p.hostClient(host); err == nil {
+// fetchInterfaces asks the MicroVM's Host for its network interfaces. Best
+// effort, as in battery: the Lease exists whether or not the Host answers,
+// so a failure here only leaves the interfaces empty.
+func (p *PoolManager) fetchInterfaces(ctx context.Context, res *claimResult) {
+	if hc, err := p.hostClient(res.hostName); err == nil {
 		if m, err := hc.GetMicroVM(ctx, res.vmUID); err == nil {
 			res.ifaces = m.GetStatus().GetNetworkInterfaces()
 		}
 	}
-	return res, nil
 }
 
 // claimLatency waits out Faults.ClaimLatency on the fake's clock (TD-010).

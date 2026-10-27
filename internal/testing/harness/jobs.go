@@ -21,6 +21,11 @@ import (
 //# dependency download, cache restore and save, and Host Service environment
 //# injection.
 
+//= docs/requirements/10-test-doubles.md#end-to-end-harness
+//# The harness SHALL cover a `ClaimVM` whose answer is lost, and
+//# SHALL check that the Job runs in the MicroVM of the first Lease and that
+//# no second Lease is created.
+
 // Job is a CI Job as a scenario describes it. BuildJob turns it into the
 // spec.Job payload the fake GitLab hands out.
 type Job struct {

@@ -2,6 +2,7 @@ package scheduler
 
 import (
 	"context"
+	"crypto/rand"
 	"errors"
 	"fmt"
 	"time"
@@ -101,12 +102,22 @@ func (s *impl) claim(
 		}
 	}()
 
+	//= docs/requirements/04-pool-manager.md#claiming
+	//# The Scheduler SHALL send a `request_id` on every `ClaimVM`, chosen
+	//# once for the allocation and sent unchanged on every retry of it.
+
+	// One request id for every attempt of this allocation. A ClaimVM that
+	// times out after the Pool Manager claimed a MicroVM is answered on the
+	// retry with the Lease it made, instead of a second MicroVM that would
+	// leak until its Lease expired.
+	requestID := rand.Text()
+
 	for {
 		// The wake-up channel is taken before the attempt, so an event that
 		// arrives while the claim is in flight still wakes the wait below.
 		wake := s.deps.Tracker.Wait(p.PoolRef)
 
-		claim, err := s.deps.PoolManager.ClaimVM(ctx, p.PoolRef)
+		claim, err := s.deps.PoolManager.ClaimVM(ctx, p.PoolRef, requestID)
 		if err == nil {
 			if waiting {
 				s.metrics.PoolWaited(p.PoolRef, s.clk.Now().Sub(start))
@@ -140,6 +151,16 @@ func (s *impl) claim(
 			//# backoff period.
 			s.deps.Health.MarkUnavailable()
 			log.Warn("pool manager is unavailable, retrying the claim", "error", err)
+		case errors.Is(err, poolmgr.ErrAborted):
+			//= docs/requirements/04-pool-manager.md#claiming
+			//# If `ClaimVM` returns `ABORTED`, then the Scheduler SHALL
+			//# retry the claim after the backoff, without marking the Pool Manager
+			//# unhealthy or the Pool exhausted.
+
+			// The Lease the request id names is being released: an earlier
+			// attempt's MicroVM is on its way out, and once it is gone the
+			// same request id claims a new one.
+			log.Warn("the claim's lease is being released, retrying the claim", "error", err)
 		case ctx.Err() != nil:
 			return nil, &AllocationError{Profile: p.Name, Pool: p.PoolRef, Err: ctx.Err()}
 		default:

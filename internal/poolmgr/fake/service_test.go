@@ -380,7 +380,7 @@ func TestNamespaceRestrictionServesOnlyItsOwn(t *testing.T) {
 	if _, err := h.client.GetPool(h.ctx, other); !errors.Is(err, poolmgr.ErrInvalid) {
 		t.Fatalf("GetPool in another namespace = %v, want ErrInvalid", err)
 	}
-	if _, err := h.client.ClaimVM(h.ctx, other); !errors.Is(err, poolmgr.ErrInvalid) {
+	if _, err := h.client.ClaimVM(h.ctx, other, ""); !errors.Is(err, poolmgr.ErrInvalid) {
 		t.Fatalf("ClaimVM in another namespace = %v, want ErrInvalid", err)
 	}
 

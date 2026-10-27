@@ -53,7 +53,7 @@ flintlock_runner_pool_available_microvms{namespace="runner-ns",pool="small"} 2
 	}
 
 	pm.host("host-a").SetFaults(flintlock.HostFaults{CreateFails: true})
-	if _, err := c.ClaimVM(ctx, spec.Ref); err != nil {
+	if _, err := c.ClaimVM(ctx, spec.Ref, ""); err != nil {
 		t.Fatalf("ClaimVM: %v", err)
 	}
 	tracker.await(t, ctx, "the claim to be counted", func() bool {

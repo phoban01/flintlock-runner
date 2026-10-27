@@ -118,7 +118,7 @@ func TestPoolWatchDrivesTheTracker(t *testing.T) {
 	tracker := f.tracker(b, ref)
 	f.eventually("the tracker counts the pool", func() bool { return tracker.Available(ref) == 1 })
 
-	c, err := b.ClaimVM(f.ctx, ref)
+	c, err := b.ClaimVM(f.ctx, ref, "")
 	if err != nil {
 		t.Fatal(err)
 	}

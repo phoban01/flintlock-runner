@@ -105,7 +105,7 @@ func TestClaimOnEmptyPoolIsResourceExhausted(t *testing.T) {
 	if code := statusCode(t, err); code != codes.ResourceExhausted {
 		t.Fatalf("ClaimVM on an empty pool: code %v, want RESOURCE_EXHAUSTED", code)
 	}
-	if _, err := h.client.ClaimVM(h.ctx, h.ref("empty")); !errors.Is(err, poolmgr.ErrExhausted) {
+	if _, err := h.client.ClaimVM(h.ctx, h.ref("empty"), ""); !errors.Is(err, poolmgr.ErrExhausted) {
 		t.Fatalf("ClaimVM through the client = %v, want ErrExhausted", err)
 	}
 
@@ -189,7 +189,7 @@ func TestHostOnClaimResponse(t *testing.T) {
 			// Scheduler. IMMEDIATE_ON_LEASE replaced the claimed MicroVM, so
 			// there is one to claim again once it reports available.
 			h.waitEvent(poolmgrv1.EventType_VM_AVAILABLE)
-			claim, err := h.client.ClaimVM(h.ctx, h.ref("pool"))
+			claim, err := h.client.ClaimVM(h.ctx, h.ref("pool"), "")
 			if err != nil {
 				t.Fatalf("ClaimVM through the client: %v", err)
 			}

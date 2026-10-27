@@ -75,12 +75,21 @@ func NewClaimer(cfg ClaimerConfig) (*Claimer, error) {
 //     MicroVM appear (PL-033);
 //   - UNAVAILABLE, or a connection error, marks the Pool Manager unhealthy
 //     for the configured backoff period, which zeroes the capacity of every
-//     Pool until it recovers (PL-034, PL-035).
-func (c *Claimer) Claim(ctx context.Context, ref PoolRef) (*Claim, error) {
-	claim, err := c.cfg.Lease.ClaimVM(ctx, ref)
+//     Pool until it recovers (PL-034, PL-035);
+//   - ABORTED, the Lease that requestID names being released, comes back
+//     as ErrAborted and changes nothing: the caller retries (PL-037).
+//
+// requestID is the request_id of the claim (PL-036); the caller keeps it
+// across the retries of one allocation.
+func (c *Claimer) Claim(ctx context.Context, ref PoolRef, requestID string) (*Claim, error) {
+	claim, err := c.cfg.Lease.ClaimVM(ctx, ref, requestID)
 	switch {
 	case err == nil:
 		return claim, nil
+
+	case errors.Is(err, ErrAborted):
+		c.log.Warn("the claim's lease is being released; retrying", "pool", ref.String(), "error", err)
+		return nil, err
 
 	case errors.Is(err, ErrExhausted):
 		c.markExhausted(ref)

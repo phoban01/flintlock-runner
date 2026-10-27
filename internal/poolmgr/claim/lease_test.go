@@ -37,7 +37,7 @@ func TestClaimVMMapsTheBoundClaim(t *testing.T) {
 	b := f.backend()
 	ref := f.declare(b)
 
-	got, err := b.ClaimVM(f.ctx, ref)
+	got, err := b.ClaimVM(f.ctx, ref, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -82,14 +82,14 @@ func TestExhaustedPoolIsErrExhausted(t *testing.T) {
 	b := f.backend(func(o *claim.Options) { o.Deadline = 20 * time.Second })
 	ref := f.declare(b)
 
-	first, err := b.ClaimVM(f.ctx, ref)
+	first, err := b.ClaimVM(f.ctx, ref, "")
 	if err != nil {
 		t.Fatal(err)
 	}
 	f.waitAvailable(b, ref, 0)
 
 	start := time.Now()
-	_, err = b.ClaimVM(f.ctx, ref)
+	_, err = b.ClaimVM(f.ctx, ref, "")
 	if !errors.Is(err, poolmgr.ErrExhausted) {
 		t.Fatalf("claim from the emptied pool = %v, want ErrExhausted", err)
 	}
@@ -121,7 +121,7 @@ func TestUnknownPoolIsErrNotFound(t *testing.T) {
 	f := newFixture(t)
 	b := f.backend()
 
-	_, err := b.ClaimVM(f.ctx, poolmgr.PoolRef{Name: "nowhere", Namespace: runnerNamespace})
+	_, err := b.ClaimVM(f.ctx, poolmgr.PoolRef{Name: "nowhere", Namespace: runnerNamespace}, "")
 	if !errors.Is(err, poolmgr.ErrNotFound) {
 		t.Fatalf("claim from an unknown pool = %v, want ErrNotFound", err)
 	}
@@ -151,7 +151,7 @@ func TestHeldClaimIsRenewed(t *testing.T) {
 		t.Fatalf("pool heartbeat interval = %v, want the profile's %s", got, f.profile.Pool.HeartbeatInterval)
 	}
 
-	c, err := b.ClaimVM(f.ctx, ref)
+	c, err := b.ClaimVM(f.ctx, ref, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -190,11 +190,11 @@ func TestLostLeaseIsErrNotFound(t *testing.T) {
 	b := f.backend()
 	ref := f.declare(b)
 
-	expired, err := b.ClaimVM(f.ctx, ref)
+	expired, err := b.ClaimVM(f.ctx, ref, "")
 	if err != nil {
 		t.Fatal(err)
 	}
-	deleted, err := b.ClaimVM(f.ctx, ref)
+	deleted, err := b.ClaimVM(f.ctx, ref, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -233,7 +233,7 @@ func TestReleaseVMDeletesTheClaim(t *testing.T) {
 	b := f.backend()
 	ref := f.declare(b)
 
-	c, err := b.ClaimVM(f.ctx, ref)
+	c, err := b.ClaimVM(f.ctx, ref, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -262,7 +262,7 @@ func TestCloseStopsRenewals(t *testing.T) {
 	b := f.backend()
 	ref := f.declare(b)
 
-	c, err := b.ClaimVM(f.ctx, ref)
+	c, err := b.ClaimVM(f.ctx, ref, "")
 	if err != nil {
 		t.Fatal(err)
 	}
