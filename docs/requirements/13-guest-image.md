@@ -240,6 +240,50 @@ they are written. At 25 percent of a 4 GiB MicroVM it holds the node's
 `/var` and the images a small Job pulls into the cluster. The example
 kind Profiles have 8 GiB.
 
+## kind and Cluster API {#guest-kind-capi}
+
+- **GI-080** The Guest Image's kind image SHALL write `/etc/kind/kind-config.yaml`
+  with the guest's Docker socket, `/var/run/docker.sock`, mounted at the
+  same path in the control-plane node, with a registry mirror and
+  without one.
+
+A Cluster API provider's e2e suite can use the kind cluster, `flr`, as its
+management cluster. Cluster API's Docker infrastructure provider, CAPD,
+makes a workload cluster's machines as containers through the Docker
+socket of the node it runs on. Cluster API's own test framework mounts the
+socket into a kind cluster that it makes. kind cannot add a mount to a
+node that is running, and on `flr/kind-ready` the node is running before
+the Job starts, so the kind configuration has the mount.
+
+The mount gives every workload in the cluster the guest's Docker Engine,
+which means root in the guest. A Job already has root in the guest, and
+its MicroVM serves that one Job and is then deleted. So the mount gives a
+Job no access that it does not already have.
+
+The kind image carries one node image: the one that the pinned kind
+release uses by default, `kindest/node:v1.37.0` for kind 0.33.0. Cluster
+API supports Kubernetes v1.37 as a management cluster from v1.13.6 and
+v1.14.1. clusterctl checks only a minimum Kubernetes version, so an
+earlier release such as v1.11 still installs, but Cluster API does not
+test it on v1.37. Two other choices were rejected:
+
+- A Profile setting cannot change the node image. The image is in Docker
+  Engine's store in the root filesystem image (GI-065), and a node image
+  that a Profile names would come by a pull or a load at boot, which takes
+  minutes on a slow Host.
+- A second kind image doubles the build, the checks and the release for
+  one kind of suite.
+
+A Job that needs another Kubernetes version makes its own cluster on
+`flr/kind`, with `--image`.
+
+The kind configuration keeps etcd's default request-size limit and
+backend quota. Some Cluster API suites raise them, to 8 MiB and 4 GiB, on
+the clusters they make. etcd keeps its data on the node's tmpfs `/tmp`,
+so a larger quota lets etcd take more of the MicroVM's memory before it
+refuses a write. Few Jobs need the larger limits, so a Job that needs them
+sets them on `flr` itself.
+
 ## Guest agent protection {#guest-agent-protection}
 
 - **GI-070** The Guest Image's Docker image SHALL run the guest agent with an OOM

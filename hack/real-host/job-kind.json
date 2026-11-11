@@ -57,6 +57,7 @@
         "findmnt /var/lib/docker/volumes || true",
         "df -h /var/lib/docker/volumes",
         "docker inspect -f '{{range .Mounts}}{{.Type}} {{.Destination}} {{.Source}}{{println}}{{end}}' \"${KIND_CLUSTER_NAME}-control-plane\"",
+        "echo \"node docker ping: $(docker exec \"${KIND_CLUSTER_NAME}-control-plane\" curl -s --unix-socket /var/run/docker.sock http://docker/_ping)\"",
         "for u in guest-agent flr-registry-mirror containerd docker; do echo \"BOOT $u $(( $(systemctl show -p ActiveEnterTimestampMonotonic --value $u.service) / 1000 )) ms\"; done",
         "free -m",
         "systemd-analyze blame --no-pager | head -20 || true",

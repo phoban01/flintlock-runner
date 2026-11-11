@@ -708,8 +708,9 @@ step_kind() {
 	expect_trace 'Kubernetes control plane.* is running at https://127\.0\.0\.1:[0-9]+' "kubectl cluster-info"
 	expect_trace '^pod/nginx condition met$' "nginx Ready"
 	expect_trace '^flr-control-plane +Ready ' "kind node Ready"
+	expect_trace '^node docker ping: OK$' "the guest's Docker Engine from the kind node"
 	record kind
-	pass "job ${JOB_ID} made a kind cluster, ran nginx in it and saw it Ready, on the kind image"
+	pass "job ${JOB_ID} made a kind cluster, ran nginx in it and saw it Ready, and reached Docker Engine from its node, on the kind image"
 }
 
 # kind-ready: the kind Job on the warm Profile, whose Pool made the cluster
@@ -723,8 +724,9 @@ step_kind-ready() {
 	expect_trace 'Kubernetes control plane.* is running at https://127\.0\.0\.1:[0-9]+' "kubectl cluster-info"
 	expect_trace '^pod/nginx condition met$' "nginx Ready"
 	expect_trace '^flr-control-plane +Ready ' "kind node Ready"
+	expect_trace '^node docker ping: OK$' "the guest's Docker Engine from the kind node"
 	record kind-ready
-	pass "job ${JOB_ID} took the kind cluster its Pool's create hook made, ran nginx in it and saw it Ready"
+	pass "job ${JOB_ID} took the kind cluster its Pool's create hook made, ran nginx in it, saw it Ready and reached Docker Engine from its node"
 }
 
 # ---------------------------------------------------------------------------

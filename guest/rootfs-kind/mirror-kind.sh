@@ -12,6 +12,11 @@
 # that directory, /etc/kind/certs.d, into the node. Its docker.io/hosts.toml
 # names the mirror over plain HTTP, ahead of Docker Hub. The node image's
 # containerd 2 takes mirrors only from a hosts directory.
+#
+# Either way the node has the guest's Docker socket at /var/run/docker.sock,
+# for Cluster API's Docker provider, CAPD, which makes a workload cluster's
+# machines as containers through it. kind cannot add a mount to a node that
+# is running, so a Job on flr/kind-ready cannot add it itself.
 set -euo pipefail
 
 root=${FLR_ROOT:-}
@@ -58,6 +63,11 @@ rm -rf "$hosts"
 		      local:
 		        dataDir: /tmp/etcd
 	EOF
+	#= docs/requirements/13-guest-image.md#guest-kind-capi
+	#/ The Guest Image's kind image SHALL write `/etc/kind/kind-config.yaml`
+	#/ with the guest's Docker socket, `/var/run/docker.sock`, mounted at the
+	#/ same path in the control-plane node, with a registry mirror and
+	#/ without one.
 	if [ -n "$mirror" ]; then
 		cat <<-EOF
 			containerdConfigPatches:
@@ -70,11 +80,16 @@ rm -rf "$hosts"
 			      - hostPath: /etc/kind/certs.d
 			        containerPath: /etc/containerd/certs.d
 			        readOnly: true
+			      - hostPath: /var/run/docker.sock
+			        containerPath: /var/run/docker.sock
 		EOF
 	else
 		cat <<-EOF
 			nodes:
 			  - role: control-plane
+			    extraMounts:
+			      - hostPath: /var/run/docker.sock
+			        containerPath: /var/run/docker.sock
 		EOF
 	fi
 } >"$file.tmp"

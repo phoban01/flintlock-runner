@@ -300,6 +300,36 @@ else
 	fail "/var/lib/docker/volumes is missing or not empty: $(ls -A /var/lib/docker/volumes 2>&1)"
 fi
 
+echo "== kind and Cluster API"
+
+#= docs/requirements/13-guest-image.md#guest-kind-capi
+#= type=test
+#/ The Guest Image's kind image SHALL write `/etc/kind/kind-config.yaml`
+#/ with the guest's Docker socket, `/var/run/docker.sock`, mounted at the
+#/ same path in the control-plane node, with a registry mirror and
+#/ without one.
+#
+# The node is the only one (GI-066), so its extraMounts are the file's.
+# The mount is writable: a client needs write access to connect to the
+# socket.
+for route in "default via 10.220.0.1 dev eth1 proto dhcp src 10.220.0.7 metric 1024" ""; do
+	mirror "$route"
+	config=$(cat "$work/root/etc/kind/kind-config.yaml" 2>/dev/null)
+	what="with${route:+ a}${route:- no} default route"
+	mount=$(sed -n '/^  - role: control-plane$/,$p' <<<"$config" | grep -A2 -x '      - hostPath: /var/run/docker.sock')
+	if grep -qx '    extraMounts:' <<<"$config" &&
+		grep -qx '        containerPath: /var/run/docker.sock' <<<"$mount" && ! grep -q 'readOnly: true' <<<"$mount"; then
+		ok "$what, the node has the guest's Docker socket at /var/run/docker.sock"
+	else
+		fail "$what, kind-config.yaml does not mount the Docker socket into the node: $config"
+	fi
+done
+if grep -qx '      - hostPath: /var/run/docker.sock' /etc/kind/kind-config.yaml; then
+	ok "the image's own kind-config.yaml, until the first boot, mounts the Docker socket"
+else
+	fail "the image's kind-config.yaml does not mount the Docker socket: $(cat /etc/kind/kind-config.yaml 2>&1)"
+fi
+
 if [ "$failures" -gt 0 ]; then
 	echo "$failures check(s) failed" >&2
 	exit 1
