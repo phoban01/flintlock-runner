@@ -148,7 +148,7 @@ Everything in `guest-rootfs-docker`, and:
 | kind at `/usr/local/bin/kind` | 0.33.0, by sha256 from the release's `.sha256sum` files | A Job makes a Kubernetes cluster in the guest's Docker Engine. |
 | kubectl at `/usr/local/bin/kubectl` | 1.37.1, by sha256 from dl.k8s.io | A Job talks to that cluster. |
 | `/etc/default/kind-bootstrap` | | A Job sources it. It exports `KIND_CLUSTER_NAME` (`flr`), `KIND_NODE_IMAGE`, `KIND_CONFIG`, `KUBECONFIG_PATH` and `KUBECONFIG`. `KIND_NODE_IMAGE` is `kindest/node:v1.37.0` by the digest that kind 0.33.0's release notes list. |
-| `/etc/kind/kind-config.yaml` | | The boot unit's `20-kind` hook writes it. With a gateway, a `containerdConfigPatches` entry points the node's containerd at a hosts directory, and the config mounts `/etc/kind/certs.d` there. Its `docker.io/hosts.toml` names the Host's mirror over plain HTTP. With no gateway, the config has no mirror. |
+| `/etc/kind/kind-config.yaml` | | The boot unit's `20-kind` hook writes it. With a gateway, a `containerdConfigPatches` entry points the node's containerd at a hosts directory, and the config mounts `/etc/kind/certs.d` there. Its `docker.io/hosts.toml` names the Host's mirror over plain HTTP. With no gateway, the config has no mirror. Either way it mounts the guest's Docker socket into the node at `/var/run/docker.sock`, for Cluster API's Docker provider (GI-080). |
 | the kind node image, in Docker Engine's store at `/var/lib/docker` | `KIND_NODE_IMAGE`, for the image's architecture, fetched by skopeo by digest | `rootfs-kind/docker-store.sh` unpacks it at build time as Docker Engine 29 keeps an image with the overlay2 storage driver, under its tag and its digest. Docker Engine has it at its first start, so a cluster start neither pulls nor loads it. The image ID is `KIND_NODE_IMAGE_ID` in `versions.env`. |
 | `/usr/local/bin/flr-kind-cluster` | | Makes the cluster from the loaded node image, or writes the kubeconfig of the cluster that is running, then waits for the node to be Ready. A Job on `flr/kind` runs it, and so does the create hook of `flr/kind-ready`'s Pool. |
 | `var-lib-docker-volumes.mount`, a tmpfs at `/var/lib/docker/volumes` | | kind starts its node with `/var` as an anonymous Docker volume, and Docker Engine copies the node image's `/var`, about 400 MB, into it. On the root disk that copy can stall the MicroVM's disk long enough for flintlock to drop the exec stream (#133). The tmpfs takes it into memory instead. It is 25 percent of the MicroVM's memory, mode 0700, owned by root, and mounted before Docker Engine starts, which requires it (GI-069). |
@@ -194,7 +194,8 @@ image that fails its checks is never produced (GI-003):
   without a default route, and `flr-kind-cluster` with stand-ins for
   docker, kind and kubectl, with and without a running cluster. The
   volumes tmpfs unit: its options, enabled, required by `docker.service`
-  and ordered before it, over an empty mount point.
+  and ordered before it, over an empty mount point. The Docker socket
+  mounted into the kind node, with and without a default route.
 - `lint.sh`: without building, every download is checked with
   `sha256sum -c` against a recorded sha256, and every base image is pinned
   by digest or is an image of the same build.

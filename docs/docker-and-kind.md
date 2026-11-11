@@ -59,6 +59,25 @@ still works on `flr/kind`, and pulls nothing either. On `flr/kind-ready` a
 second `kind create cluster` of the same name fails, because the cluster
 is there.
 
+## A Cluster API management cluster
+
+A Cluster API provider's e2e suite can use `flr` as its management cluster
+and make no cluster of its own. Set `KIND_CLUSTER_NAME=flr`, and for
+Cluster API's test framework, `SKIP_CREATE_MGMT_CLUSTER=true`.
+
+- The node has the guest's Docker socket at `/var/run/docker.sock`, so
+  CAPD, Cluster API's Docker provider, can make a workload cluster's
+  machines as containers in the guest. Every workload in the cluster can
+  use that socket, which means root in the guest. A Job has root in the
+  guest already, and its MicroVM is deleted after the Job.
+- The node is `kindest/node:v1.37.0`. Cluster API supports v1.37 as a
+  management cluster from v1.13.6 and v1.14.1. clusterctl checks only a
+  minimum Kubernetes version, so an earlier Cluster API still installs,
+  but Cluster API does not test that combination.
+- etcd has its default request-size limit and quota. A suite that raises
+  them, with `--max-request-bytes` and `--quota-backend-bytes`, sets them
+  on `flr` itself.
+
 In the Docker and kind images, the guest agent runs in a slice of its own
 (`agent.slice`) with 128 MiB of memory kept for it and a high CPU
 weight. containerd, Docker Engine and every container run in
