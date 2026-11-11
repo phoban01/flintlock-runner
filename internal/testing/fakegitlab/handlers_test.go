@@ -50,6 +50,12 @@ type response struct {
 	body   []byte
 }
 
+// testClient sends the tests' requests. It has a transport of its own:
+// httptest.Server.Close closes the idle connections of http.DefaultTransport,
+// so a parallel test that closes its server could break a request that went
+// through http.DefaultClient (#155).
+var testClient = &http.Client{Transport: http.DefaultTransport.(*http.Transport).Clone()}
+
 func do(t *testing.T, url, method, path string, header http.Header, body []byte) response {
 	t.Helper()
 	req, err := http.NewRequest(method, url+path, bytes.NewReader(body))
@@ -59,7 +65,7 @@ func do(t *testing.T, url, method, path string, header http.Header, body []byte)
 	for k, v := range header {
 		req.Header[k] = v
 	}
-	res, err := http.DefaultClient.Do(req)
+	res, err := testClient.Do(req)
 	if err != nil {
 		t.Fatalf("%s %s: %v", method, path, err)
 	}
@@ -251,7 +257,7 @@ func TestPatchTraceRanges(t *testing.T) {
 		t.Fatalf("request job = %d, want 201", r.code)
 	}
 	auth := http.Header{"Job-Token": {"glcbt-9"}}
-	patch := func(contentRange, body string) response {
+	patch := func(t *testing.T, contentRange, body string) response {
 		h := auth.Clone()
 		if contentRange != "" {
 			h.Set("Content-Range", contentRange)
@@ -277,7 +283,7 @@ func TestPatchTraceRanges(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			r := patch(tt.contentRange, tt.body)
+			r := patch(t, tt.contentRange, tt.body)
 			if r.code != tt.wantCode {
 				t.Fatalf("code = %d (%s), want %d", r.code, r.body, tt.wantCode)
 			}

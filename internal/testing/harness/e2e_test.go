@@ -187,6 +187,12 @@ func TestRunnerIsGoneAfterShutdown(t *testing.T) {
 	}
 }
 
+// testClient sends the tests' requests. It has a transport of its own:
+// httptest.Server.Close closes the idle connections of http.DefaultTransport,
+// so a parallel test that closes its server could break a request that went
+// through http.DefaultClient (#155).
+var testClient = &http.Client{Transport: http.DefaultTransport.(*http.Transport).Clone()}
+
 // TestRunnerServesMetricsOnItsLoggedAddress starts the Runner on port 0 and
 // checks that the address it logs serves gitlab-runner's metrics and the
 // Runner's readiness (#109).
@@ -206,7 +212,7 @@ func TestRunnerServesMetricsOnItsLoggedAddress(t *testing.T) {
 		"/readyz":  `"ready":true`,
 	} {
 		eventually(t, path+" on "+addr, func() bool {
-			resp, err := http.Get("http://" + addr + path) //nolint:gosec,noctx // the Runner on loopback
+			resp, err := testClient.Get("http://" + addr + path) //nolint:gosec,noctx // the Runner on loopback
 			if err != nil {
 				return false
 			}

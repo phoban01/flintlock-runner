@@ -65,6 +65,12 @@ func cacheAdapter(t *testing.T, s *fakes3.Store, key string) cache.Adapter {
 	return cache.GetAdapter(cfg, time.Hour, "abcdefgh", "42", key, false)
 }
 
+// testClient sends the tests' requests. It has a transport of its own:
+// httptest.Server.Close closes the idle connections of http.DefaultTransport,
+// so a parallel test that closes its server could break a request that went
+// through http.DefaultClient (#155).
+var testClient = &http.Client{Transport: http.DefaultTransport.(*http.Transport).Clone()}
+
 func doRequest(t *testing.T, method, url string, header http.Header, body []byte) *http.Response {
 	t.Helper()
 	req, err := http.NewRequestWithContext(context.Background(), method, url, bytes.NewReader(body))
@@ -82,7 +88,7 @@ func doRequest(t *testing.T, method, url string, header http.Header, body []byte
 		req.Header.Set("Last-Modified", time.Now().UTC().Format(http.TimeFormat))
 		req.ContentLength = int64(len(body))
 	}
-	res, err := http.DefaultClient.Do(req)
+	res, err := testClient.Do(req)
 	if err != nil {
 		t.Fatalf("%s %s: %v", method, url, err)
 	}
