@@ -50,10 +50,16 @@ func startHealth(t *testing.T) (*healthServer, string) {
 	return h, "http://" + h.Addr()
 }
 
+// testClient sends the tests' requests. It has a transport of its own:
+// httptest.Server.Close closes the idle connections of http.DefaultTransport,
+// so a parallel test that closes its server could break a request that went
+// through http.DefaultClient (#155).
+var testClient = &http.Client{Transport: http.DefaultTransport.(*http.Transport).Clone()}
+
 // get fetches url and returns the status code and body.
 func get(t *testing.T, url string) (int, string) {
 	t.Helper()
-	resp, err := http.Get(url) //nolint:gosec,noctx // a loopback test server
+	resp, err := testClient.Get(url) //nolint:gosec,noctx // a loopback test server
 	if err != nil {
 		t.Fatalf("GET %s: %v", url, err)
 	}
