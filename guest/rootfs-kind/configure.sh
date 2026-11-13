@@ -56,9 +56,10 @@ chmod 0755 /usr/local/bin/flr-kind-cluster
 # kind starts its node with /var as an anonymous volume, and Docker Engine
 # copies the node image's /var into it, about 400 MB. The unit
 # (var-lib-docker-volumes.mount) is ordered before docker.service, and
-# docker.service requires it, so Docker Engine never starts with its
-# volumes on the root disk. The tmpfs would hide anything the build left
-# under the mount point, so there has to be nothing.
+# docker.service requires it, so Docker Engine starts with its volumes on
+# the root disk only when flr-kind-cluster asks for it (FLR_KIND_VOLUMES=disk,
+# which writes the flag the unit's condition reads). The tmpfs would hide
+# anything the build left under the mount point, so there has to be nothing.
 if [ -n "$(ls -A /var/lib/docker/volumes 2>/dev/null)" ]; then
 	echo "configure: /var/lib/docker/volumes is not empty, and the tmpfs would hide it" >&2
 	exit 1

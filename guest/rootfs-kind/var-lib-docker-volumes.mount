@@ -11,8 +11,15 @@
 # Engine writes them. It holds the node's /var with room for the images a
 # Job pulls into the cluster on a 4 GiB MicroVM or larger. A full tmpfs
 # fails the write, not the MicroVM (GI-069).
+#
+# With FLR_KIND_VOLUMES=disk, flr-kind-cluster writes
+# /run/flr-guest/volumes-on-disk and starts Docker Engine again without
+# the tmpfs (#157). The condition skips this unit, and a skipped unit does
+# not stop docker.service, which requires it. /run is empty at the next
+# boot, so the tmpfs comes back.
 [Unit]
 Description=Docker Engine's volumes in memory
+ConditionPathExists=!/run/flr-guest/volumes-on-disk
 Before=docker.service
 
 [Mount]

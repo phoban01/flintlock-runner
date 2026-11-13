@@ -148,6 +148,10 @@ profiles:
     rootfs: ghcr.io/phoban01/flintlock-runner/guest-rootfs-kind:REPLACE
     pool:
       size: 1
+      # Docker Engine's volumes stay on the tmpfs. A Profile for a Cluster
+      # API suite puts them on the root disk instead, which has more room:
+      #   - FLR_KIND_VOLUMES=disk /usr/local/bin/flr-kind-cluster
+      # (docs/docker-and-kind.md#where-dockers-volumes-go, #157).
       create_hooks:
         - /usr/local/bin/flr-kind-cluster
 
