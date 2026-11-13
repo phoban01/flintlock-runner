@@ -284,6 +284,57 @@ so a larger quota lets etcd take more of the MicroVM's memory before it
 refuses a write. Few Jobs need the larger limits, so a Job that needs them
 sets them on `flr` itself.
 
+## Where Docker's volumes go {#guest-kind-volumes}
+
+- **GI-081** When `flr-kind-cluster` makes the cluster and `FLR_KIND_VOLUMES`
+  is `disk`, `flr-kind-cluster` SHALL stop Docker Engine, unmount
+  the tmpfs at `/var/lib/docker/volumes` and start Docker Engine
+  again before it makes the cluster, so that Docker Engine's
+  volumes are on the root disk.
+- **GI-082** When `flr-kind-cluster` makes the cluster and `FLR_KIND_VOLUMES`
+  is `tmpfs:SIZE`, `flr-kind-cluster` SHALL stop Docker Engine,
+  resize the tmpfs at `/var/lib/docker/volumes` to SIZE and start
+  Docker Engine again before it makes the cluster.
+- **GI-083** If `FLR_KIND_VOLUMES` is `disk` or `tmpfs:SIZE` and Docker Engine
+  has a container or a volume, then `flr-kind-cluster` SHALL fail
+  without making the cluster and SHALL leave Docker Engine
+  running.
+- **GI-084** If `FLR_KIND_VOLUMES` is set to a value other than `tmpfs`,
+  `tmpfs:SIZE` or `disk`, then `flr-kind-cluster` SHALL fail without
+  making the cluster.
+
+Docker Engine's volumes hold each kind node's `/var`, and with it the
+node's containerd image store. A Cluster API suite fills the tmpfs of
+GI-069 (#157). It loads its images into `flr`, and CAPD makes a kind node,
+with a `/var` volume of its own, for each Machine of a workload cluster. A
+larger tmpfs is guest memory that the cluster itself needs. The root disk
+has room, but on a slow Host the copy of a node's `/var` to the disk can
+stall the MicroVM (#133).
+
+So the tmpfs stays the default, and a Profile chooses otherwise in the
+command that makes the cluster. On `flr/kind-ready` that command is the
+Pool's create hook, which battery runs through a shell, for example
+`FLR_KIND_VOLUMES=disk /usr/local/bin/flr-kind-cluster`. On `flr/kind` the
+Job runs `flr-kind-cluster` itself and sets the variable there. The choice
+applies only when `flr-kind-cluster` makes the cluster: a running cluster
+keeps its volumes where they are.
+
+The tmpfs is the default because it is the path that ran on a Host after
+#133. The containers' I/O limit (GI-072) came later, and it may make the
+disk safe on its own. No Host has measured a cluster's start with the
+volumes on the disk under that limit yet. When one has, the default can
+change.
+
+Both choices restart Docker Engine. A kernel can refuse to resize a tmpfs
+while Docker Engine runs, and the restart makes both choices work the
+same way. The restart would stop every container, and with `disk` the
+volumes on the tmpfs would stay there, out of Docker Engine's sight. So
+`flr-kind-cluster` refuses either choice once anything has used Docker
+Engine. For `disk` it writes `/run/flr-guest/volumes-on-disk`, and the
+tmpfs unit's condition skips the unit while that file exists.
+`docker.service` still requires the unit, but a skipped unit does not
+stop it. `/run` is empty at the next boot, so the tmpfs comes back.
+
 ## Guest agent protection {#guest-agent-protection}
 
 - **GI-070** The Guest Image's Docker image SHALL run the guest agent with an OOM

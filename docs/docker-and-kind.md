@@ -59,25 +59,6 @@ still works on `flr/kind`, and pulls nothing either. On `flr/kind-ready` a
 second `kind create cluster` of the same name fails, because the cluster
 is there.
 
-## A Cluster API management cluster
-
-A Cluster API provider's e2e suite can use `flr` as its management cluster
-and make no cluster of its own. Set `KIND_CLUSTER_NAME=flr`, and for
-Cluster API's test framework, `SKIP_CREATE_MGMT_CLUSTER=true`.
-
-- The node has the guest's Docker socket at `/var/run/docker.sock`, so
-  CAPD, Cluster API's Docker provider, can make a workload cluster's
-  machines as containers in the guest. Every workload in the cluster can
-  use that socket, which means root in the guest. A Job has root in the
-  guest already, and its MicroVM is deleted after the Job.
-- The node is `kindest/node:v1.37.0`. Cluster API supports v1.37 as a
-  management cluster from v1.13.6 and v1.14.1. clusterctl checks only a
-  minimum Kubernetes version, so an earlier Cluster API still installs,
-  but Cluster API does not test that combination.
-- etcd has its default request-size limit and quota. A suite that raises
-  them, with `--max-request-bytes` and `--quota-backend-bytes`, sets them
-  on `flr` itself.
-
 In the Docker and kind images, the guest agent runs in a slice of its own
 (`agent.slice`) with 128 MiB of memory kept for it and a high CPU
 weight. containerd, Docker Engine and every container run in
@@ -144,6 +125,82 @@ its compressed and its unpacked size.
 - 2 GiB: a 498 MiB tmpfs holds the node's `/var` with 108 MiB to spare.
   A pull into the cluster can fill it, and the pull then fails with no
   space left.
+
+### Where Docker's volumes go
+
+`FLR_KIND_VOLUMES` chooses where Docker Engine keeps its volumes, and so
+each kind node's `/var` and containerd image store.
+`flr-kind-cluster` applies it when it makes the cluster:
+
+| Value | Where | Size |
+|---|---|---|
+| `tmpfs`, or unset | the tmpfs | 25 percent of the MicroVM's memory |
+| `tmpfs:SIZE`, for example `tmpfs:50%` or `tmpfs:4G` | the tmpfs, resized | SIZE |
+| `disk` | the root disk | what the disk has free |
+
+On `flr/kind`, set it where the Job runs `flr-kind-cluster`:
+
+```sh
+. /etc/default/kind-bootstrap
+FLR_KIND_VOLUMES=disk flr-kind-cluster
+```
+
+On `flr/kind-ready` the Pool makes the cluster, so a Profile sets it in
+its create hook:
+
+```yaml
+pool:
+  create_hooks:
+    - FLR_KIND_VOLUMES=disk /usr/local/bin/flr-kind-cluster
+```
+
+- `tmpfs:SIZE` and `disk` restart Docker Engine before the cluster is
+  made. So `flr-kind-cluster` refuses them once anything else has used
+  Docker Engine: run it first.
+- A cluster that is running keeps its volumes where they are. A Job on
+  `flr/kind-ready` cannot move them, because a restart of the node loses
+  etcd's data on the node's `/tmp`.
+- `disk` lasts until the MicroVM stops, and MicroVMs are not reused.
+- A larger tmpfs is memory that the cluster's processes then cannot use.
+  On the disk, a node's `/var` copy goes through the containers' I/O
+  limit, and a cluster can start more slowly. No Host has measured how
+  much more yet (#157).
+
+## A Cluster API management cluster
+
+A Cluster API provider's e2e suite can use `flr` as its management cluster
+and make no cluster of its own. Set `KIND_CLUSTER_NAME=flr`, and for
+Cluster API's test framework, `SKIP_CREATE_MGMT_CLUSTER=true`.
+
+- The node has the guest's Docker socket at `/var/run/docker.sock`, so
+  CAPD, Cluster API's Docker provider, can make a workload cluster's
+  machines as containers in the guest. Every workload in the cluster can
+  use that socket, which means root in the guest. A Job has root in the
+  guest already, and its MicroVM is deleted after the Job.
+- The node is `kindest/node:v1.37.0`. Cluster API supports v1.37 as a
+  management cluster from v1.13.6 and v1.14.1. clusterctl checks only a
+  minimum Kubernetes version, so an earlier Cluster API still installs,
+  but Cluster API does not test that combination.
+- etcd has its default request-size limit and quota. A suite that raises
+  them, with `--max-request-bytes` and `--quota-backend-bytes`, sets them
+  on `flr` itself.
+- A suite needs more room for images than the default tmpfs has. Give
+  its Profile `FLR_KIND_VOLUMES=disk` in the create hook, as in
+  [Where Docker's volumes go](#where-dockers-volumes-go).
+
+### Space for a Cluster API suite
+
+On a 6 GiB MicroVM, one suite filled a 1.5 GiB tmpfs once it had loaded
+its images into `flr`, and its next pulls failed. At 3 GiB it filled 97
+percent of the tmpfs, and less than 900 MiB of the guest's memory was
+left (#157). The root disk had 5.9 GB free at the same time.
+
+CAPD makes a kind node container for each Machine of a workload cluster.
+Each node has a `/var` volume of its own, about 390 MB before it pulls an
+image, and its own processes. A workload cluster of three control-plane
+Machines and one worker adds four such nodes. On the default tmpfs it
+does not fit. Use `disk`, and size the MicroVM's memory for the nodes'
+processes.
 
 ## Example jobs
 

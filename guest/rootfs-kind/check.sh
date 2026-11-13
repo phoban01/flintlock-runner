@@ -211,20 +211,35 @@ while read -r diff; do
 done < <(grep -o '"diff_ids":\[[^]]*\]' "$config" 2>/dev/null | grep -o 'sha256:[0-9a-f]\{64\}')
 if [ "$layers" -gt 0 ]; then ok "the node image's $layers layers are unpacked in Docker Engine's overlay2 store"; else fail "the node image has no layers in Docker Engine's store"; fi
 
-# kind_cluster CLUSTERS runs flr-kind-cluster with stand-ins for docker,
-# kind and kubectl: `kind get clusters` prints CLUSTERS. It prints the
-# commands it ran.
+# kind_cluster CLUSTERS [VOLUMES [MOUNTED [CONTAINERS]]] runs
+# flr-kind-cluster under $work/root, with stand-ins for docker, kind,
+# kubectl, systemctl, mount and mountpoint: `kind get clusters` prints
+# CLUSTERS, `docker ps -aq` prints CONTAINERS, and `mountpoint` answers
+# yes unless MOUNTED is no. A systemctl call made while the flag of
+# FLR_KIND_VOLUMES=disk exists ends with "(flag)". FLR_KIND_VOLUMES is
+# VOLUMES, unset when VOLUMES is empty. It prints the commands it ran, and
+# fails the check when flr-kind-cluster fails unless KIND_EXPECT_FAIL is
+# set; $work/rc has the exit code.
 kind_cluster() {
-	rm -rf "${work:?}/bin" "${work:?}/home" "${work:?}/calls"
-	mkdir -p "$work/bin" "$work/home"
-	for tool in docker kind kubectl; do
+	rm -rf "${work:?}/bin" "${work:?}/home" "${work:?}/calls" "${work:?}/root"
+	mkdir -p "$work/bin" "$work/home" "$work/root"
+	for tool in docker kind kubectl mount mountpoint; do
 		printf '#!/bin/sh\necho "%s $*" >>"%s/calls"\n' "$tool" "$work" >"$work/bin/$tool"
 	done
-	# shellcheck disable=SC2016 # the stand-in expands $1 and $2
-	printf 'case "$1 $2" in "get clusters") printf "%%s\\n" "%s" ;; esac\n' "$1" >>"$work/bin/kind"
+	# shellcheck disable=SC2016 # the stand-ins expand $1, $2 and $*
+	{
+		printf '#!/bin/sh\nif [ -e "%s" ]; then echo "systemctl $* (flag)"; else echo "systemctl $*"; fi >>"%s/calls"\n' \
+			"$work/root/run/flr-guest/volumes-on-disk" "$work" >"$work/bin/systemctl"
+		printf 'case "$1 $2" in "get clusters") printf "%%s\\n" "%s" ;; esac\n' "$1" >>"$work/bin/kind"
+		printf 'case "$1 $2" in "ps -aq") printf "%%s\\n" "%s" ;; esac\n' "${4:-}" >>"$work/bin/docker"
+		printf '[ "%s" != no ]\n' "${3:-yes}" >>"$work/bin/mountpoint"
+	}
 	chmod +x "$work/bin"/*
-	env -i PATH="$work/bin:$PATH" HOME="$work/home" \
-		/usr/local/bin/flr-kind-cluster >"$work/log" 2>&1 || fail "flr-kind-cluster failed: $(cat "$work/log")"
+	local rc=0
+	env -i PATH="$work/bin:$PATH" HOME="$work/home" FLR_ROOT="$work/root" ${2:+FLR_KIND_VOLUMES="$2"} \
+		/usr/local/bin/flr-kind-cluster >"$work/log" 2>&1 || rc=$?
+	echo "$rc" >"$work/rc"
+	if [ "$rc" != 0 ] && [ -z "${KIND_EXPECT_FAIL:-}" ]; then fail "flr-kind-cluster failed: $(cat "$work/log")"; fi
 	cat "$work/calls" 2>/dev/null
 }
 
@@ -289,6 +304,8 @@ if [ "$(readlink -f "/etc/systemd/system/docker.service.requires/$mount_unit")" 
 else
 	fail "docker.service does not require $mount_unit"
 fi
+# FLR_KIND_VOLUMES=disk writes the flag, and the unit is skipped (#157).
+same "the mount's condition" "$(value ConditionPathExists)" "!/run/flr-guest/volumes-on-disk"
 if [[ " $(value Before | tr ',' ' ') " == *" docker.service "* ]]; then
 	ok "$mount_unit is ordered before docker.service"
 else
@@ -329,6 +346,107 @@ if grep -qx '      - hostPath: /var/run/docker.sock' /etc/kind/kind-config.yaml;
 else
 	fail "the image's kind-config.yaml does not mount the Docker socket: $(cat /etc/kind/kind-config.yaml 2>&1)"
 fi
+
+echo "== where Docker's volumes go"
+
+# in_order CALLS LINE... succeeds when each LINE is a line of CALLS, after
+# the one before it.
+in_order() {
+	local calls=$1 at=0 n
+	shift
+	for line in "$@"; do
+		n=$(grep -nxF -- "$line" <<<"$calls" | cut -d: -f1 | awk -v at="$at" '$1 > at { print; exit }')
+		[ -n "$n" ] || return 1
+		at=$n
+	done
+}
+create="kind create cluster --name flr --image $node --config /etc/kind/kind-config.yaml --kubeconfig $kubeconfig --wait 5m"
+moves=$'systemctl stop docker.socket docker.service\nsystemctl stop var-lib-docker-volumes.mount (flag)\nsystemctl start docker.socket docker.service (flag)'
+
+calls=$(kind_cluster "")
+if grep -qxF "$create" <<<"$calls" && ! grep -qE '^(systemctl|mount) ' <<<"$calls"; then
+	ok "with no FLR_KIND_VOLUMES, flr-kind-cluster leaves the tmpfs as the boot mounted it"
+else
+	fail "with no FLR_KIND_VOLUMES, flr-kind-cluster ran: $calls"
+fi
+
+#= docs/requirements/13-guest-image.md#guest-kind-volumes
+#= type=test
+#/ When `flr-kind-cluster` makes the cluster and `FLR_KIND_VOLUMES`
+#/ is `disk`, `flr-kind-cluster` SHALL stop Docker Engine, unmount
+#/ the tmpfs at `/var/lib/docker/volumes` and start Docker Engine
+#/ again before it makes the cluster, so that Docker Engine's
+#/ volumes are on the root disk.
+calls=$(kind_cluster "" disk)
+mapfile -t want <<<"$moves"
+if in_order "$calls" "${want[@]}" "$create"; then
+	ok "with FLR_KIND_VOLUMES=disk, flr-kind-cluster stops Docker Engine, writes the flag, unmounts the tmpfs and starts Docker Engine before it makes the cluster"
+else
+	fail "with FLR_KIND_VOLUMES=disk, flr-kind-cluster ran: $calls"
+fi
+calls=$(kind_cluster "" disk no)
+if grep -qxF "$create" <<<"$calls" && ! grep -q '^systemctl ' <<<"$calls"; then
+	ok "with FLR_KIND_VOLUMES=disk and no tmpfs, flr-kind-cluster restarts nothing"
+else
+	fail "with FLR_KIND_VOLUMES=disk and no tmpfs, flr-kind-cluster ran: $calls"
+fi
+calls=$(kind_cluster flr disk)
+if grep -q '^kind export kubeconfig' <<<"$calls" && ! grep -qE '^(systemctl |kind create)' <<<"$calls"; then
+	ok "with FLR_KIND_VOLUMES=disk and the cluster running, flr-kind-cluster leaves the volumes where they are"
+else
+	fail "with FLR_KIND_VOLUMES=disk and the cluster running, flr-kind-cluster ran: $calls"
+fi
+
+#= docs/requirements/13-guest-image.md#guest-kind-volumes
+#= type=test
+#/ When `flr-kind-cluster` makes the cluster and `FLR_KIND_VOLUMES`
+#/ is `tmpfs:SIZE`, `flr-kind-cluster` SHALL stop Docker Engine,
+#/ resize the tmpfs at `/var/lib/docker/volumes` to SIZE and start
+#/ Docker Engine again before it makes the cluster.
+for size in 50% 4G; do
+	calls=$(kind_cluster "" "tmpfs:$size")
+	if in_order "$calls" "systemctl stop docker.socket docker.service" "mount -o remount,size=$size /var/lib/docker/volumes" \
+		"systemctl start docker.socket docker.service" "$create" && ! grep -q '(flag)$' <<<"$calls"; then
+		ok "with FLR_KIND_VOLUMES=tmpfs:$size, flr-kind-cluster stops Docker Engine, resizes the tmpfs to $size and starts Docker Engine before it makes the cluster"
+	else
+		fail "with FLR_KIND_VOLUMES=tmpfs:$size, flr-kind-cluster ran: $calls"
+	fi
+done
+calls=$(KIND_EXPECT_FAIL=1 kind_cluster "" tmpfs:50% no)
+if [ "$(cat "$work/rc")" != 0 ] && ! grep -qE '^(systemctl |mount |kind create)' <<<"$calls"; then
+	ok "with FLR_KIND_VOLUMES=tmpfs:50% and no tmpfs, flr-kind-cluster fails and makes no cluster"
+else
+	fail "with FLR_KIND_VOLUMES=tmpfs:50% and no tmpfs, flr-kind-cluster exited $(cat "$work/rc") and ran: $calls"
+fi
+
+#= docs/requirements/13-guest-image.md#guest-kind-volumes
+#= type=test
+#/ If `FLR_KIND_VOLUMES` is `disk` or `tmpfs:SIZE` and Docker Engine
+#/ has a container or a volume, then `flr-kind-cluster` SHALL fail
+#/ without making the cluster and SHALL leave Docker Engine
+#/ running.
+for v in disk tmpfs:50%; do
+	calls=$(KIND_EXPECT_FAIL=1 kind_cluster "" "$v" yes 0123456789ab)
+	if [ "$(cat "$work/rc")" != 0 ] && ! grep -qE '^(systemctl |mount |kind create)' <<<"$calls"; then
+		ok "with FLR_KIND_VOLUMES=$v and a container, flr-kind-cluster fails, makes no cluster and leaves Docker Engine running"
+	else
+		fail "with FLR_KIND_VOLUMES=$v and a container, flr-kind-cluster exited $(cat "$work/rc") and ran: $calls"
+	fi
+done
+
+#= docs/requirements/13-guest-image.md#guest-kind-volumes
+#= type=test
+#/ If `FLR_KIND_VOLUMES` is set to a value other than `tmpfs`,
+#/ `tmpfs:SIZE` or `disk`, then `flr-kind-cluster` SHALL fail without
+#/ making the cluster.
+for bad in ram tmpfs: tmpfs:lots tmpfs:0 "disk "; do
+	calls=$(KIND_EXPECT_FAIL=1 kind_cluster "" "$bad")
+	if [ "$(cat "$work/rc")" != 0 ] && ! grep -qE '^(systemctl |mount |kind create)' <<<"$calls"; then
+		ok "with FLR_KIND_VOLUMES='$bad', flr-kind-cluster fails and makes no cluster"
+	else
+		fail "with FLR_KIND_VOLUMES='$bad', flr-kind-cluster exited $(cat "$work/rc") and ran: $calls"
+	fi
+done
 
 if [ "$failures" -gt 0 ]; then
 	echo "$failures check(s) failed" >&2
