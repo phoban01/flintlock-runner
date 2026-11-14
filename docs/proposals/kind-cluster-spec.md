@@ -293,15 +293,15 @@ Each step is one issue, in this order. Each issue's PR writes its EARS
 requirements in `docs/requirements/13-guest-image.md`, in the range of IDs
 the issue reserves.
 
-1. The spec: its format, its checks and its digest. One Go package reads
+1. #161: the spec, its format, its checks and its digest. One Go package reads
    it, so that `flr-bake` and `flr-kind-cluster` agree on both.
-2. `flr-bake` and the `guest-baker` image, which each release publishes:
+2. #162: `flr-bake` and the `guest-baker` image, which each release publishes:
    node images, image archives, manifests by URL and path, kustomize,
    charts, the images found in manifests, and the lock file.
-3. `flr-kind-cluster --spec`: the create hook's steps, the kind image's
+3. #163: `flr-kind-cluster --spec`, the create hook's steps, the kind image's
    additions to a project's kind configuration, `helm` in the kind image,
    and the space check. In the job, the digest check, and a new cluster
    when the digests differ.
-4. battery-operator's spec, its guest image and its Profile, and a run on a
+4. #164: battery-operator's spec, its guest image and its Profile, and a run on a
    real Host that times the job against today's suite.
-5. The laptop command.
+5. #165: the laptop command.
