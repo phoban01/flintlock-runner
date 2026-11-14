@@ -1,6 +1,6 @@
 # Proposal: a kind cluster spec that a project bakes into its own guest image
 
-**Status:** draft
+**Status:** agreed, 2026-11-14
 **From:** flintlock-runner
 **Date:** 2026-11-14
 
@@ -278,12 +278,30 @@ cert-manager's apply changes nothing, and its waits pass at once.
 - `flr/kind-ready` stays as it is, for jobs that are happy with the kind
   image's own cluster.
 
-## Open questions
+## Decisions
 
-1. Is `.flr/kind-cluster.yaml` the right place for the spec?
-2. Should a developer be able to make the same cluster from the spec on a
-   laptop? `guest-baker` has kustomize and helm already. With kind, kubectl
-   and `flr-kind-cluster` added, it can run `flr-kind-cluster --spec` with
-   the laptop's Docker socket mounted. The images then come from their
-   registries, because a laptop has no baked archives. The laptop and CI
-   then test against the same cluster.
+1. The spec lives at `.flr/kind-cluster.yaml` in the project's repository.
+2. A developer can make the same cluster from the spec on a laptop.
+   `guest-baker` gets kind, kubectl and `flr-kind-cluster`, and runs
+   `flr-kind-cluster --spec` with the laptop's Docker socket mounted. The
+   images then come from their registries, because a laptop has no baked
+   archives. This comes last.
+
+## The work
+
+Each step is one issue, in this order. Each issue's PR writes its EARS
+requirements in `docs/requirements/13-guest-image.md`, in the range of IDs
+the issue reserves.
+
+1. The spec: its format, its checks and its digest. One Go package reads
+   it, so that `flr-bake` and `flr-kind-cluster` agree on both.
+2. `flr-bake` and the `guest-baker` image, which each release publishes:
+   node images, image archives, manifests by URL and path, kustomize,
+   charts, the images found in manifests, and the lock file.
+3. `flr-kind-cluster --spec`: the create hook's steps, the kind image's
+   additions to a project's kind configuration, `helm` in the kind image,
+   and the space check. In the job, the digest check, and a new cluster
+   when the digests differ.
+4. battery-operator's spec, its guest image and its Profile, and a run on a
+   real Host that times the job against today's suite.
+5. The laptop command.
