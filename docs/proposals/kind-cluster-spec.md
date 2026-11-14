@@ -40,7 +40,7 @@ work on the code under test, which changes on each commit.
 ## The cluster spec
 
 Many suites need only one node and a few dependencies. Their spec is
-short, because every field except `name` is optional:
+short. After `apiVersion` and `kind`, only `name` is required:
 
 ```yaml
 apiVersion: flintlock-runner.dev/v1alpha1
