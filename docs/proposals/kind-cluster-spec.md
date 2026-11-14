@@ -273,13 +273,16 @@ cert-manager's apply changes nothing, and its waits pass at once.
   build, but a token and new Runner code. The spec format here works for it
   too, so it can come later.
 - Snapshots of a ready cluster (#152).
+- Loading an image into some nodes only, to save space. kind's `load`
+  takes `--nodes`, so a later `nodes` field on an image can add it.
 - `flr/kind-ready` stays as it is, for jobs that are happy with the kind
   image's own cluster.
 
 ## Open questions
 
 1. Is `.flr/kind-cluster.yaml` the right place for the spec?
-2. Should a spec be able to load an image into some nodes only, to save
-   space? kind's `load` takes `--nodes`.
-3. Should `flr-bake` run outside a container build too, so that a project
-   can try its spec on a laptop with kind?
+2. Should a developer be able to make the same cluster from the spec on a
+   laptop? `guest-baker` has kind, kubectl, kustomize and helm, so it can
+   run `flr-kind-cluster --spec` with the laptop's Docker socket mounted.
+   The images then come from their registries, because a laptop has no
+   baked archives. The laptop and CI then test against the same cluster.
