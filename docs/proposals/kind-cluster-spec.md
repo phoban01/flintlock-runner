@@ -282,7 +282,8 @@ cert-manager's apply changes nothing, and its waits pass at once.
 
 1. Is `.flr/kind-cluster.yaml` the right place for the spec?
 2. Should a developer be able to make the same cluster from the spec on a
-   laptop? `guest-baker` has kind, kubectl, kustomize and helm, so it can
-   run `flr-kind-cluster --spec` with the laptop's Docker socket mounted.
-   The images then come from their registries, because a laptop has no
-   baked archives. The laptop and CI then test against the same cluster.
+   laptop? `guest-baker` has kustomize and helm already. With kind, kubectl
+   and `flr-kind-cluster` added, it can run `flr-kind-cluster --spec` with
+   the laptop's Docker socket mounted. The images then come from their
+   registries, because a laptop has no baked archives. The laptop and CI
+   then test against the same cluster.
