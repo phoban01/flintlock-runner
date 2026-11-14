@@ -74,35 +74,76 @@ kindConfig: ../test/e2e/kind-config.yaml
 # Images to load into every node, each by digest.
 images:
   - ghcr.io/liquidmetal-dev/poolmgrd:0.6.0@sha256:...
-# Manifests to apply, in order, once every node is Ready. Each is a URL
-# with its sha256, or a path relative to this file.
+# Manifests to apply, in order, once every node is Ready. Each entry has
+# one source: url, path, kustomize or helm.
 manifests:
   - url: https://github.com/cert-manager/cert-manager/releases/download/v1.20.2/cert-manager.yaml
     sha256: ...
-    # What to wait for before the next manifest, and before the cluster
+    # What to wait for before the next entry, and before the cluster
     # counts as ready.
     wait:
       - deployment/cert-manager -n cert-manager
       - deployment/cert-manager-cainjector -n cert-manager
       - deployment/cert-manager-webhook -n cert-manager
+  # The next two entries show the other sources. battery-operator does
+  # not need them.
+  # A kustomize directory, relative to this file.
+  - kustomize: ../test/e2e/dependencies
+  # A Helm chart, from an OCI registry or a chart repository.
+  - helm:
+      chart: oci://ghcr.io/example/charts/thing
+      version: 1.4.2
+      digest: sha256:...
+      release: thing
+      namespace: thing
+      values: [../test/e2e/thing-values.yaml]
+    wait:
+      - deployment/thing -n thing
 ```
 
 The rules:
 
-- Every image is named by digest: the node images in the kind configuration,
-  and the images under `images`. A tag alone is refused, so that two builds
-  of one spec give the same guest image.
-- Every manifest by URL has a `sha256`. The build checks it.
-- The images that the manifests start, such as cert-manager's, go under
-  `images` too. Otherwise the nodes pull them when the hook applies the
-  manifest. That still works, through the Host's registry mirror, but it is
-  slower and needs the network.
+- Every image that the spec names is named by digest: the node images in
+  the kind configuration, and the images under `images`. A tag alone is
+  refused, so that two builds of one spec give the same guest image.
+- Every manifest by URL has a `sha256`, and every chart has a `digest`. The
+  build checks them. For a chart from a chart repository, the digest is
+  the sha256 of the chart's archive.
+- The build finds the images that the manifests start, such as
+  cert-manager's, and bakes them too. It renders each kustomize directory
+  and each chart, with its values, and reads every `image:` field. It
+  writes each image and the digest it got to `/etc/flr/images.lock`.
+  `images` is for the other images: the ones the job's own deploy starts
+  later, such as poolmgrd. A manifest that names an image by tag can give
+  another image on a later build. The lock file shows which one a build
+  got.
 - A spec's own `kindConfig` gets what the kind image's configuration has.
   `flr-kind-cluster` adds the containerd patch for the Host's registry
   mirror and, on the control plane, the Docker socket for CAPD (GI-080).
   The project's file does not need to know about either.
 - The spec's **digest** is the sha256 of the spec and of every file it names
-  by path, in a fixed order. It identifies the cluster that the spec makes.
+  by path, in a fixed order. That includes the files in each kustomize
+  directory and each values file. It identifies the cluster that the spec
+  makes.
+
+How each source is baked and applied:
+
+| Source | At build time | In the create hook |
+|---|---|---|
+| `url`, `path` | The build copies the file, after it checks the `sha256` of a URL. | `kubectl apply` |
+| `kustomize` | The build renders the directory with `kustomize build` and keeps the YAML. | `kubectl apply` |
+| `helm` | The build pulls the chart's archive and checks its digest. It copies the values files. | `helm install`, from the archive |
+
+A chart is installed with `helm install`, not rendered at build time with
+`helm template`. Helm then runs the chart's hooks in their order, and keeps
+its record of the release. A suite that runs `helm upgrade` or
+`helm uninstall` on the chart then works as it does on a laptop. The kind
+image gets the `helm` command for this.
+
+A kustomize directory is different: rendering it at build time gives the
+same YAML as rendering it in the hook. A directory with a remote base
+fetches that base when the image is built, so pin the base by a tag or a
+commit.
 
 ## The project's guest image
 
@@ -120,8 +161,9 @@ FROM base
 COPY --from=bake /out/ /
 ```
 
-`guest-baker` is a new image in each release. It has skopeo, curl and
-`flr-bake`. `flr-bake` reads the spec and writes these files under `/out`:
+`guest-baker` is a new image in each release. It has skopeo, curl,
+kustomize, helm and `flr-bake`. `flr-bake` reads the spec and writes these
+files under `/out`:
 
 | Path in the guest | What |
 |---|---|
@@ -129,7 +171,9 @@ COPY --from=bake /out/ /
 | `/etc/flr/kind-cluster.digest` | The spec's digest |
 | `/var/lib/docker/...` | Each node image that the kind image does not have already, in Docker Engine's image store, through `docker-store.sh` |
 | `/var/lib/flr/images/<n>.tar` | Each image under `images`, as a docker-archive |
-| `/var/lib/flr/manifests/<n>.yaml` | Each manifest, after its sha256 is checked |
+| `/var/lib/flr/manifests/<n>.yaml` | Each manifest by URL or path, and each rendered kustomize directory |
+| `/var/lib/flr/charts/<n>.tgz` | Each chart, with its values files beside it |
+| `/etc/flr/images.lock` | Each image the build found in the manifests, with its digest |
 
 The node images go into Docker Engine's image store, because Docker Engine
 runs the nodes. The other images go in as archives, because they go into
@@ -167,7 +211,8 @@ With `--spec`, `flr-kind-cluster` does these steps:
 1. It puts Docker Engine's volumes where `volumes` says (GI-081 to GI-084).
 2. It makes the cluster from the kind configuration.
 3. It loads each archive under `/var/lib/flr/images` into every node.
-4. It applies each manifest in order, and waits for what it names.
+4. It applies each entry under `manifests` in order, with `kubectl apply`
+   or `helm install`, and waits for what the entry names.
 5. It writes the spec's digest to `/run/flr-guest/kind-cluster.digest`.
 
 Nothing in these steps uses the network. A step that fails makes the hook
@@ -234,10 +279,7 @@ cert-manager's apply changes nothing, and its waits pass at once.
 ## Open questions
 
 1. Is `.flr/kind-cluster.yaml` the right place for the spec?
-2. Should `manifests` take kustomize directories or Helm charts, or only
-   plain YAML? Plain YAML keeps `flr-bake` small: a project can render a
-   chart to YAML and commit that.
-3. Should a spec be able to load an image into some nodes only, to save
+2. Should a spec be able to load an image into some nodes only, to save
    space? kind's `load` takes `--nodes`.
-4. Should `flr-bake` run outside a container build too, so that a project
+3. Should `flr-bake` run outside a container build too, so that a project
    can try its spec on a laptop with kind?
