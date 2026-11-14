@@ -39,7 +39,26 @@ work on the code under test, which changes on each commit.
 
 ## The cluster spec
 
-The project commits the spec, for example as `.flr/kind-cluster.yaml`:
+Many suites need only one node and a few dependencies. Their spec is
+short, because every field except `name` is optional:
+
+```yaml
+apiVersion: flintlock-runner.dev/v1alpha1
+kind: KindCluster
+name: my-operator-e2e
+manifests:
+  - url: https://github.com/cert-manager/cert-manager/releases/download/v1.20.2/cert-manager.yaml
+    sha256: ...
+    wait:
+      - deployment/cert-manager-webhook -n cert-manager
+```
+
+With no `kindConfig`, the cluster is the kind image's own: one node, from
+the node image the kind image has already. With no `volumes`, Docker
+Engine's volumes stay on the tmpfs, which has room for one node.
+
+A suite that needs more says so. battery-operator's spec, for example as
+`.flr/kind-cluster.yaml`:
 
 ```yaml
 apiVersion: flintlock-runner.dev/v1alpha1
@@ -50,6 +69,7 @@ name: battery-operator-e2e
 # (FLR_KIND_VOLUMES, GI-081 to GI-084).
 volumes: disk
 # The kind configuration, inline or as a path relative to this file.
+# Three nodes here: a control plane, and two workers with the Host label.
 kindConfig: ../test/e2e/kind-config.yaml
 # Images to load into every node, each by digest.
 images:
@@ -77,6 +97,10 @@ The rules:
   `images` too. Otherwise the nodes pull them when the hook applies the
   manifest. That still works, through the Host's registry mirror, but it is
   slower and needs the network.
+- A spec's own `kindConfig` gets what the kind image's configuration has.
+  `flr-kind-cluster` adds the containerd patch for the Host's registry
+  mirror and, on the control plane, the Docker socket for CAPD (GI-080).
+  The project's file does not need to know about either.
 - The spec's **digest** is the sha256 of the spec and of every file it names
   by path, in a fixed order. It identifies the cluster that the spec makes.
 
@@ -174,14 +198,17 @@ cert-manager's apply changes nothing, and its waits pass at once.
 ## Costs and limits
 
 - **Memory.** Each warm MicroVM keeps its cluster running while it waits.
-  For battery-operator's three nodes that is most of 8 GiB for each warm
-  MicroVM. Keep these Pools small.
-- **Space in the nodes.** `kind load` puts a copy of each image in every
-  node, and each node's `/var` takes about 390 MB at the start. On the
-  default tmpfs (25 percent of the MicroVM's memory) three nodes fill it
-  fast. A spec with more than one node should say `volumes: disk` or a
-  larger `tmpfs:SIZE`. The hook checks the space before it loads the
-  images, and fails with a message that says so.
+  One node can run in 4 GiB, the smallest size that docs/docker-and-kind.md
+  recommends. Three nodes, as battery-operator has, take most of 8 GiB.
+  Keep these Pools small.
+- **Space in the nodes.** On an 8 GiB MicroVM, one node fits on the default
+  tmpfs (25 percent of the MicroVM's memory) with about 1.5 GB of images,
+  as with the kind image now (docs/docker-and-kind.md). More nodes need
+  more room, because `kind load` puts a copy of each image in every node,
+  and each node's `/var` takes about 390 MB at the start. A spec with more
+  than one node should say `volumes: disk` or a larger `tmpfs:SIZE`. The
+  hook checks the space before it loads the images, and fails with a
+  message that says so.
 - **The root disk.** A MicroVM's root disk is 10 GiB. The kind node image
   takes about 1 GiB. The archives and their copies in the nodes take the
   rest. `flr-bake` prints the total, so that a project sees it at build
