@@ -95,7 +95,12 @@ func TestEveryEventTypeIsEmittedAtItsTransition(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ClaimVM: %v", err)
 	}
-	collect(poolmgrv1.EventType_VM_CLAIMED)
+	// Wait for the claim's replacement to become available too, so that the
+	// next claim finds it whatever the scheduler does.
+	got = collect(poolmgrv1.EventType_VM_AVAILABLE)
+	if c := eventOfType(t, got, poolmgrv1.EventType_VM_CLAIMED); c.VMUID != second.VMUID {
+		t.Fatalf("VM_CLAIMED names %q, want the claimed microvm %q", c.VMUID, second.VMUID)
+	}
 	h.advance(25 * time.Second)
 	expiring := eventOfType(t, collect(poolmgrv1.EventType_VM_EXPIRING_SOON), poolmgrv1.EventType_VM_EXPIRING_SOON)
 	if expiring.VMUID != second.VMUID {
@@ -130,6 +135,10 @@ func TestEveryEventTypeIsEmittedAtItsTransition(t *testing.T) {
 	// back to the Host. That deletion has no Event of its own.
 	h.waitDeletion(host, failed.VMUID)
 	assertDeleted(t, host, failed.VMUID)
+	// The Host deletes it first and the fake forgets it after. Until then the
+	// fake counts the deletion as in flight, and DeletePool below would try
+	// it again.
+	h.waitForgotten(failed.VMUID)
 
 	// Nothing is available now, so the tick reports the shortfall before it
 	// replenishes.
@@ -138,6 +147,9 @@ func TestEveryEventTypeIsEmittedAtItsTransition(t *testing.T) {
 	if p := payloadOf(t, shortfall); p["target"] != float64(1) || p["available"] != float64(0) {
 		t.Fatalf("POOL_SIZE_BELOW_TARGET payload = %v, want target 1 and nothing available", p)
 	}
+	// The tick's replacement becomes available, so the Pool holds a created
+	// MicroVM when it is deleted.
+	refill := eventOfType(t, collect(poolmgrv1.EventType_VM_AVAILABLE), poolmgrv1.EventType_VM_AVAILABLE)
 
 	// Deleting the Pool once its Lease is released: every MicroVM it held
 	// goes with it, each with its own event.
@@ -151,8 +163,8 @@ func TestEveryEventTypeIsEmittedAtItsTransition(t *testing.T) {
 			held[vm.UID] = true
 		}
 	}
-	if len(held) == 0 {
-		t.Fatal("the pool holds no created microvm to delete with it")
+	if !held[refill.VMUID] {
+		t.Fatalf("the pool holds %v, want the available microvm %q to delete with it", held, refill.VMUID)
 	}
 	if err := h.client.DeletePool(h.ctx, h.ref("pool")); err != nil {
 		t.Fatalf("DeletePool: %v", err)
