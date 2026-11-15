@@ -59,6 +59,7 @@ ENV GOTOOLCHAIN=auto CGO_ENABLED=0
 WORKDIR /src
 COPY --from=src go.mod go.sum /src/
 COPY --from=src internal/kindspec /src/internal/kindspec
+COPY --from=src internal/kindbake /src/internal/kindbake
 COPY --from=src cmd/flr-kind /src/cmd/flr-kind
 RUN --mount=type=cache,target=/root/.cache/go-build \
     --mount=type=cache,target=/go/pkg/mod \
