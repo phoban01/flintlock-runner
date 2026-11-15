@@ -202,6 +202,80 @@ Machines and one worker adds four such nodes. On the default tmpfs it
 does not fit. Use `disk`, and size the MicroVM's memory for the nodes'
 processes.
 
+## A project's own kind cluster
+
+A project can describe the kind cluster its e2e suite needs in a kind
+cluster spec, `.flr/kind-cluster.yaml`, and build its own guest image with
+the spec and everything it names inside
+(`docs/proposals/kind-cluster-spec.md`). `flr-kind check` checks a spec,
+and `flr-kind digest` prints its digest (GI-090 to GI-099).
+
+The build starts from the kind image and the `guest-baker` image of one
+release. Take both digests from that release's `images.txt`. This
+Containerfile, for example as `.flr/Containerfile`, builds the image:
+
+```dockerfile
+FROM ghcr.io/phoban01/flintlock-runner/guest-rootfs-kind@sha256:... AS base
+
+FROM --platform=$BUILDPLATFORM ghcr.io/phoban01/flintlock-runner/guest-baker@sha256:... AS bake
+ARG TARGETARCH
+COPY . /src
+RUN --mount=type=bind,from=base,target=/base \
+    flr-bake -base /base -arch "$TARGETARCH" /src/.flr/kind-cluster.yaml /out
+
+FROM base
+COPY --from=bake /out/ /
+```
+
+Build it from the repository root, for each architecture of the project's
+Hosts:
+
+```sh
+docker buildx build --platform linux/amd64,linux/arm64 -f .flr/Containerfile \
+  -t registry.example.com/my-project/e2e-guest:1 --push .
+```
+
+- The bake stage runs on the build machine's platform, and `-arch` picks
+  the architecture of every image it fetches. Nothing runs under
+  emulation.
+- `-base` mounts the kind image. `flr-bake` reads the node image that the
+  kind image has from it, and Docker Engine's `repositories.json`, which
+  the bake extends. Without node images in the kind configuration, the
+  bake does not need it.
+- `COPY . /src` copies the build context. Every file that the spec names
+  has to be in it. A `.dockerignore` keeps the rest out.
+- The bake needs the network: it fetches the images, the manifests by URL,
+  the charts and any remote kustomize base.
+
+`flr-bake` is `flr-kind bake` (GI-100 to GI-117). It writes these files,
+which the last stage copies to the same paths in the guest:
+
+| Path in the guest | What |
+|---|---|
+| `/etc/flr/kind-cluster.yaml` | The spec, with the kind configuration inline and every other file by a path relative to `/etc/flr` |
+| `/etc/flr/kind-cluster.digest` | The digest of the project's spec, as `flr-kind digest` prints it |
+| `/etc/flr/images.lock` | `IMAGE DIGEST` for each image that the manifests and charts start |
+| `/var/lib/docker/...` | Each node image that the kind image does not have, in Docker Engine's image store |
+| `/var/lib/flr/images/N.tar` | Each image under `images`, then each image found in the manifests, as a docker-archive |
+| `/var/lib/flr/manifests/N.yaml` | Manifest entry N by URL or path, or the output of `kustomize build` |
+| `/var/lib/flr/charts/N.tgz` | Chart entry N's archive, with its values files as `N-values-M.yaml` |
+
+`flr-bake` prints the total size of what it wrote. A MicroVM's root disk is
+10 GiB, and a MicroVM of the kind image had 5.9 GB of it free (#157). The
+baked files take their size from that. Each image also goes into every
+node when the cluster starts, on the tmpfs or on the disk as `volumes`
+says.
+
+An image that a manifest names by tag gets the digest that the tag has at
+build time. `images.lock` shows which. To pin it, list it under `images`
+with the same name and tag and its digest: the bake then uses that digest.
+An archive names its image by tag, so a Pod that names an image by digest
+does not find it.
+
+The Profile's create hook makes the cluster from these files, with
+`flr-kind-cluster --spec /etc/flr/kind-cluster.yaml`
+(`docs/proposals/kind-cluster-spec.md`, #163).
+
 ## Example jobs
 
 ```yaml

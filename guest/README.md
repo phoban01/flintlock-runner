@@ -161,6 +161,28 @@ on the node's `/tmp`, a tmpfs: the cluster lives as long as one Job.
 The build adds the kind, kubectl and node image versions to
 `/usr/share/flr-guest/versions.env`.
 
+### `guest-baker` (`baker/`)
+
+Not a root filesystem image. A project's guest image build runs it in one
+stage to bake its kind cluster spec, and copies the result onto
+`guest-rootfs-kind` (`docs/docker-and-kind.md`, GI-100 to GI-117).
+
+| What | Version | Why |
+|---|---|---|
+| Ubuntu | 24.04, base image pinned by digest | The same base as the root filesystem images. |
+| skopeo and curl | Ubuntu 24.04's | skopeo copies each image as a docker-archive for the target architecture, and finds the digest of an image by tag. |
+| helm at `/usr/local/bin/helm` | 4.3.1, by sha256 from get.helm.sh | Pulls each chart, and renders it with `helm template` to find its images. |
+| kustomize at `/usr/local/bin/kustomize` | 5.8.3, by sha256 from the release's `checksums.txt` | Renders each kustomize directory. |
+| `flr-kind` at `/usr/local/bin/flr-kind` | built from this repository | `flr-kind bake` does the bake; `check` and `digest` are there too. |
+| `flr-bake` at `/usr/local/bin/flr-bake` | | Runs `flr-kind bake`, under the name the proposal gives it. |
+| `/usr/local/libexec/flr/docker-store.sh` | `rootfs-kind/docker-store.sh` | Writes each node image that the kind image does not have into Docker Engine's store, as the kind image's build writes its own. |
+
+The bake runs on the build machine's platform, and `-arch` picks the
+images' architecture, so nothing runs under emulation. The build records
+the helm, kustomize and skopeo versions in
+`/usr/share/flr-guest/versions.env`. Its check stage bakes a small spec
+with no network.
+
 ## Checks
 
 Each image has a check stage that the published image depends on, so an
@@ -196,6 +218,9 @@ image that fails its checks is never produced (GI-003):
   volumes tmpfs unit: its options, enabled, required by `docker.service`
   and ordered before it, over an empty mount point. The Docker socket
   mounted into the kind node, with and without a default route.
+- `baker/check.sh`: the helm and kustomize versions, the other tools and
+  `docker-store.sh`, and a bake of a small spec with no network, by path
+  and kustomize, whose baked spec loads and whose digest is the spec's.
 - `lint.sh`: without building, every download is checked with
   `sha256sum -c` against a recorded sha256, and every base image is pinned
   by digest or is an image of the same build.
@@ -215,7 +240,8 @@ make guest-images GUEST_PLATFORMS=linux/arm64 GUEST_LOAD=1   # one platform, int
 ```
 
 `make guest-images` runs `guest/build.sh`. It builds the kernel image and
-the three root filesystem images with their check stages and, without
+the three root filesystem images and the baker image with their check
+stages and, without
 `GUEST_LOAD`, keeps them in the builder's cache. The Docker image builds
 FROM the root filesystem image of the same build, and the kind image FROM
 the Docker image: `build.sh` writes each lower image as an OCI layout in a
@@ -225,15 +251,17 @@ context. That needs a docker-container builder, such as the one
 A platform other than the machine's needs QEMU emulation, which
 `hack/release/setup-buildx.sh` installs. With `GUEST_LOAD=1` the images are
 `localhost/flr-guest-kernel:dev`, `localhost/flr-guest-rootfs:dev`,
-`localhost/flr-guest-rootfs-docker:dev` and
-`localhost/flr-guest-rootfs-kind:dev`.
+`localhost/flr-guest-rootfs-docker:dev`,
+`localhost/flr-guest-rootfs-kind:dev` and `localhost/flr-guest-baker:dev`.
 
 CI's `guest` job builds every image for both platforms on every pull
-request that changes `guest/`, `go.mod` or `go.sum`, and pushes nothing.
+request that changes `guest/`, `go.mod`, `go.sum` or the Go sources of
+`flr-kind`, and pushes nothing.
 The release workflow's `guest images` job builds them the same way on a tag
-and pushes `guest-kernel`, `guest-rootfs`, `guest-rootfs-docker` and
-`guest-rootfs-kind` under `ghcr.io/phoban01/flintlock-runner`, tagged with
-the version, each one index for both platforms (GI-040, GI-041). The
+and pushes `guest-kernel`, `guest-rootfs`, `guest-rootfs-docker`,
+`guest-rootfs-kind` and `guest-baker` under
+`ghcr.io/phoban01/flintlock-runner`, tagged with
+the version, each one index for both platforms (GI-040, GI-041, GI-117). The
 release lists their digests in `images.txt` (docs/RELEASING.md).
 
 ## Using them

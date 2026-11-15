@@ -403,6 +403,127 @@ not in the order of the entries; the spec holds that order, and the spec
 is in the list. A path with a line break or a backslash is refused,
 because `sha256sum` escapes those characters.
 
+## Baking a project's kind cluster {#guest-kind-bake}
+
+- **GI-100** `flr-kind bake SPEC OUT` SHALL write to
+  `OUT/etc/flr/kind-cluster.yaml` a kind cluster spec that has its kind
+  configuration inline and that names, by a path relative to `/etc/flr`,
+  the file under `OUT/var/lib/flr` that it wrote for each manifest, chart
+  and values file.
+- **GI-101** `flr-kind bake` SHALL write the digest of the spec, as
+  `flr-kind digest` prints it, to `OUT/etc/flr/kind-cluster.digest`.
+- **GI-102** If OUT holds a file, then `flr-kind bake` SHALL fail without
+  writing to it.
+- **GI-103** When a node of the kind configuration names an image other
+  than the one that the kind image's `KIND_NODE_IMAGE` names, `flr-kind
+  bake` SHALL write that image, for the target architecture, into Docker
+  Engine's image store under `OUT/var/lib/docker` with `docker-store.sh`.
+- **GI-104** When `flr-kind bake` writes an image into Docker Engine's
+  image store, `flr-kind bake` SHALL write a `repositories.json` that holds
+  every reference of the kind image's `repositories.json` and every
+  reference that it wrote.
+- **GI-105** `flr-kind bake` SHALL leave out of `OUT/var/lib/docker` each
+  layer and image configuration that the kind image's image store holds
+  already.
+- **GI-106** If a node image that `flr-kind bake` has to write into Docker
+  Engine's image store has no tag, or `flr-kind bake` has no kind image
+  root to read, then `flr-kind bake` SHALL fail.
+- **GI-107** `flr-kind bake` SHALL write each image under `images`, for the
+  target architecture, as a docker-archive in `OUT/var/lib/flr/images`.
+- **GI-108** `flr-kind bake` SHALL write each manifest by URL or by path,
+  and the output of `kustomize build` for each kustomize directory, to
+  `OUT/var/lib/flr/manifests/N.yaml`, where N is the entry's index under
+  `manifests`.
+- **GI-109** If the sha256 of a manifest that `flr-kind bake` downloads is
+  not the entry's `sha256`, then `flr-kind bake` SHALL fail.
+- **GI-110** `flr-kind bake` SHALL write each chart's archive to
+  `OUT/var/lib/flr/charts/N.tgz`, and its values files to
+  `OUT/var/lib/flr/charts/N-values-M.yaml`, where N is the entry's index
+  under `manifests` and M the file's index under `values`.
+- **GI-111** If a chart's `digest` is neither the sha256 of the chart's
+  archive nor, for a chart from an OCI registry, the digest of an OCI
+  manifest whose chart layer is that archive, then `flr-kind bake` SHALL
+  fail.
+- **GI-112** `flr-kind bake` SHALL find the image of each container, init
+  container and ephemeral container in each manifest, in the output of
+  `kustomize build` for each kustomize directory, and in the output of
+  `helm template` for each chart with its values.
+- **GI-113** `flr-kind bake` SHALL write each image that it finds, by the
+  digest that its reference resolves to and for the target architecture,
+  as a docker-archive in `OUT/var/lib/flr/images`, unless an image under
+  `images` has the same name and the same tag or digest.
+- **GI-114** `flr-kind bake` SHALL write `OUT/etc/flr/images.lock` with one
+  line for each image that it finds, which holds the image as the manifest
+  names it and the digest of the image that it baked, in the byte order of
+  the images.
+- **GI-115** `flr-kind bake` SHALL print the total size of the files that it
+  wrote under OUT.
+- **GI-116** The Guest Image SHALL include a baker image, for `linux/amd64`
+  and `linux/arm64`, that contains `flr-kind`, `flr-bake`,
+  `docker-store.sh`, skopeo and curl, and kustomize and helm at the
+  versions pinned in its sources.
+- **GI-117** The Release SHALL publish the Guest Image's baker image to the
+  project's container registry as one image index for `linux/amd64` and
+  `linux/arm64`, tagged with the release version.
+
+A project builds its own guest image from the kind image, with its spec
+and everything the spec names inside
+(`docs/proposals/kind-cluster-spec.md`). The baker image, `guest-baker`,
+does the work in one stage of the project's build, and the last stage
+copies the result onto the kind image. `flr-bake` in the baker image runs
+`flr-kind bake`. The release lists the baker image in `images.txt` with
+the other images. `docs/docker-and-kind.md` has the Containerfile.
+
+`flr-kind bake` writes these files under OUT, at their paths in the guest:
+
+| Path | What |
+|---|---|
+| `etc/flr/kind-cluster.yaml` | The spec, made to stand alone |
+| `etc/flr/kind-cluster.digest` | The digest of the project's spec, and a line feed |
+| `etc/flr/images.lock` | `IMAGE DIGEST` for each image found in the manifests |
+| `var/lib/docker/...` | Each node image that the kind image does not have |
+| `var/lib/flr/images/N.tar` | Each image, as a docker-archive |
+| `var/lib/flr/manifests/N.yaml` | Each entry N by URL, path or kustomize |
+| `var/lib/flr/charts/N.tgz`, `N-values-M.yaml` | Each chart entry N, and its values files |
+
+The baked spec keeps the order of `manifests`, each `wait` list, `name`,
+`volumes` and `images`. An entry by URL or kustomize becomes an entry by
+path, and a chart's `chart` becomes the path of its archive, with `digest`
+set to the archive's sha256. The paths lead from `/etc/flr` to
+`/var/lib/flr`, such as `../../var/lib/flr/manifests/0.yaml`, so the spec
+loads with `/` as its repository root. Its own digest is not the
+project's: the create hook reads the project's digest from
+`kind-cluster.digest`, and the job compares that with the digest of its
+checkout.
+
+The kind image's node image is in Docker Engine's store already (GI-065).
+`flr-kind bake -base DIR` reads `KIND_NODE_IMAGE` and the store from DIR,
+the kind image's root filesystem as a mount, and writes each other node
+image with `docker-store.sh`, which writes a node image under its tag and
+its digest. `repositories.json` is one file, so the copy onto the kind
+image replaces it. The baked one holds the kind image's references as well
+as the new ones. `docker-store.sh` names each layer after its chain of
+layer digests, so a layer that the kind image has is the same directory
+in both, and the bake leaves it out.
+
+Images go in as archives because the create hook loads them into the
+nodes with `kind load image-archive`. Each archive names the image by its
+tag, as `NAME:TAG`. A docker-archive does not keep the registry's manifest,
+so an image by digest alone has no name in its archive, and a Pod that
+names an image by digest does not find the archive. `images` also pins
+the image that a manifest names by tag: if an image under `images` has the
+same name and tag, the bake uses that image and its digest, and does not
+look up the tag. The lock file shows the digest that each image got.
+
+A chart is pulled with `helm pull`: an `oci://` reference, the URL of a
+chart's archive (`.tgz`), or `REPOSITORY_URL/CHART`, which becomes
+`helm pull CHART --repo REPOSITORY_URL`. For a chart from an OCI registry,
+`digest` can be the digest that `helm push` prints, which is the OCI
+manifest's: the bake reads that manifest by the chart's version, checks
+its digest, and checks that its chart layer is the archive that helm
+pulled. `helm template` renders a chart without its tests, which only
+`helm test` runs, so the images of its test hooks are not baked.
+
 ## Guest agent protection {#guest-agent-protection}
 
 - **GI-070** The Guest Image's Docker image SHALL run the guest agent with an OOM

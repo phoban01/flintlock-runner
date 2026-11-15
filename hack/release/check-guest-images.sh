@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
-# Check the Guest Image as a release pushed it (GI-040, GI-041).
+# Check the Guest Image as a release pushed it (GI-040, GI-041, GI-117).
 #
 # usage: check-guest-images.sh --version V REPO@DIGEST...
 #
-# For each image, the kernel, root filesystem, Docker and kind images:
+# For each image, the kernel, root filesystem, Docker, kind and baker images:
 # REPO:V names DIGEST; DIGEST is one image index with exactly linux/amd64
 # and linux/arm64; and every tag of REPO is a full release version, so none
 # is latest or moves.
@@ -45,6 +45,12 @@ fi
 #/ kind image to the project's container registry, each as one image index
 #/ for `linux/amd64` and `linux/arm64`, tagged with the release version.
 #
+#= docs/requirements/13-guest-image.md#guest-kind-bake
+#= type=test
+#/ The Release SHALL publish the Guest Image's baker image to the
+#/ project's container registry as one image index for `linux/amd64` and
+#/ `linux/arm64`, tagged with the release version.
+#
 #= docs/requirements/13-guest-image.md#guest-build
 #= type=test
 #/ The Guest Image SHALL consist of a kernel image and a root
@@ -84,9 +90,9 @@ for ref in "$@"; do
 	done <<<"$tags"
 done
 
-# All four images: the kernel, the root filesystem, and the Docker and kind
-# images.
-if [ "$(printf '%s\n' "${names[@]}" | sort | xargs)" != "guest-kernel guest-rootfs guest-rootfs-docker guest-rootfs-kind" ]; then
-	fail "want guest-kernel, guest-rootfs, guest-rootfs-docker and guest-rootfs-kind, got: ${names[*]}"
+# All five images: the kernel, the root filesystem, the Docker and kind
+# images, and the baker image.
+if [ "$(printf '%s\n' "${names[@]}" | sort | xargs)" != "guest-baker guest-kernel guest-rootfs guest-rootfs-docker guest-rootfs-kind" ]; then
+	fail "want guest-kernel, guest-rootfs, guest-rootfs-docker, guest-rootfs-kind and guest-baker, got: ${names[*]}"
 fi
 exit "$status"

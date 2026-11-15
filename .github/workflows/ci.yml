@@ -153,7 +153,7 @@ jobs:
           else
             range=""
           fi
-          if [ -z "$range" ] || git diff --name-only "$range" | grep -qE '^(guest/|go\.mod$|go\.sum$|\.github/workflows/ci\.yml$)'; then
+          if [ -z "$range" ] || git diff --name-only "$range" | grep -qE '^(guest/|cmd/flr-kind/|internal/kindspec/|internal/kindbake/|go\.mod$|go\.sum$|\.github/workflows/ci\.yml$)'; then
             echo "build=true" >>"$GITHUB_OUTPUT"
           else
             echo "guest/ is unchanged in $range; skipping the build"
