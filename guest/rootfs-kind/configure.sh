@@ -3,17 +3,18 @@
 # guest/rootfs-kind/Containerfile, on the Docker image for the image's
 # platform.
 #
-# TARGETARCH, KIND_VERSION, KUBECTL_VERSION, KIND_NODE_IMAGE and the
-# KIND_SHA256_* and KUBECTL_SHA256_* sums come from the Containerfile's
-# build arguments.
+# TARGETARCH, KIND_VERSION, KUBECTL_VERSION, HELM_VERSION, KIND_NODE_IMAGE
+# and the KIND_SHA256_*, KUBECTL_SHA256_* and HELM_SHA256_* sums come from
+# the Containerfile's build arguments.
 set -euo pipefail
-: "${TARGETARCH:?}" "${KIND_VERSION:?}" "${KUBECTL_VERSION:?}" "${KIND_NODE_IMAGE:?}" \
+: "${TARGETARCH:?}" "${KIND_VERSION:?}" "${KUBECTL_VERSION:?}" "${HELM_VERSION:?}" "${KIND_NODE_IMAGE:?}" \
 	"${KIND_SHA256_AMD64:?}" "${KIND_SHA256_ARM64:?}" \
-	"${KUBECTL_SHA256_AMD64:?}" "${KUBECTL_SHA256_ARM64:?}"
+	"${KUBECTL_SHA256_AMD64:?}" "${KUBECTL_SHA256_ARM64:?}" \
+	"${HELM_SHA256_AMD64:?}" "${HELM_SHA256_ARM64:?}"
 
 case $TARGETARCH in
-arm64) kind_sum=$KIND_SHA256_ARM64 kubectl_sum=$KUBECTL_SHA256_ARM64 ;;
-amd64) kind_sum=$KIND_SHA256_AMD64 kubectl_sum=$KUBECTL_SHA256_AMD64 ;;
+arm64) kind_sum=$KIND_SHA256_ARM64 kubectl_sum=$KUBECTL_SHA256_ARM64 helm_sum=$HELM_SHA256_ARM64 ;;
+amd64) kind_sum=$KIND_SHA256_AMD64 kubectl_sum=$KUBECTL_SHA256_AMD64 helm_sum=$HELM_SHA256_AMD64 ;;
 *) echo "configure: no kind image for $TARGETARCH" >&2; exit 1 ;;
 esac
 
@@ -25,12 +26,22 @@ esac
 #= docs/requirements/13-guest-image.md#guest-kind
 #/ The Guest Image's kind image SHALL contain kind and kubectl, each
 #/ at the version pinned in its sources.
+#
+#= docs/requirements/13-guest-image.md#guest-kind-spec-hook
+#/ The Guest Image's kind image SHALL contain `helm`, at the version pinned
+#/ in its sources.
+#
+# flr-kind-cluster --spec installs a project's charts with it.
+helm_tgz=/tmp/helm.tar.gz
 curl -fsSL -o /usr/local/bin/kind \
 	"https://github.com/kubernetes-sigs/kind/releases/download/v${KIND_VERSION}/kind-linux-${TARGETARCH}"
 curl -fsSL -o /usr/local/bin/kubectl \
 	"https://dl.k8s.io/release/v${KUBECTL_VERSION}/bin/linux/${TARGETARCH}/kubectl"
-printf '%s  %s\n' "$kind_sum" /usr/local/bin/kind "$kubectl_sum" /usr/local/bin/kubectl | sha256sum -c -
-chmod 0755 /usr/local/bin/kind /usr/local/bin/kubectl
+curl -fsSL -o "$helm_tgz" "https://get.helm.sh/helm-v${HELM_VERSION}-linux-${TARGETARCH}.tar.gz"
+printf '%s  %s\n' "$kind_sum" /usr/local/bin/kind "$kubectl_sum" /usr/local/bin/kubectl "$helm_sum" "$helm_tgz" | sha256sum -c -
+tar -xzf "$helm_tgz" -C /usr/local/bin --strip-components=1 "linux-${TARGETARCH}/helm"
+rm "$helm_tgz"
+chmod 0755 /usr/local/bin/kind /usr/local/bin/kubectl /usr/local/bin/helm /usr/local/bin/flr-kind
 
 #= docs/requirements/13-guest-image.md#guest-kind-fast
 #/ The Guest Image's kind image SHALL contain the node image that
@@ -101,6 +112,7 @@ FLR_REGISTRY_MIRROR='' /usr/libexec/flr-guest/registry-mirror.d/20-kind
 cat >>/usr/share/flr-guest/versions.env <<EOF
 KIND_VERSION=$KIND_VERSION
 KUBECTL_VERSION=$KUBECTL_VERSION
+HELM_VERSION=$HELM_VERSION
 KIND_NODE_IMAGE=$KIND_NODE_IMAGE
 KIND_NODE_IMAGE_ID=$node_id
 EOF

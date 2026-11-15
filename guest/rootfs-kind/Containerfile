@@ -1,12 +1,14 @@
 # The Guest Image's kind image (docs/requirements/13-guest-image.md#guest-kind):
-# the Docker image of guest/rootfs-docker, plus kind and kubectl, the kind
-# node image in Docker Engine's image store, flr-kind-cluster,
-# /etc/default/kind-bootstrap for a Job to source, and the boot unit's hook
-# that writes /etc/kind/kind-config.yaml with the Host's registry mirror.
+# the Docker image of guest/rootfs-docker, plus kind, kubectl, helm and
+# flr-kind, the kind node image in Docker Engine's image store,
+# flr-kind-cluster, /etc/default/kind-bootstrap for a Job to source, and the
+# boot unit's hook that writes /etc/kind/kind-config.yaml with the Host's
+# registry mirror.
 #
 # Build it with guest/build.sh. It builds guest/rootfs-docker first and
 # passes that image to this build as the named build context
-# guest-rootfs-docker. The build context is guest/, for the check.sh of
+# guest-rootfs-docker, and the repository as the named build context src,
+# for the flr-kind stage. The build context is guest/, for the check.sh of
 # the images below this one.
 
 # The versions, for the kind stage and for the published image's labels.
@@ -14,6 +16,7 @@
 # node image by its digest from there.
 ARG KIND_VERSION=0.33.0
 ARG KUBECTL_VERSION=1.37.1
+ARG HELM_VERSION=4.3.1
 ARG KIND_NODE_IMAGE=kindest/node:v1.37.0@sha256:a1ed56cfb0e7b93589bdf97c8cd566405a265939e3620fc4f5de89adff580ae5
 # ---------------------------------------------------------------------------
 # node-image: the kind node image that KIND_NODE_IMAGE names, for the
@@ -42,7 +45,27 @@ RUN --mount=type=bind,source=rootfs-kind/docker-store.sh,target=/tmp/docker-stor
     rm /tmp/node.tar
 
 # ---------------------------------------------------------------------------
-# kind: the Docker image with kind and kubectl.
+# flr-kind: the command that reads a project's kind cluster spec
+# (cmd/flr-kind), cross-compiled on the build machine's own architecture.
+# guest/build.sh passes the repository as the named build context src, and
+# this stage copies only what the command needs from it.
+#
+#= docs/requirements/13-guest-image.md#guest-kind-spec-hook
+#/ The Guest Image's kind image SHALL contain `flr-kind`, built for the
+#/ image's architecture from the Guest Image's sources.
+FROM --platform=$BUILDPLATFORM docker.io/library/golang:1.26.5-bookworm@sha256:53eeac89074db483fdf0ab3be1df32bf6e47562263d2d0d6baa7f26acb4957dd AS flr-kind
+ARG TARGETARCH
+ENV GOTOOLCHAIN=auto CGO_ENABLED=0
+WORKDIR /src
+COPY --from=src go.mod go.sum /src/
+COPY --from=src internal/kindspec /src/internal/kindspec
+COPY --from=src cmd/flr-kind /src/cmd/flr-kind
+RUN --mount=type=cache,target=/root/.cache/go-build \
+    --mount=type=cache,target=/go/pkg/mod \
+    GOARCH="${TARGETARCH}" go build -trimpath -o /out/flr-kind ./cmd/flr-kind
+
+# ---------------------------------------------------------------------------
+# kind: the Docker image with kind, kubectl, helm and flr-kind.
 #
 #= docs/requirements/13-guest-image.md#guest-kind
 #/ The Guest Image SHALL include a kind image, a root filesystem image
@@ -52,6 +75,7 @@ FROM guest-rootfs-docker AS kind
 ARG TARGETARCH
 ARG KIND_VERSION
 ARG KUBECTL_VERSION
+ARG HELM_VERSION
 ARG KIND_NODE_IMAGE
 # From the release's kind-linux-<arch>.sha256sum files.
 ARG KIND_SHA256_AMD64=aee6151561422756b764a4ae28e7f44cda5af5a9eead3cc9985112b1de8d8e0d
@@ -59,8 +83,12 @@ ARG KIND_SHA256_ARM64=20022bee6cfcd5086cb7234d218e3454e6090022f2a8f55d1fa7fcf42c
 # From https://dl.k8s.io/release/v<version>/bin/linux/<arch>/kubectl.sha256.
 ARG KUBECTL_SHA256_AMD64=65691ff77eb6fa44c908b77a1082c9f092c3b9733b5cefabec0d1104890e21a8
 ARG KUBECTL_SHA256_ARM64=ff749f4b78d9c4f1ec87307df9b50119ed819e2094aa9810cb9acffc3286c8c7
+# From https://get.helm.sh/helm-v<version>-linux-<arch>.tar.gz.sha256sum.
+ARG HELM_SHA256_AMD64=0403a88ae20913d11b10a2467b50087721fea7581736da6b9d3992f5357fe54b
+ARG HELM_SHA256_ARM64=8cf8f66ecbc252ac8f7f06cca68aba88508ddfde3a6a34feb1678ad1694b4f88
 COPY rootfs-kind/mirror-kind.sh /usr/libexec/flr-guest/registry-mirror.d/20-kind
 COPY rootfs-kind/kind-cluster.sh /usr/local/bin/flr-kind-cluster
+COPY --from=flr-kind /out/flr-kind /usr/local/bin/flr-kind
 COPY rootfs-kind/var-lib-docker-volumes.mount /etc/systemd/system/var-lib-docker-volumes.mount
 COPY --from=node-image /out/docker/ /var/lib/docker/
 RUN --mount=type=bind,source=rootfs-kind/configure.sh,target=/tmp/configure.sh \
@@ -88,6 +116,8 @@ FROM kind
 COPY --from=check /checked/checked /usr/share/flr-guest/checked
 ARG KIND_VERSION
 ARG KUBECTL_VERSION
+ARG HELM_VERSION
 LABEL org.opencontainers.image.title="flintlock-runner guest root filesystem with Docker and kind" \
       dev.flintlock.gitlab-runner.version.kind="${KIND_VERSION}" \
-      dev.flintlock.gitlab-runner.version.kubectl="${KUBECTL_VERSION}"
+      dev.flintlock.gitlab-runner.version.kubectl="${KUBECTL_VERSION}" \
+      dev.flintlock.gitlab-runner.version.helm="${HELM_VERSION}"

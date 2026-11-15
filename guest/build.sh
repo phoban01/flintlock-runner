@@ -108,7 +108,8 @@ trap 'rm -rf "$work"' EXIT
 # build NAME CONTEXT CONTAINERFILE [OPTION...]
 #
 # OPTION is --arg NAME=VALUE, a build argument; --from NAME, an image this
-# script built before, passed as the named build context NAME; or --base,
+# script built before, passed as the named build context NAME; --context
+# NAME=DIR, the directory DIR as the named build context NAME; or --base,
 # which also writes this image as an OCI layout for a later --from.
 build() {
 	local name=$1 context=$2 file=$3
@@ -123,6 +124,7 @@ build() {
 			args+=(--build-context "$2=$ref")
 			shift 2
 			;;
+		--context) args+=(--build-context "$2"); shift 2 ;;
 		--base) base=1; shift ;;
 		*) echo "guest/build.sh: build: unknown option $1" >&2; exit 2 ;;
 		esac
@@ -198,7 +200,7 @@ build guest-rootfs-docker guest guest/rootfs-docker/Containerfile --from guest-r
 #/ The Guest Image SHALL include a kind image, a root filesystem image
 #/ built on its Docker image for `linux/amd64` and `linux/arm64`, which
 #/ carries everything this document requires of the Docker image.
-build guest-rootfs-kind guest guest/rootfs-kind/Containerfile --from guest-rootfs-docker
+build guest-rootfs-kind guest guest/rootfs-kind/Containerfile --from guest-rootfs-docker --context src=.
 #= docs/requirements/13-guest-image.md#guest-kind-bake
 #/ The Release SHALL publish the Guest Image's baker image to the
 #/ project's container registry as one image index for `linux/amd64` and
