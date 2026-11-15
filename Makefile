@@ -35,6 +35,7 @@ build:
 	$(GO) build -o $(BIN)/flr ./cmd/flr
 	$(GO) build -o $(BIN)/fake-poolmgr ./cmd/fake-poolmgr
 	$(GO) build -o $(BIN)/flintlock-devstack ./cmd/flintlock-devstack
+	$(GO) build -o $(BIN)/flr-kind ./cmd/flr-kind
 
 ## test: run every Go test with the race detector
 # The claim backend's tests need a kube-apiserver and etcd (KF-191).
