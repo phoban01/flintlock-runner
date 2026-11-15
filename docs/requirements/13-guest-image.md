@@ -335,6 +335,74 @@ tmpfs unit's condition skips the unit while that file exists.
 `docker.service` still requires the unit, but a skipped unit does not
 stop it. `/run` is empty at the next boot, so the tmpfs comes back.
 
+## A project's kind cluster spec {#guest-kind-spec}
+
+- **GI-090** If a kind cluster spec has a field that `flr-kind` does not
+  know, an `apiVersion` other than `flintlock-runner.dev/v1alpha1`, a
+  `kind` other than `KindCluster` or no valid kind cluster name in `name`,
+  then `flr-kind` SHALL refuse the spec.
+- **GI-091** If an image that a kind cluster spec names under `images`, or
+  as a node's `image` in its kind configuration, is not named by a `sha256`
+  digest, then `flr-kind` SHALL refuse the spec.
+- **GI-092** If an entry under `manifests` has a `url` and no `sha256` of 64
+  hexadecimal digits, then `flr-kind` SHALL refuse the spec.
+- **GI-093** If a `helm` entry under `manifests` has no `chart`, `version`
+  or `release`, or no `digest` of the form `sha256:` and 64 hexadecimal
+  digits, then `flr-kind` SHALL refuse the spec.
+- **GI-094** If an entry under `manifests` has no source, or more than one of
+  `url`, `path`, `kustomize` and `helm`, then `flr-kind` SHALL refuse the
+  spec.
+- **GI-095** If a kind cluster spec sets `volumes` to a value other than
+  `tmpfs`, `tmpfs:SIZE` or `disk`, then `flr-kind` SHALL refuse the spec.
+- **GI-096** `flr-kind` SHALL read each path that a kind cluster spec names
+  relative to the directory that holds the spec.
+- **GI-097** If a path that a kind cluster spec names is absolute, or leads
+  out of the repository root, then `flr-kind` SHALL refuse the spec.
+- **GI-098** `flr-kind` SHALL take a `kindConfig` that holds a line break as
+  the kind configuration itself, and any other `kindConfig` as the path of
+  a file that holds it.
+- **GI-099** `flr-kind digest` SHALL print `sha256:` and the sha256 of a
+  list with one line for the spec and for each file that the spec names by
+  path, the files under its kustomize directories included, where each line
+  holds the file's sha256 and its path relative to the repository root, and
+  the lines are in the byte order of the paths.
+
+A project describes the kind cluster that its e2e suite needs in one file,
+the kind cluster spec, by convention `.flr/kind-cluster.yaml`
+(`docs/proposals/kind-cluster-spec.md`). `flr-bake` and
+`flr-kind-cluster --spec` are to read it through one Go package,
+`internal/kindspec`, so that they agree on what a spec means and on its
+digest. `flr-kind check SPEC` checks a spec, and `flr-kind digest SPEC`
+prints its digest, for a shell script or a test. A refused spec makes
+`flr-kind` exit 1, with one line for each fault, and each line names the
+field, for example `manifests[2].helm.digest`.
+
+After `apiVersion` and `kind`, only `name` is required. Without `volumes`,
+the spec takes `tmpfs`, as `flr-kind-cluster` does without
+`FLR_KIND_VOLUMES`. `volumes` takes the values of GI-081 to GI-084, with
+the same rule for SIZE. Without `kindConfig`, the cluster is the kind
+image's own. A YAML block scalar (`kindConfig: |`) gives the kind
+configuration inline; a value on one line is a path. Each entry under
+`manifests` has one source and an optional `wait` list, each item as
+`KIND/NAME` with an optional `-n NAMESPACE`.
+
+The repository root is the parent of the spec's directory, so a spec at
+`.flr/kind-cluster.yaml` can name any file in the repository, such as
+`../test/e2e/kind-config.yaml`, and no file outside it. `flr-kind check -root DIR`
+names another root. A symbolic link that leads out of the root counts as a
+path that leads out of it. Under a kustomize directory, a symbolic link to
+a file in the root counts as that file, and a symbolic link to a directory
+is refused, so the digest covers what kustomize reads.
+
+The digest identifies the cluster that a spec makes. Its list is what
+`sha256sum` prints, so `sha256sum FILE... | sha256sum`, run from the root
+with the files in byte order, gives the same sha256. Each line has the
+file's path, so a file that moves changes the digest, and a checkout in a
+different directory does not. The list has each file once, in byte order,
+not in the order of the entries; the spec holds that order, and the spec
+is in the list. A path with a line break or a backslash is refused,
+because `sha256sum` escapes those characters.
+
 ## Guest agent protection {#guest-agent-protection}
 
 - **GI-070** The Guest Image's Docker image SHALL run the guest agent with an OOM

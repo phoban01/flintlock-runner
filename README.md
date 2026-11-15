@@ -92,6 +92,7 @@ make duvet-ci         # fails if .duvet/snapshot.txt is stale
 cmd/flr/                main: run, config show
 cmd/fake-poolmgr/       the fake Pool Manager as a standalone binary (TD-009)
 cmd/flintlock-devstack/ the end-to-end harness as a demo: fakes + the real runner + jobs (make demo)
+cmd/flr-kind/           checks a project's kind cluster spec and prints its digest (GI-090..099)
 internal/clock/         Clock and Backoff interfaces shared by the scheduler, poolmgr and the fakes
 internal/executor/      common.ExecutorProvider + common.Executor ("flintlock")
 internal/scheduler/     capacity, profiles, claims, placement resolution, lease keep-alive
@@ -100,6 +101,7 @@ internal/flintlock/     gRPC client for hosts (exec, ssh proxy, GetMicroVM, Serv
 internal/poolmgr/       gRPC client for battery and the PL policy units; fake/ is itself a minimal pool manager
 internal/hostservices/  the Host Service settings the Executor and the Host Agent share
 internal/config/        YAML schema, validation, RunnerConfig translation
+internal/kindspec/      reads, checks and digests a project's kind cluster spec
 internal/testing/       fakegitlab, fakes3 and harness (TD-050..TD-054); the harness exports the hardware-tier env var names
 hack/                   CI helper scripts
 ```
