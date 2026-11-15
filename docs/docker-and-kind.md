@@ -270,11 +270,136 @@ An image that a manifest names by tag gets the digest that the tag has at
 build time. `images.lock` shows which. To pin it, list it under `images`
 with the same name and tag and its digest: the bake then uses that digest.
 An archive names its image by tag, so a Pod that names an image by digest
-does not find it.
+does not find it (#169).
 
-The Profile's create hook makes the cluster from these files, with
-`flr-kind-cluster --spec /etc/flr/kind-cluster.yaml`
-(`docs/proposals/kind-cluster-spec.md`, #163).
+### The Profile
+
+The project's Profile boots that image, and its create hook makes the
+cluster:
+
+```yaml
+- name: battery-operator-e2e
+  arch: amd64
+  vcpu: 4
+  memory_mb: 8192
+  images: [flr/battery-operator-e2e]
+  kernel:
+    image: ghcr.io/phoban01/flintlock-runner/guest-kernel@sha256:...
+    filename: boot/vmlinux
+  rootfs: ghcr.io/phoban01/battery-operator/e2e-guest@sha256:...
+  pool:
+    size: 1
+    create_hooks:
+      - /usr/local/bin/flr-kind-cluster --spec /etc/flr/kind-cluster.yaml
+```
+
+In the create hook, `flr-kind-cluster --spec` takes these steps. None of
+them uses the network.
+
+1. It puts Docker Engine's volumes where the spec's `volumes` says, as
+   `FLR_KIND_VOLUMES` does without a spec. With `--spec`,
+   `FLR_KIND_VOLUMES` does nothing.
+2. It makes the cluster, with the spec's `name`, from the spec's
+   `kindConfig`, or from the kind image's own configuration when there is
+   none. A project's `kindConfig` gets the kind image's additions: the
+   containerd patch for the Host's registry mirror and the mirror's hosts
+   directory on every node, and the guest's Docker socket on each
+   control-plane node. A node with no `image` gets the node image that
+   Docker Engine has already. The project's file needs to know about none
+   of this.
+3. It checks the space free where Docker Engine keeps its volumes, then
+   loads each archive under `/var/lib/flr/images` into every node with
+   `kind load image-archive`.
+4. It applies each entry under `manifests` in order: `kubectl apply -f`
+   for a file, `kubectl apply -k` for a kustomize directory, and
+   `helm install` for a chart, with its values files and its namespace.
+   After each entry it waits for each item of its `wait` list, for up to
+   `KIND_WAIT`: `kubectl rollout status` for a Deployment, DaemonSet or
+   StatefulSet, the condition Established for a CRD, and Ready for
+   anything else.
+5. It writes the spec's digest to `/run/flr-guest/kind-cluster.digest`.
+
+A step that fails makes the hook fail, with no digest written, and
+battery replaces the MicroVM. With `--spec`, the kubeconfig goes to
+`~/.kube/config`, where kind and kubectl look by default, or to
+`FLR_KIND_KUBECONFIG` when that is set. A Job that sources
+`/etc/default/kind-bootstrap` gets a `KUBECONFIG` for `flr`, so it
+unsets it or sets `FLR_KIND_KUBECONFIG` to the same file.
+
+### In the job
+
+The job runs the same command on the spec in its checkout, before its
+tests:
+
+```sh
+flr-kind-cluster --spec .flr/kind-cluster.yaml
+```
+
+It finds the digest of that spec with `flr-kind digest`, and compares it
+with `/run/flr-guest/kind-cluster.digest`:
+
+- If they are the same, it writes the kubeconfig and returns at once.
+- If they are different, or there is no digest, it logs a warning that
+  names both digests, deletes every kind cluster, and makes a new one from
+  the job's spec with the same steps. This happens on a branch that
+  changes the spec, or on a MicroVM that booted an older image.
+
+A new cluster in the job gets the images under `/var/lib/flr/images`, as
+in the hook. Other images come through the Host's registry mirror, or
+from their own registries, when a pod starts. A `path` or `kustomize`
+entry comes from the checkout. A `url` entry is downloaded and checked
+against its `sha256`. A chart by reference is fetched by `helm install`,
+at its `version`; helm does not check the chart's `digest`. The job is
+slower, but it tests the cluster that its branch describes.
+
+### What the hook reads
+
+`flr-bake` writes the spec into the project's image. The hook
+reads these files:
+
+| Path | What |
+|---|---|
+| `/etc/flr/kind-cluster.yaml` | The baked spec, as `internal/kindspec` reads it |
+| `/etc/flr/kind-cluster.digest` | The digest of the project's own spec, `sha256:` and 64 hexadecimal digits |
+| `/var/lib/flr/images/*.tar` | Docker archives, each loaded into every node |
+| `/var/lib/flr/manifests/*`, `/var/lib/flr/charts/*` | The files that the baked spec names by path |
+
+A spec with a `.digest` file beside it, of the same name, is a baked spec.
+`flr-kind-cluster` takes its digest from that file, and does not compute
+one, because the baked spec is not the project's spec. The paths in a
+baked spec are relative to `/etc/flr` and stay inside `/`, for example
+`path: ../../var/lib/flr/manifests/0.yaml`. A chart's `chart` is the path
+of its archive, for example `../../var/lib/flr/charts/1.tgz`, with its
+`version`, `digest` and `release` kept. A baked spec with a `url`, or with
+a chart that is not a file in the guest, is refused before the hook
+changes anything.
+
+`flr-kind-cluster` reads no YAML itself. `flr-kind plan` reads the spec,
+writes the kind configuration to make the cluster from, and prints one
+line for each step, with the fields separated by tabs and `-` for an
+empty field:
+
+| Line | Step |
+|---|---|
+| `name NAME` | The cluster's name |
+| `volumes VOLUMES` | Where Docker Engine's volumes go |
+| `nodes N` | The number of nodes, for the space check |
+| `apply FILE` | `kubectl apply -f FILE` |
+| `apply-k DIR` | `kubectl apply -k DIR` |
+| `url URL SHA256` | Download, check, then `kubectl apply -f` |
+| `helm RELEASE NAMESPACE CHART VERSION [VALUES...]` | `helm install`; VERSION is `-` for a local archive |
+| `wait RESOURCE NAMESPACE` | Wait for one item of the entry before it |
+
+### Space for a project's cluster
+
+`kind load` puts a copy of each image in every node, and each node's
+containerd keeps both the layers and the unpacked image. The hook
+refuses to load the archives when the space free at
+`/var/lib/docker/volumes` is less than twice their size times the number
+of nodes. Its message names the two ways out: `volumes: disk`, or a
+larger `volumes: tmpfs:SIZE`, in the spec. Each node also takes about
+390 MB for its `/var` before the load, so a spec with more than one node
+needs one of the two.
 
 ## Example jobs
 

@@ -335,6 +335,125 @@ tmpfs unit's condition skips the unit while that file exists.
 `docker.service` still requires the unit, but a skipped unit does not
 stop it. `/run` is empty at the next boot, so the tmpfs comes back.
 
+## A project's kind cluster in the Pool {#guest-kind-spec-hook}
+
+- **GI-120** The Guest Image's kind image SHALL contain `helm`, at the
+  version pinned in its sources.
+- **GI-121** The Guest Image's kind image SHALL contain `flr-kind`, built for
+  the image's architecture from the Guest Image's sources.
+- **GI-122** `flr-kind-cluster --spec FILE` SHALL take as the spec's digest
+  the content of the file beside FILE with the same name and the extension
+  `.digest`, when there is one, and the digest that `flr-kind digest`
+  prints for FILE when there is none.
+- **GI-123** If `flr-kind-cluster --spec FILE` takes the spec's digest from a
+  `.digest` file and the spec has an entry under `manifests` with a `url`,
+  or a `helm` entry whose `chart` is not a file in the guest, then
+  `flr-kind-cluster` SHALL fail before it makes the cluster.
+- **GI-124** When the cluster of the spec's `name` is running and
+  `/run/flr-guest/kind-cluster.digest` holds the spec's digest,
+  `flr-kind-cluster --spec` SHALL write the cluster's kubeconfig and make no
+  cluster.
+- **GI-125** When a kind cluster is running and
+  `/run/flr-guest/kind-cluster.digest` is missing or does not hold the
+  spec's digest, `flr-kind-cluster --spec` SHALL log both digests, delete
+  every kind cluster and make the cluster from the spec.
+- **GI-126** When `flr-kind-cluster --spec` makes the cluster, it SHALL put
+  Docker Engine's volumes where the spec's `volumes` says, as GI-081 to
+  GI-084 say for the same value of `FLR_KIND_VOLUMES`.
+- **GI-127** When `flr-kind-cluster --spec` makes the cluster, it SHALL make
+  it with the spec's `name`, from the spec's `kindConfig`, or from
+  `/etc/kind/kind-config.yaml` when the spec has no `kindConfig`.
+- **GI-128** When `flr-kind-cluster --spec` makes the cluster from a spec
+  with a `kindConfig`, `flr-kind-cluster` SHALL add to it the
+  `containerdConfigPatches` of `/etc/kind/kind-config.yaml`, and add to
+  every node each mount of the control-plane node of
+  `/etc/kind/kind-config.yaml` other than the Docker socket.
+- **GI-129** When `flr-kind-cluster --spec` makes the cluster from a spec
+  with a `kindConfig`, `flr-kind-cluster` SHALL mount the guest's Docker
+  socket, `/var/run/docker.sock`, at the same path in each control-plane
+  node and in no other node.
+- **GI-130** When `flr-kind-cluster --spec` makes the cluster,
+  `flr-kind-cluster` SHALL give each node that names no `image` the node
+  image of `KIND_NODE_IMAGE`.
+- **GI-131** If the space free at `/var/lib/docker/volumes` is less than
+  twice the size of the archives under `/var/lib/flr/images` times the
+  number of nodes, then `flr-kind-cluster --spec` SHALL fail before it
+  loads an archive, with a message that names `volumes: disk` and
+  `volumes: tmpfs:SIZE`.
+- **GI-132** When `flr-kind-cluster --spec` has made the cluster and every
+  node is Ready, `flr-kind-cluster` SHALL load each archive under
+  `/var/lib/flr/images` into every node with `kind load image-archive`.
+- **GI-133** When `flr-kind-cluster --spec` has loaded the archives, it SHALL
+  apply each entry under `manifests` in the spec's order: a `path` with
+  `kubectl apply -f`, a `kustomize` directory with `kubectl apply -k`, and
+  a `helm` chart with `helm install`, with its values files, and with its
+  namespace and `--create-namespace` when it has one.
+- **GI-134** After `flr-kind-cluster --spec` applies an entry under
+  `manifests`, it SHALL wait, for up to `KIND_WAIT` each, for each item of
+  the entry's `wait` list before it applies the next entry: with
+  `kubectl rollout status` for a Deployment, DaemonSet or StatefulSet, for
+  the condition Established for a CustomResourceDefinition, and for the
+  condition Ready for anything else.
+- **GI-135** When `flr-kind-cluster --spec` applies an entry with a `url`, it
+  SHALL download the file, and SHALL fail without applying it unless its
+  sha256 is the entry's `sha256`.
+- **GI-136** When `flr-kind-cluster --spec` has applied every entry under
+  `manifests` and waited for each item of their `wait` lists, it SHALL
+  write the spec's digest to `/run/flr-guest/kind-cluster.digest`.
+- **GI-137** If a step of `flr-kind-cluster --spec` fails, then
+  `flr-kind-cluster` SHALL exit with a non-zero status and SHALL NOT write
+  `/run/flr-guest/kind-cluster.digest`.
+- **GI-138** `flr-kind-cluster --spec` SHALL write the cluster's kubeconfig
+  to `FLR_KIND_KUBECONFIG` when it is set, and to `.kube/config` in the
+  home directory when it is not.
+
+A project's guest image has its kind cluster spec baked in
+(`docs/proposals/kind-cluster-spec.md`), and its Profile's create hook runs
+`flr-kind-cluster --spec /etc/flr/kind-cluster.yaml`. The job runs
+`flr-kind-cluster --spec .flr/kind-cluster.yaml` on the spec in its
+checkout. Both take the same steps, and the digest check tells them
+apart: the job finds the cluster that the hook made, and takes it when the
+two specs have the same digest.
+
+`flr-kind-cluster` reads no YAML itself. `flr-kind plan` reads the spec
+through `internal/kindspec`, writes the kind configuration to
+`/run/flr-guest/kind-cluster-config.yaml`, and prints one line for each
+step, with tab-separated fields. `docs/docker-and-kind.md` gives the lines.
+
+A baked spec is the one with a `.digest` file beside it. Its digest is
+that of the project's own spec, because `flr-bake` rewrites the spec as it
+bakes it. Its paths are relative to `/etc/flr` and stay inside `/`, so it
+names a baked file as, for example, `../../var/lib/flr/manifests/0.yaml`.
+Each `url` entry becomes a `path` entry, each `kustomize` entry the `path`
+of the YAML it rendered, and each chart the `path` of its archive in
+`chart`. A baked spec that still needs the network is refused before
+anything changes, so a create hook never reaches the network.
+
+The kind image's additions to a project's kind configuration come from
+`/etc/kind/kind-config.yaml`, which the boot unit writes (GI-063, GI-064,
+GI-080).
+So the mirror and the Docker socket are the same with and without a spec.
+The containerd patch and the mirror's hosts directory go on every node,
+because each node runs its own containerd. The Docker socket goes on the
+control plane only, as for the kind image's own cluster. The etcd patch
+of GI-066 does not go on a project's cluster: the project's configuration
+says what it wants.
+
+The space check assumes that each node keeps two copies of each image: the
+layers as they came, and the unpacked snapshot. It is an estimate. It
+catches a spec with three nodes on the default tmpfs, before a load fills
+the tmpfs and stalls the MicroVM.
+
+In the job, a spec that differs from the baked one makes a new cluster
+from the checkout. The images under `/var/lib/flr/images` are loaded as
+in the hook. Any other image the cluster needs comes through the Host's
+registry mirror when a pod starts, or from its own registry. A `path`
+or `kustomize` entry is read from the checkout, a `url` entry is
+downloaded and checked, and a chart by reference is fetched by `helm
+install` at its `version`. `helm install` does not check a fetched chart
+against its `digest`. The job is slower, but it tests the cluster that its
+branch describes.
+
 ## A project's kind cluster spec {#guest-kind-spec}
 
 - **GI-090** If a kind cluster spec has a field that `flr-kind` does not

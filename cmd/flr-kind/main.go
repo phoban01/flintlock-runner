@@ -64,6 +64,9 @@ func command(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 		return 2
 	}
 	sub := args[0]
+	if sub == "plan" {
+		return plan(args[1:], stdout, stderr)
+	}
 	if sub != "check" && sub != "digest" && sub != "bake" {
 		fmt.Fprintf(stderr, "flr-kind: unknown command %q\n%s", sub, usage)
 		return 2
