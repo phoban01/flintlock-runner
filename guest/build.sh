@@ -1,18 +1,21 @@
 #!/usr/bin/env bash
 # Build the Guest Image (docs/requirements/13-guest-image.md): the kernel
-# image of guest/kernel, the root filesystem image of guest/rootfs, and the
-# Docker and kind images of guest/rootfs-docker and guest/rootfs-kind, each
-# with its check stage, for every platform asked for.
+# image of guest/kernel, the root filesystem image of guest/rootfs, the
+# Docker and kind images of guest/rootfs-docker and guest/rootfs-kind, and
+# the baker image of guest/baker, each with its check stage, for every
+# platform asked for.
 #
 # usage: guest/build.sh [--platforms LIST] [--load]
 #        guest/build.sh [--platforms LIST] --push PREFIX --version V [--refs FILE]
 #
 #   --platforms LIST  comma-separated, default linux/amd64,linux/arm64
 #   --load            load the images into Docker as localhost/flr-guest-kernel:dev,
-#                     localhost/flr-guest-rootfs:dev, localhost/flr-guest-rootfs-docker:dev
-#                     and localhost/flr-guest-rootfs-kind:dev; one platform only
+#                     localhost/flr-guest-rootfs:dev, localhost/flr-guest-rootfs-docker:dev,
+#                     localhost/flr-guest-rootfs-kind:dev and localhost/flr-guest-baker:dev;
+#                     one platform only
 #   --push PREFIX     push PREFIX/guest-kernel:V, PREFIX/guest-rootfs:V,
-#                     PREFIX/guest-rootfs-docker:V and PREFIX/guest-rootfs-kind:V,
+#                     PREFIX/guest-rootfs-docker:V, PREFIX/guest-rootfs-kind:V and
+#                     PREFIX/guest-baker:V,
 #                     each as one index for every platform, for example
 #                     PREFIX=ghcr.io/phoban01/flintlock-runner
 #   --version V       the release version without its v, e.g. 1.2.3-rc.1
@@ -77,7 +80,7 @@ if ! [[ $gitlab_runner_version =~ ^v[0-9] ]]; then
 fi
 
 # Every image this script builds, in the order it builds them.
-names=(guest-kernel guest-rootfs guest-rootfs-docker guest-rootfs-kind)
+names=(guest-kernel guest-rootfs guest-rootfs-docker guest-rootfs-kind guest-baker)
 
 if [ -n "$prefix" ]; then
 	# shellcheck source-path=SCRIPTDIR source=../hack/release/registry.sh
@@ -196,3 +199,8 @@ build guest-rootfs-docker guest guest/rootfs-docker/Containerfile --from guest-r
 #/ built on its Docker image for `linux/amd64` and `linux/arm64`, which
 #/ carries everything this document requires of the Docker image.
 build guest-rootfs-kind guest guest/rootfs-kind/Containerfile --from guest-rootfs-docker
+#= docs/requirements/13-guest-image.md#guest-kind-bake
+#/ The Release SHALL publish the Guest Image's baker image to the
+#/ project's container registry as one image index for `linux/amd64` and
+#/ `linux/arm64`, tagged with the release version.
+build guest-baker . guest/baker/Containerfile

@@ -109,13 +109,15 @@ clean:
 # ---------------------------------------------------------------------------
 # The Guest Image (guest/, docs/requirements/13-guest-image.md), in a block
 # of its own: the kernel image and the root filesystem images a Profile
-# names, with the Docker and kind images layered on the root filesystem.
+# names, with the Docker and kind images layered on the root filesystem,
+# and the baker image that a project's guest image build runs.
 #
 # guest/build.sh builds them with `docker buildx`, for GUEST_PLATFORMS; a
 # platform other than the builder's own needs QEMU emulation. With
 # GUEST_LOAD=1 and one platform, the images are loaded into Docker as
 # localhost/flr-guest-kernel:dev, localhost/flr-guest-rootfs:dev,
-# localhost/flr-guest-rootfs-docker:dev and localhost/flr-guest-rootfs-kind:dev.
+# localhost/flr-guest-rootfs-docker:dev, localhost/flr-guest-rootfs-kind:dev
+# and localhost/flr-guest-baker:dev.
 # The layered builds need a docker-container builder
 # (hack/release/setup-buildx.sh, or BUILDX_BUILDER). The release workflow
 # pushes them; guest/README.md says how.
@@ -130,7 +132,7 @@ guest-images:
 
 ## guest-lint: lint the Guest Image sources without building: shellcheck, the checksums of downloads and the digests of base images
 guest-lint:
-	shellcheck -x guest/*.sh guest/kernel/check.sh guest/rootfs/*.sh guest/rootfs-docker/*.sh guest/rootfs-kind/*.sh hack/release/check-guest-images.sh hack/release/setup-buildx.sh
+	shellcheck -x guest/*.sh guest/kernel/check.sh guest/rootfs/*.sh guest/rootfs-docker/*.sh guest/rootfs-kind/*.sh guest/baker/*.sh hack/release/check-guest-images.sh hack/release/setup-buildx.sh
 	guest/lint.sh
 
 # ---------------------------------------------------------------------------

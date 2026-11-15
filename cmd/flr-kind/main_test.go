@@ -2,14 +2,18 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"regexp"
 	"strings"
 	"testing"
+
+	"github.com/phoban01/flintlock-runner/internal/kindbake"
 )
 
 const goodSpec = `apiVersion: flintlock-runner.dev/v1alpha1
@@ -43,7 +47,7 @@ func repo(t *testing.T, spec string) string {
 
 func run(args ...string) (code int, stdout, stderr string) {
 	var out, errOut bytes.Buffer
-	code = command(args, &out, &errOut)
+	code = command(context.Background(), args, &out, &errOut)
 	return code, out.String(), errOut.String()
 }
 
@@ -113,5 +117,62 @@ func TestDigest(t *testing.T) {
 
 	if code, out, _ := run("digest", repo(t, "name: x\n")); code != 1 || out != "" {
 		t.Fatalf("digest on a bad spec: %d, %q; want 1 and no digest", code, out)
+	}
+}
+
+// fakeFetcher serves one URL.
+type fakeFetcher map[string][]byte
+
+func (f fakeFetcher) Fetch(_ context.Context, url string) ([]byte, error) {
+	if data, ok := f[url]; ok {
+		return data, nil
+	}
+	return nil, fmt.Errorf("no %s", url)
+}
+
+//= docs/requirements/13-guest-image.md#guest-kind-bake
+//= type=test
+//# `flr-kind bake` SHALL print the total size of the files that it wrote
+//# under OUT.
+
+func TestBake(t *testing.T) {
+	const url = "https://example.com/ns.yaml"
+	sum := sha256.Sum256([]byte(thing))
+	spec := repo(t, goodSpec+"  - url: "+url+"\n    sha256: "+hex.EncodeToString(sum[:])+"\n")
+	newTools = func(string) kindbake.Tools {
+		return kindbake.Tools{Fetcher: fakeFetcher{url: []byte(thing)}}
+	}
+	t.Cleanup(func() { newTools = kindbake.ExecTools })
+
+	out := filepath.Join(t.TempDir(), "out")
+	code, stdout, stderr := run("bake", spec, out)
+	if code != 0 {
+		t.Fatalf("bake: %d, %q", code, stderr)
+	}
+	var total int64
+	err := filepath.WalkDir(out, func(_ string, d fs.DirEntry, err error) error {
+		if err != nil || !d.Type().IsRegular() {
+			return err
+		}
+		fi, err := d.Info()
+		total += fi.Size()
+		return err
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := fmt.Sprintf("wrote %d bytes (0.00 GiB) in 5 files under %s", total, out); !strings.Contains(stdout, want) {
+		t.Errorf("stdout %q does not have %q", stdout, want)
+	}
+	if !strings.Contains(stderr, "downloading "+url) {
+		t.Errorf("stderr %q does not log the download", stderr)
+	}
+
+	// A second bake into the same directory fails, and prints no size.
+	if code, stdout, stderr := run("bake", spec, out); code != 1 || stdout != "" || !strings.Contains(stderr, "not empty") {
+		t.Errorf("bake into a full directory: %d, %q, %q", code, stdout, stderr)
+	}
+	if code, _, _ := run("bake", spec); code != 2 {
+		t.Errorf("bake with no OUT: %d, want 2", code)
 	}
 }

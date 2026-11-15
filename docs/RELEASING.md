@@ -19,7 +19,7 @@ For `linux/amd64`, `linux/arm64`, `darwin/amd64` and `darwin/arm64`:
 | `checksums.txt` | SHA-256 of every archive, the manifests asset and `images.txt` |
 | `requirements-report.html`, `requirements-report.json` | the duvet report for the tagged commit: every requirement in `docs/requirements/` and whether this build implements and tests it |
 
-And three container images, in the project's registry
+And these container images, in the project's registry
 (`docs/requirements/12-cluster-fleet.md#cluster-release` and
 `docs/requirements/13-guest-image.md#guest-release`):
 
@@ -28,6 +28,7 @@ And three container images, in the project's registry
 | `ghcr.io/phoban01/flintlock-runner/flr` | `<version>` | one index for `linux/amd64` and `linux/arm64`: the same `flr` binaries as the archives, the CA certificates and the time zone database, on `scratch`, running as uid 65532. No shell, no package manager, no `/etc/passwd` (KF-140, KF-141) |
 | `ghcr.io/phoban01/flintlock-runner/guest-kernel` | `<version>` | one index for `linux/amd64` and `linux/arm64`: the Guest Image's kernel, Linux 6.1 built with Firecracker's CI configuration, at `boot/vmlinux` and nothing else (GI-011, GI-040) |
 | `ghcr.io/phoban01/flintlock-runner/guest-rootfs` | `<version>` | one index for `linux/amd64` and `linux/arm64`: the Guest Image's root filesystem of `guest/rootfs`, Ubuntu 24.04 with systemd, the guest agent, bash, git, curl, the CA certificates, `gitlab-runner-helper` and DHCP (GI-020 to GI-034, GI-040) |
+| `ghcr.io/phoban01/flintlock-runner/guest-baker` | `<version>` | one index for `linux/amd64` and `linux/arm64`: the baker image of `guest/baker`, which a project's guest image build runs to bake its kind cluster spec: `flr-kind`, `flr-bake`, `docker-store.sh`, skopeo, curl, kustomize and helm (GI-116, GI-117) |
 
 `<version>` is the tag without its `v`: `v1.2.0-rc.1` publishes
 `flr:1.2.0-rc.1`. No other tag is ever pushed: no `latest`, no `1` or `1.2`,
