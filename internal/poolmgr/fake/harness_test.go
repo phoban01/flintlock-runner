@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"runtime"
 	"sync"
 	"testing"
 	"time"
@@ -452,6 +453,30 @@ func (h *harness) waitDeletion(host *stubHost, uid string) {
 		case <-h.ctx.Done():
 			h.t.Fatalf("waiting for host %s to delete %s: %v", host.name, uid, h.ctx.Err())
 		}
+	}
+}
+
+// waitForgotten blocks until the fake no longer holds a MicroVM with uid. A
+// deletion that has no Event of its own ends in two steps: the Host deletes
+// the MicroVM, then the fake forgets it under its lock. waitDeletion sees
+// only the first step; this waits for the second, which nothing announces.
+func (h *harness) waitForgotten(uid string) {
+	h.t.Helper()
+	for {
+		held := false
+		for _, r := range h.pm.VMs() {
+			if r.UID == uid {
+				held = true
+				break
+			}
+		}
+		if !held {
+			return
+		}
+		if err := h.ctx.Err(); err != nil {
+			h.t.Fatalf("waiting for the fake to forget %s: %v", uid, err)
+		}
+		runtime.Gosched()
 	}
 }
 
