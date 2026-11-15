@@ -1,0 +1,307 @@
+# Proposal: a kind cluster spec that a project bakes into its own guest image
+
+**Status:** agreed, 2026-11-14
+**From:** flintlock-runner
+**Date:** 2026-11-14
+
+## Summary
+
+A project describes the kind cluster its e2e suite needs in one file, the
+cluster spec. The file names the kind configuration, the images to load into
+the nodes, and the manifests to apply. The project builds its own guest
+image from the kind image, with the spec and every image and manifest it
+names inside. The Runner's Profile for that project boots the image, and its
+create hook makes the cluster from the spec. battery then hands out each
+MicroVM with the cluster ready, and the job does no setup for the suite's
+dependencies.
+
+## The problem
+
+An e2e suite spends much of its time before the first test. battery-operator's
+suite is an example. On each run it does these steps:
+
+1. It builds three images.
+2. It makes a 3-node kind cluster from `test/e2e/kind-config.yaml`.
+3. It loads the three images into the nodes.
+4. It installs cert-manager and waits for its webhook, for up to 5 minutes.
+5. It deploys the Manifests and waits for them.
+
+`flr/kind-ready` makes a cluster in advance, but only the one cluster that
+the kind image describes. battery-operator's suite needs three nodes, node
+labels and a pinned node image. It cannot use that cluster, so it saves
+nothing. Each new option on the kind image, such as the Docker socket for
+CAPD (#153) or `FLR_KIND_VOLUMES` (#157), fits one more suite. The options
+are guesses, in the guest image, about each project's tests.
+
+This proposal moves the cluster's description to the project, and moves
+steps 2 and 4 into the Pool. Steps 1, 3 and 5 stay in the job, because they
+work on the code under test, which changes on each commit.
+
+## The cluster spec
+
+Many suites need only one node and a few dependencies. Their spec is
+short. After `apiVersion` and `kind`, only `name` is required:
+
+```yaml
+apiVersion: flintlock-runner.dev/v1alpha1
+kind: KindCluster
+name: my-operator-e2e
+manifests:
+  - url: https://github.com/cert-manager/cert-manager/releases/download/v1.20.2/cert-manager.yaml
+    sha256: ...
+    wait:
+      - deployment/cert-manager-webhook -n cert-manager
+```
+
+With no `kindConfig`, the cluster is the kind image's own: one node, from
+the node image the kind image has already. With no `volumes`, Docker
+Engine's volumes stay on the tmpfs, which has room for one node.
+
+A suite that needs more says so. battery-operator's spec, for example as
+`.flr/kind-cluster.yaml`:
+
+```yaml
+apiVersion: flintlock-runner.dev/v1alpha1
+kind: KindCluster
+# The kind cluster's name: the name the suite expects.
+name: battery-operator-e2e
+# Where Docker Engine keeps its volumes: tmpfs, tmpfs:SIZE or disk
+# (FLR_KIND_VOLUMES, GI-081 to GI-084).
+volumes: disk
+# The kind configuration, inline or as a path relative to this file.
+# Three nodes here: a control plane, and two workers with the Host label.
+kindConfig: ../test/e2e/kind-config.yaml
+# Images to load into every node, each by digest.
+images:
+  - ghcr.io/liquidmetal-dev/poolmgrd:0.6.0@sha256:...
+# Manifests to apply, in order, once every node is Ready. Each entry has
+# one source: url, path, kustomize or helm.
+manifests:
+  - url: https://github.com/cert-manager/cert-manager/releases/download/v1.20.2/cert-manager.yaml
+    sha256: ...
+    # What to wait for before the next entry, and before the cluster
+    # counts as ready.
+    wait:
+      - deployment/cert-manager -n cert-manager
+      - deployment/cert-manager-cainjector -n cert-manager
+      - deployment/cert-manager-webhook -n cert-manager
+  # The next two entries show the other sources. battery-operator does
+  # not need them.
+  # A kustomize directory, relative to this file.
+  - kustomize: ../test/e2e/dependencies
+  # A Helm chart, from an OCI registry or a chart repository.
+  - helm:
+      chart: oci://ghcr.io/example/charts/thing
+      version: 1.4.2
+      digest: sha256:...
+      release: thing
+      namespace: thing
+      values: [../test/e2e/thing-values.yaml]
+    wait:
+      - deployment/thing -n thing
+```
+
+The rules:
+
+- Every image that the spec names is named by digest: the node images in
+  the kind configuration, and the images under `images`. A tag alone is
+  refused, so that two builds of one spec give the same guest image.
+- Every manifest by URL has a `sha256`, and every chart has a `digest`. The
+  build checks them. For a chart from a chart repository, the digest is
+  the sha256 of the chart's archive.
+- The build finds the images that the manifests start, such as
+  cert-manager's, and bakes them too. It renders each kustomize directory
+  and each chart, with its values, and reads every `image:` field. It
+  writes each image and the digest it got to `/etc/flr/images.lock`.
+  `images` is for the other images: the ones the job's own deploy starts
+  later, such as poolmgrd. A manifest that names an image by tag can give
+  another image on a later build. The lock file shows which one a build
+  got.
+- A spec's own `kindConfig` gets what the kind image's configuration has.
+  `flr-kind-cluster` adds the containerd patch for the Host's registry
+  mirror and, on the control plane, the Docker socket for CAPD (GI-080).
+  The project's file does not need to know about either.
+- The spec's **digest** is the sha256 of the spec and of every file it names
+  by path, in a fixed order. That includes the files in each kustomize
+  directory and each values file. It identifies the cluster that the spec
+  makes.
+
+How each source is baked and applied:
+
+| Source | At build time | In the create hook |
+|---|---|---|
+| `url`, `path` | The build copies the file, after it checks the `sha256` of a URL. | `kubectl apply` |
+| `kustomize` | The build renders the directory with `kustomize build` and keeps the YAML. | `kubectl apply` |
+| `helm` | The build pulls the chart's archive and checks its digest. It copies the values files. | `helm install`, from the archive |
+
+A chart is installed with `helm install`, not rendered at build time with
+`helm template`. Helm then runs the chart's hooks in their order, and keeps
+its record of the release. A suite that runs `helm upgrade` or
+`helm uninstall` on the chart then works as it does on a laptop. The kind
+image gets the `helm` command for this.
+
+A kustomize directory is different: rendering it at build time gives the
+same YAML as rendering it in the hook. A directory with a remote base
+fetches that base when the image is built, so pin the base by a tag or a
+commit.
+
+## The project's guest image
+
+The project builds a guest image from the kind image of a flintlock-runner
+release:
+
+```dockerfile
+FROM ghcr.io/phoban01/flintlock-runner/guest-rootfs-kind@sha256:... AS base
+
+FROM ghcr.io/phoban01/flintlock-runner/guest-baker@sha256:... AS bake
+COPY . /src
+RUN flr-bake /src/.flr/kind-cluster.yaml /out
+
+FROM base
+COPY --from=bake /out/ /
+```
+
+`guest-baker` is a new image in each release. It has skopeo, curl,
+kustomize, helm and `flr-bake`. `flr-bake` reads the spec and writes these
+files under `/out`:
+
+| Path in the guest | What |
+|---|---|
+| `/etc/flr/kind-cluster.yaml` | The spec, with the kind configuration and the manifests by path made inline |
+| `/etc/flr/kind-cluster.digest` | The spec's digest |
+| `/var/lib/docker/...` | Each node image that the kind image does not have already, in Docker Engine's image store, through `docker-store.sh` |
+| `/var/lib/flr/images/<n>.tar` | Each image under `images`, as a docker-archive |
+| `/var/lib/flr/manifests/<n>.yaml` | Each manifest by URL or path, and each rendered kustomize directory |
+| `/var/lib/flr/charts/<n>.tgz` | Each chart, with its values files beside it |
+| `/etc/flr/images.lock` | Each image the build found in the manifests, with its digest |
+
+The node images go into Docker Engine's image store, because Docker Engine
+runs the nodes. The other images go in as archives, because they go into
+the nodes' containerd, and `kind load image-archive` puts them there. This
+also means that `docker-store.sh`, which refuses layers with whiteouts,
+only has to handle node images, as it does now.
+
+The project's CI builds and pushes the image when the spec or a file it
+names changes. A project with arm64 Hosts builds it for both architectures,
+as the release builds the kind image.
+
+## The Profile
+
+The Runner's configuration gets one Profile for the project. It boots the
+project's image, and its create hook makes the cluster:
+
+```yaml
+- name: battery-operator-e2e
+  arch: amd64
+  vcpu: 4
+  memory_mb: 8192
+  images: [flr/battery-operator-e2e]
+  kernel:
+    image: ghcr.io/phoban01/flintlock-runner/guest-kernel@sha256:...
+    filename: boot/vmlinux
+  rootfs: ghcr.io/phoban01/battery-operator/e2e-guest@sha256:...
+  pool:
+    size: 1
+    create_hooks:
+      - /usr/local/bin/flr-kind-cluster --spec /etc/flr/kind-cluster.yaml
+```
+
+With `--spec`, `flr-kind-cluster` does these steps:
+
+1. It puts Docker Engine's volumes where `volumes` says (GI-081 to GI-084).
+2. It makes the cluster from the kind configuration.
+3. It loads each archive under `/var/lib/flr/images` into every node.
+4. It applies each entry under `manifests` in order, with `kubectl apply`
+   or `helm install`, and waits for what the entry names.
+5. It writes the spec's digest to `/run/flr-guest/kind-cluster.digest`.
+
+Nothing in these steps uses the network. A step that fails makes the hook
+fail, and battery replaces the MicroVM (`hook_failure_policy`).
+
+## The job
+
+The job asks for `image: flr/battery-operator-e2e` and runs one command
+before its tests:
+
+```sh
+flr-kind-cluster --spec .flr/kind-cluster.yaml
+```
+
+The command finds the digest of the project's spec, as the job's checkout
+has it, and compares it with the digest in `/run/flr-guest`:
+
+- If they are the same, it writes the kubeconfig and returns at once.
+- If they are different, it logs a warning that names both digests, deletes
+  the cluster, and makes a new one from the job's spec. This happens on a
+  branch that changes the spec. The job is slow, but it tests what the
+  branch asks for.
+
+The suite then runs as it does on a laptop. battery-operator's suite uses
+an existing cluster of its name as it is (`test/e2e/setup_test.go`).
+cert-manager's apply changes nothing, and its waits pass at once.
+
+## Costs and limits
+
+- **Memory.** Each warm MicroVM keeps its cluster running while it waits.
+  One node can run in 4 GiB, the smallest size that docs/docker-and-kind.md
+  recommends. Three nodes, as battery-operator has, take most of 8 GiB.
+  Keep these Pools small.
+- **Space in the nodes.** On an 8 GiB MicroVM, one node fits on the default
+  tmpfs (25 percent of the MicroVM's memory) with about 1.5 GB of images,
+  as with the kind image now (docs/docker-and-kind.md). More nodes need
+  more room, because `kind load` puts a copy of each image in every node,
+  and each node's `/var` takes about 390 MB at the start. A spec with more
+  than one node should say `volumes: disk` or a larger `tmpfs:SIZE`. The
+  hook checks the space before it loads the images, and fails with a
+  message that says so.
+- **The root disk.** A MicroVM's root disk is 10 GiB. The kind node image
+  takes about 1 GiB. The archives and their copies in the nodes take the
+  rest. `flr-bake` prints the total, so that a project sees it at build
+  time.
+- **A new digest in the Runner's configuration.** When the project's image
+  changes, the Profile needs its new digest (CF-027). A tag works, with the
+  warning that CF-027 gives, and then the Pool may boot an older image than
+  the job's spec. The digest check in the job catches that.
+- **The images under test.** The job still builds and loads them. A later
+  step can avoid the load: the job pushes them to a registry on the Host,
+  and the nodes pull from it.
+
+## Not in this proposal
+
+- The Runner reading the spec from the project's repository through
+  GitLab's API, and rolling the Pool when it changes. That needs no image
+  build, but a token and new Runner code. The spec format here works for it
+  too, so it can come later.
+- Snapshots of a ready cluster (#152).
+- Loading an image into some nodes only, to save space. kind's `load`
+  takes `--nodes`, so a later `nodes` field on an image can add it.
+- `flr/kind-ready` stays as it is, for jobs that are happy with the kind
+  image's own cluster.
+
+## Decisions
+
+1. The spec lives at `.flr/kind-cluster.yaml` in the project's repository.
+2. A developer can make the same cluster from the spec on a laptop.
+   `guest-baker` gets kind, kubectl and `flr-kind-cluster`, and runs
+   `flr-kind-cluster --spec` with the laptop's Docker socket mounted. The
+   images then come from their registries, because a laptop has no baked
+   archives. This comes last.
+
+## The work
+
+Each step is one issue, in this order. Each issue's PR writes its EARS
+requirements in `docs/requirements/13-guest-image.md`, in the range of IDs
+the issue reserves.
+
+1. #161: the spec, its format, its checks and its digest. One Go package reads
+   it, so that `flr-bake` and `flr-kind-cluster` agree on both.
+2. #162: `flr-bake` and the `guest-baker` image, which each release publishes:
+   node images, image archives, manifests by URL and path, kustomize,
+   charts, the images found in manifests, and the lock file.
+3. #163: `flr-kind-cluster --spec`, the create hook's steps, the kind image's
+   additions to a project's kind configuration, `helm` in the kind image,
+   and the space check. In the job, the digest check, and a new cluster
+   when the digests differ.
+4. #164: battery-operator's spec, its guest image and its Profile, and a run on a
+   real Host that times the job against today's suite.
+5. #165: the laptop command.
