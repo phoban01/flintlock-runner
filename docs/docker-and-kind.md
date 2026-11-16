@@ -210,6 +210,9 @@ the spec and everything it names inside
 (`docs/proposals/kind-cluster-spec.md`). `flr-kind check` checks a spec,
 and `flr-kind digest` prints its digest (GI-090 to GI-099).
 
+[A kind cluster ready at job start](kind-cluster-spec.md) is the guide for
+a project. This section has the details.
+
 The build starts from the kind image and the `guest-baker` image of one
 release. Take both digests from that release's `images.txt`. This
 Containerfile, for example as `.flr/Containerfile`, builds the image:
