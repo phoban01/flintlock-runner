@@ -19,6 +19,7 @@ exists is:
 | `docs/architecture.md` | What the system is, why it is shaped this way, what was found upstream, delivery order, risks |
 | `docs/requirements/` | The normative specification: EARS requirements in ten documents, traced with duvet |
 | `docs/PLAN.md` | How the work is split into work packages and what "done" means |
+| `docs/kind-cluster-spec.md` | How a project bakes its kind cluster into a guest image, so that its e2e job starts with the cluster ready |
 | `cmd/`, `internal/` | The package skeleton below: interfaces, configuration schema, empty fakes |
 | `.duvet/config.toml` | duvet configuration (sources, specifications, reports, snapshot) |
 | `hack/duvet-coverage.sh` | The per-PR requirement coverage gate |
