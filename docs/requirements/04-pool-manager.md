@@ -88,6 +88,15 @@ size is the amount of idle warm capacity, not a ceiling on concurrent Jobs.
   the `user-data` entry.
 - **PL-026** The Scheduler SHALL NOT place any Job-specific value in the
   template, because the template is instantiated before any Job exists.
+- **PL-027** Where a Profile sets `free_page_reporting`, the Scheduler SHALL
+  add a `balloon` with `free_page_reporting` set to the Pool's MicroVM
+  template.
+
+A guest keeps every page it has touched until its MicroVM is deleted, so a
+busy MicroVM soon holds its full `memory_in_mb`. With a balloon and free
+page reporting, the guest reports the pages it frees, and the VMM returns
+them to the Host. This needs a flintlock and a battery that know the
+`balloon` field.
 
 ## Claiming {#claiming}
 

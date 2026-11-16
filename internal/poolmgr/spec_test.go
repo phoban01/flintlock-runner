@@ -197,6 +197,30 @@ func TestTemplateCarriesTheRunnerAndProfileLabels(t *testing.T) {
 	}
 }
 
+//= docs/requirements/04-pool-manager.md#microvm-template
+//= type=test
+//# Where a Profile sets `free_page_reporting`, the Scheduler SHALL
+//# add a `balloon` with `free_page_reporting` set to the Pool's MicroVM
+//# template.
+
+// TestTemplateBalloonFollowsFreePageReporting checks that a Profile with
+// free_page_reporting gets a balloon with it, and that a Profile without it
+// gets no balloon at all.
+func TestTemplateBalloonFollowsFreePageReporting(t *testing.T) {
+	t.Parallel()
+	profile := testProfile("kind", 1)
+	profile.FreePageReporting = true
+	tmpl := templateOf(t, specFor(t, profile, "host-a"))
+	if !tmpl.GetBalloon().GetFreePageReporting() {
+		t.Errorf("balloon = %+v, want free_page_reporting", tmpl.GetBalloon())
+	}
+
+	tmpl = templateOf(t, specFor(t, testProfile("small", 1), "host-a"))
+	if tmpl.Balloon != nil {
+		t.Errorf("balloon = %+v, want none for a profile without free_page_reporting", tmpl.GetBalloon())
+	}
+}
+
 //= docs/requirements/04-pool-manager.md#pool-declaration
 //= type=test
 //# The Scheduler SHALL set the Pool's replenishment strategy to

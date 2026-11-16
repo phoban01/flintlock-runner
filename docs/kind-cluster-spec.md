@@ -220,6 +220,9 @@ installs each manifest and chart, and waits for each `wait` item. If a
 step fails, battery replaces the MicroVM. `pool.size` is the number of
 MicroVMs that battery keeps ready, each with a running cluster.
 
+A kind guest keeps the memory it touches. To return it to the Host, see
+[Host memory for kind guests](docker-and-kind.md#host-memory-for-kind-guests).
+
 ## 4. Use it in the job
 
 Ask for the Profile's image, and run `flr-kind-cluster --spec` on the spec
