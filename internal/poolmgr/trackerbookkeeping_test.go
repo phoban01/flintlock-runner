@@ -69,6 +69,72 @@ func TestOneMicroVMLeavesThePolledCountOnce(t *testing.T) {
 	}
 }
 
+//= docs/requirements/04-pool-manager.md#capacity-tracking
+//= type=test
+//# When an event reports a MicroVM in a Pool becoming available, claimed,
+//# released or deleted, the Scheduler SHALL update that Pool's available
+//# count before the next capacity computation.
+
+// TestAHostDrainTakesTheMicroVMOut sends VM_DELETED_ON_HOST_DRAIN, which
+// battery v0.6.0 and later emit for each MicroVM a Host drain deletes, for
+// a warm MicroVM an event named. The Pool reads one fewer at once, with no
+// poll to repair it.
+func TestAHostDrainTakesTheMicroVMOut(t *testing.T) {
+	t.Parallel()
+	ctx, cancel := context.WithTimeout(context.Background(), testTimeout)
+	defer cancel()
+
+	pool := ref("small")
+	events := newScriptedEvents()
+	admin := newStubAdmin(1, poolmgr.PoolStatus{})
+	tracker := newTrackerWith(t, events, admin, nil, trackerPollInterval, nil)
+	tracker.run(t)
+	events.awaitSubscribed(t, ctx)
+	tracker.Track(pool, true)
+	admin.awaitGet(t, ctx, 1)
+
+	events.send(vmEvent(pool, poolmgrv1.EventType_VM_AVAILABLE, "vm-1", 1))
+	tracker.await(t, ctx, "the event to name a warm microvm", func() bool {
+		return tracker.Available(pool) == 1
+	})
+	admin.failWith(errors.New("no more polls in this test"))
+
+	events.send(vmEvent(pool, poolmgrv1.EventType_VM_DELETED_ON_HOST_DRAIN, "vm-1", 2))
+	tracker.awaitEvent(t, ctx, "the drain event", func(e *poolmgr.Event) bool {
+		return e.Type == poolmgrv1.EventType_VM_DELETED_ON_HOST_DRAIN
+	})
+	if got := tracker.Available(pool); got != 0 {
+		t.Errorf("available = %d after the drain deleted the only warm microvm, want 0", got)
+	}
+}
+
+// TestAHostDrainOfAnUnnamedMicroVMIsPolled drains a MicroVM that only a
+// poll counted. The event does not say which count it left, so the Tracker
+// asks the Pool Manager for its own figures.
+func TestAHostDrainOfAnUnnamedMicroVMIsPolled(t *testing.T) {
+	t.Parallel()
+	ctx, cancel := context.WithTimeout(context.Background(), testTimeout)
+	defer cancel()
+
+	pool := ref("small")
+	events := newScriptedEvents()
+	admin := newStubAdmin(2, poolmgr.PoolStatus{Available: 2})
+	tracker := newTrackerWith(t, events, admin, nil, trackerPollInterval, nil)
+	tracker.run(t)
+	events.awaitSubscribed(t, ctx)
+	tracker.Track(pool, true)
+	tracker.await(t, ctx, "the poll to count two warm microvms", func() bool {
+		return tracker.Available(pool) == 2
+	})
+
+	admin.answer(2, poolmgr.PoolStatus{Available: 1})
+	polls := admin.calls()
+	events.send(vmEvent(pool, poolmgrv1.EventType_VM_DELETED_ON_HOST_DRAIN, "vm-x", 1))
+	tracker.await(t, ctx, "the pool manager's own count to be asked for", func() bool {
+		return admin.calls() > polls && tracker.Available(pool) == 1
+	})
+}
+
 // TestAPoolCountedDownToNothingIsPolled replays the backlog a Runner that
 // has just restarted is handed: claims for MicroVMs whose availability
 // events have fallen out of the Pool Manager's outbox window, so the

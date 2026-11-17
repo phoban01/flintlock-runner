@@ -151,6 +151,23 @@ func TestEveryEventTypeIsEmittedAtItsTransition(t *testing.T) {
 	// MicroVM when it is deleted.
 	refill := eventOfType(t, collect(poolmgrv1.EventType_VM_AVAILABLE), poolmgrv1.EventType_VM_AVAILABLE)
 
+	// Draining the Host deletes the available MicroVM and keeps the leased
+	// one, as battery's HostAdmin.DrainHost does. The Pool then refills.
+	if err := h.pm.DrainHost(h.ctx, "host-a"); err != nil {
+		t.Fatalf("DrainHost: %v", err)
+	}
+	drained := eventOfType(t, collect(poolmgrv1.EventType_VM_DELETED_ON_HOST_DRAIN), poolmgrv1.EventType_VM_DELETED_ON_HOST_DRAIN)
+	if drained.VMUID != refill.VMUID {
+		t.Fatalf("VM_DELETED_ON_HOST_DRAIN names %q, want the available microvm %q", drained.VMUID, refill.VMUID)
+	}
+	assertDeleted(t, host, refill.VMUID)
+	h.waitForgotten(refill.VMUID)
+	if _, err := h.client.Heartbeat(h.ctx, third.LeaseID); err != nil {
+		t.Fatalf("Heartbeat after the drain = %v, want the leased microvm kept", err)
+	}
+	h.advance(testInterval)
+	refill = eventOfType(t, collect(poolmgrv1.EventType_VM_AVAILABLE), poolmgrv1.EventType_VM_AVAILABLE)
+
 	// Deleting the Pool once its Lease is released: every MicroVM it held
 	// goes with it, each with its own event.
 	if err := h.client.ReleaseVM(h.ctx, third.LeaseID); err != nil {
