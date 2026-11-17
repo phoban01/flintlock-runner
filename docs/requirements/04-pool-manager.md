@@ -58,6 +58,9 @@ conforming fake and then against a build of `main`.
 - **PL-017** If two Runners would declare the same Pool name in the same
   namespace, the Runner SHALL use its own namespace for its Pools so that
   they do not collide.
+- **PL-018** Where a Profile sets `free_page_reporting`, the Scheduler SHALL
+  append to the Pool's create commands, after the Profile's create hooks, a
+  command that drops the guest's page cache.
 
 Declaring Pools from Profiles keeps one source of truth: an operator
 describes Profiles once and the Runner materialises the corresponding Pools,
@@ -95,8 +98,9 @@ size is the amount of idle warm capacity, not a ceiling on concurrent Jobs.
 A guest keeps every page it has touched until its MicroVM is deleted, so a
 busy MicroVM soon holds its full `memory_in_mb`. With a balloon and free
 page reporting, the guest reports the pages it frees, and the VMM returns
-them to the Host. This needs a flintlock and a battery that know the
-`balloon` field.
+them to the Host. Most of a warm guest's memory is page cache, which the
+guest keeps, so the Pool drops it once the create hooks have run (PL-018).
+This needs a flintlock and a battery that know the `balloon` field.
 
 ## Claiming {#claiming}
 

@@ -91,12 +91,33 @@ func (specBuilder) Build(p config.Profile, in SpecInput) (PoolSpec, error) {
 		Size:                     int32(p.Pool.Size), //nolint:gosec // sizes are validated to be small and positive
 		FlintlockHosts:           append([]string(nil), in.Hosts...),
 		Replenishment:            strategy,
-		CreateCommands:           append([]string(nil), p.Pool.CreateHooks...),
+		CreateCommands:           createCommands(p),
 		PreLeaseCommands:         append([]string(nil), p.Pool.PreLeaseHooks...),
 		HookFailurePolicy:        policy,
 		HeartbeatInterval:        p.Pool.HeartbeatInterval,
 		HeartbeatExpiryThreshold: p.Pool.HeartbeatExpiry,
 	}, nil
+}
+
+// DropCachesCommand drops the guest's page cache. It runs in a shell, as the
+// guest agent runs every create command.
+const DropCachesCommand = "sync; echo 3 > /proc/sys/vm/drop_caches"
+
+//= docs/requirements/04-pool-manager.md#pool-declaration
+//# Where a Profile sets `free_page_reporting`, the Scheduler SHALL
+//# append to the Pool's create commands, after the Profile's create hooks, a
+//# command that drops the guest's page cache.
+
+// createCommands is the Profile's create hooks, then, with
+// free_page_reporting, DropCachesCommand. Most of a guest's memory after its
+// hooks is page cache, which free page reporting can return only once the
+// guest drops it (PL-018).
+func createCommands(p config.Profile) []string {
+	cmds := append([]string(nil), p.Pool.CreateHooks...)
+	if p.FreePageReporting {
+		cmds = append(cmds, DropCachesCommand)
+	}
+	return cmds
 }
 
 // poolRef is the Pool's identity: the configured Pool name or the Profile

@@ -145,6 +145,9 @@ use. Or set `free_page_reporting: true` on the Profile:
 
 The Pool's MicroVMs then get a balloon with free page reporting. Each
 guest reports the pages it frees, and the VMM returns them to the Host.
+The Pool also runs a last create command that drops the guest's page
+cache, so a waiting guest holds little more than its working set. The
+first Job then reads some files from disk again.
 The guest kernel has `CONFIG_VIRTIO_BALLOON` and `CONFIG_PAGE_REPORTING`
 already. This needs a flintlock and a battery that know the `balloon`
 field (flintlock#1414, battery#161). An older flintlock or battery drops

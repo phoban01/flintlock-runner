@@ -335,6 +335,35 @@ func TestPoolSettingsReachTheSpec(t *testing.T) {
 	}
 }
 
+//= docs/requirements/04-pool-manager.md#pool-declaration
+//= type=test
+//# Where a Profile sets `free_page_reporting`, the Scheduler SHALL
+//# append to the Pool's create commands, after the Profile's create hooks, a
+//# command that drops the guest's page cache.
+
+// TestFreePageReportingDropsCachesLast checks that the drop-caches command
+// comes after every create hook, and only with free_page_reporting.
+func TestFreePageReportingDropsCachesLast(t *testing.T) {
+	t.Parallel()
+	profile := testProfile("kind", 1)
+	profile.Pool.CreateHooks = []string{"cloud-init status --wait", "flr-kind-cluster"}
+	profile.FreePageReporting = true
+
+	got := specFor(t, profile, "host-a").CreateCommands
+	want := []string{"cloud-init status --wait", "flr-kind-cluster", poolmgr.DropCachesCommand}
+	if strings.Join(got, "\n") != strings.Join(want, "\n") {
+		t.Errorf("create commands = %q, want %q", got, want)
+	}
+	if !strings.Contains(poolmgr.DropCachesCommand, "/proc/sys/vm/drop_caches") {
+		t.Errorf("DropCachesCommand = %q, want it to write /proc/sys/vm/drop_caches", poolmgr.DropCachesCommand)
+	}
+
+	profile.FreePageReporting = false
+	if got := specFor(t, profile, "host-a").CreateCommands; len(got) != 2 {
+		t.Errorf("create commands = %q, want only the profile's hooks", got)
+	}
+}
+
 //= docs/requirements/04-pool-manager.md#microvm-template
 //= type=test
 //# The Scheduler SHALL base64-encode every value placed in the template's
