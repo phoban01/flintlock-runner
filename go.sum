@@ -332,8 +332,8 @@ github.com/kylelemons/godebug v1.1.0 h1:RPNrshWIDI6G2gRW9EHilWtl7Z6Sb1BR0xunSBf0
 github.com/kylelemons/godebug v1.1.0/go.mod h1:9/0rRGxNHcop5bhtWyNeEfOS8JIWk580+fNqagV/RAw=
 github.com/liquidmetal-dev/battery v0.5.0 h1:dhuvUV08V69OZc4/uWhdwTXdl5GtBNgS728HwF/uIok=
 github.com/liquidmetal-dev/battery v0.5.0/go.mod h1:rjsnzii3KuOcfNNFSwranXGsQmVaLK03LmfdV0+fHsQ=
-github.com/liquidmetal-dev/flintlock/api v0.0.0-20261116225821-b4e8c19cb81d h1:vyWce74eg3/HybJ0UlJRklcT9LrJoqwNKwfURCaK6GI=
-github.com/liquidmetal-dev/flintlock/api v0.0.0-20261116225821-b4e8c19cb81d/go.mod h1:gN4eAzhCTKbmjnnohUZQ9Q2qwtnMLcVi+KnHo3+xgxM=
+github.com/liquidmetal-dev/flintlock/api v0.0.0-20261117105938-a8472c836d95 h1:Mt34BybPudxVvdqCYkOXNVmmuWifqwTopjEjPPlerO0=
+github.com/liquidmetal-dev/flintlock/api v0.0.0-20261117105938-a8472c836d95/go.mod h1:gN4eAzhCTKbmjnnohUZQ9Q2qwtnMLcVi+KnHo3+xgxM=
 github.com/mattn/go-colorable v0.1.15 h1:+u9SLTRGnXv73cEsnsmoZBom+dMU88B2M0aDcWy0/jY=
 github.com/mattn/go-colorable v0.1.15/go.mod h1:6LmQG8QLFO4G5z1gPvYEzlUgJ2wF+stgPZH1UqBm1s8=
 github.com/mattn/go-isatty v0.0.24 h1:tGZZoVgT/KiqK1c8ocVLeDS8BSWMRd47J3Lbz7vsReI=

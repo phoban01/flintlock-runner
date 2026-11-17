@@ -4,7 +4,7 @@ go 1.26.5
 
 require (
 	github.com/liquidmetal-dev/battery v0.5.0
-	github.com/liquidmetal-dev/flintlock/api v0.0.0-20261116225821-b4e8c19cb81d
+	github.com/liquidmetal-dev/flintlock/api v0.0.0-20261117105938-a8472c836d95
 	github.com/phoban01/battery-operator v0.5.0
 	github.com/prometheus/client_golang v1.24.1
 	github.com/sirupsen/logrus v1.10.0
