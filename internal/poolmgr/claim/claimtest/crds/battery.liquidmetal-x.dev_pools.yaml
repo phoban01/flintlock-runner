@@ -187,7 +187,11 @@ spec:
                             is_read_only).
                           type: boolean
                         sizeInMb:
-                          description: sizeInMb resizes the volume.
+                          description: |-
+                            sizeInMb is flintlock's size_in_mb. flintlock v0.16.0 and v0.17.0 accept it and
+                            do nothing with it for a FULL volume, the only mode the Operator sends: a
+                            volume from a container image is as big as the
+                            Host's MICROVM_BASE_IMAGE_SIZE (hostimage/README.md, HI-087).
                           format: int32
                           minimum: 1
                           type: integer
@@ -202,6 +206,19 @@ spec:
                         rule: has(self.containerSource) != has(self.virtiofsSource)
                     type: array
                     x-kubernetes-list-type: atomic
+                  balloon:
+                    description: |-
+                      balloon attaches a memory balloon to each MicroVM. With
+                      freePageReporting, the guest returns the memory it frees to the Host.
+                      It needs battery v0.7.0 and a flintlockd with flintlock#1415.
+                    properties:
+                      freePageReporting:
+                        description: |-
+                          freePageReporting makes the guest report the memory it frees, and the
+                          VMM return it to the Host. The guest kernel needs
+                          CONFIG_VIRTIO_BALLOON and CONFIG_PAGE_REPORTING.
+                        type: boolean
+                    type: object
                   cpuConfig:
                     description: cpuConfig sets the CPU features presented to the
                       guest.
@@ -369,7 +386,11 @@ spec:
                           is_read_only).
                         type: boolean
                       sizeInMb:
-                        description: sizeInMb resizes the volume.
+                        description: |-
+                          sizeInMb is flintlock's size_in_mb. flintlock v0.16.0 and v0.17.0 accept it and
+                          do nothing with it for a FULL volume, the only mode the Operator sends: a
+                          volume from a container image is as big as the
+                          Host's MICROVM_BASE_IMAGE_SIZE (hostimage/README.md, HI-087).
                         format: int32
                         minimum: 1
                         type: integer

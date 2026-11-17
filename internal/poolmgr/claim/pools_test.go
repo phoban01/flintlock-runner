@@ -94,6 +94,43 @@ func TestPoolIsDeclaredFromTheProfile(t *testing.T) {
 	}
 }
 
+//= docs/requirements/04-pool-manager.md#microvm-template
+//= type=test
+//# Where a Profile sets `free_page_reporting`, the Scheduler SHALL
+//# add a `balloon` with `free_page_reporting` set to the Pool's MicroVM
+//# template.
+
+// TestPoolCarriesTheBalloon declares the Pool of a Profile with
+// free_page_reporting through the claim backend. The Pool the API server
+// holds has the balloon in its template, and GetPool reads it back, so the
+// Declarer sees no difference to correct.
+func TestPoolCarriesTheBalloon(t *testing.T) {
+	t.Parallel()
+	f := newFixture(t)
+	f.profile.FreePageReporting = true
+	b := f.backend()
+	spec := f.spec()
+
+	if _, err := b.CreatePool(f.ctx, spec); err != nil {
+		t.Fatal(err)
+	}
+	pool := &batteryv1alpha1.Pool{}
+	if err := f.kube.Get(f.ctx, client.ObjectKey{Namespace: f.namespace, Name: spec.Ref.Name}, pool); err != nil {
+		t.Fatal(err)
+	}
+	if bl := pool.Spec.Template.Balloon; bl == nil || !bl.FreePageReporting {
+		t.Errorf("pool template balloon = %+v, want freePageReporting", bl)
+	}
+
+	got, err := b.GetPool(f.ctx, spec.Ref)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !got.Spec.Template.GetBalloon().GetFreePageReporting() {
+		t.Errorf("template read back has balloon %v, want free_page_reporting", got.Spec.Template.GetBalloon())
+	}
+}
+
 // TestPoolWithoutAProfileIsInvalid declares a spec whose Profile the
 // backend was not given. It cannot build the node selector, so the spec is
 // refused rather than declared on every Host.

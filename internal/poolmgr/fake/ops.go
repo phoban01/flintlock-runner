@@ -418,6 +418,33 @@ func (p *PoolManager) releaseVM(ctx context.Context, leaseID string) error {
 	return nil
 }
 
+// DrainHost deletes every MicroVM on host that is not leased, each with a
+// VM_DELETED_ON_HOST_DRAIN event, as battery v0.6.0 and later do when
+// HostAdmin.DrainHost marks a Host draining. Leased MicroVMs stay until
+// their Lease ends. The fake drains once: it does not cordon the Host, so
+// the next reconcile can place MicroVMs on it again. The Runner never
+// drains a Host, battery-operator does; the fake has it so that the Runner
+// is tested against the event.
+func (p *PoolManager) DrainHost(ctx context.Context, host string) error {
+	p.mu.Lock()
+	var vms []*vmState
+	for _, vm := range p.vms {
+		if vm.host == host && vm.uid != "" && vm.leaseID == "" && vm.phase != poolmgrv1.VMPhase_DELETING {
+			vms = append(vms, vm)
+		}
+	}
+	p.mu.Unlock()
+
+	sort.Slice(vms, func(i, j int) bool { return vms[i].id < vms[j].id })
+	var firstErr error
+	for _, vm := range vms {
+		if err := p.deleteVM(ctx, vm, poolmgrv1.EventType_VM_DELETED_ON_HOST_DRAIN); err != nil && firstErr == nil {
+			firstErr = err
+		}
+	}
+	return firstErr
+}
+
 // unavailable reports the injected UNAVAILABLE period (TD-010). Every RPC
 // checks it through the server interceptors.
 func (p *PoolManager) unavailable() error {

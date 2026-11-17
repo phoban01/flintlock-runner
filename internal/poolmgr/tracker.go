@@ -818,6 +818,16 @@ func (t *PoolTracker) apply(event *Event) {
 		p.available.remove(event.VMUID)
 		p.leased.remove(event.VMUID)
 
+	case poolmgrv1.EventType_VM_DELETED_ON_HOST_DRAIN:
+		// A drain deletes a MicroVM that is not leased, but the event does
+		// not say whether it was available, provisioning or quarantined.
+		// One that no event named was only counted by a poll, so the next
+		// poll says which count it left.
+		if !p.available.remove(event.VMUID) && !p.provisioning.remove(event.VMUID) &&
+			!p.quarantined.remove(event.VMUID) {
+			p.needsPoll = true
+		}
+
 	case poolmgrv1.EventType_VM_HOOK_FAILED:
 		p.available.remove(event.VMUID)
 		leaves(&p.provisioning, event.VMUID)
