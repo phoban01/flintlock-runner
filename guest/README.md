@@ -57,7 +57,7 @@ the kernel and nothing else. A Profile names the file with
 | What | Version | Why |
 |---|---|---|
 | Ubuntu with systemd as init | 24.04, base image pinned by digest | The same base as the trial's guest. `flintlockd` unpacks the image onto an ext4 block device, and the kernel boots it with `root=/dev/vda`. |
-| flintlock's guest agent, enabled at boot | 0.4.0, `.deb` checked against the release's `checksums.txt` | The Executor runs every Stage through it, over vsock (the Guest Transport). |
+| flintlock's guest agent, enabled at boot | 0.5.0, `.deb` checked against the release's `checksums.txt` | The Executor runs every Stage through it, over vsock (the Guest Transport). |
 | bash at `/bin/bash` | Ubuntu 24.04's | The Profile's default shell: every generated Stage script is bash (EX-020). |
 | git, curl and the CA certificates | Ubuntu 24.04's | The scripts clone the repository over HTTPS, and Jobs fetch over HTTPS. |
 | `gitlab-runner-helper` at `/usr/local/bin/gitlab-runner-helper` | the gitlab-runner version `go.mod` pins | The Profile's default helper path. The artifact and cache scripts call it (EX-018). It is built from the same module version as `flr`, so the two agree on its commands. |
