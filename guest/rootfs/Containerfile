@@ -18,7 +18,7 @@
 
 # The guest agent's version, for the rootfs stage and for the published
 # image's labels.
-ARG GUEST_AGENT_VERSION=0.4.0
+ARG GUEST_AGENT_VERSION=0.5.0
 
 # ---------------------------------------------------------------------------
 # helper: gitlab-runner-helper, cross-compiled on the build machine's own
@@ -48,8 +48,8 @@ ARG TARGETARCH
 ARG GITLAB_RUNNER_VERSION
 ARG GUEST_AGENT_VERSION
 # From the release's checksums.txt.
-ARG GUEST_AGENT_SHA256_ARM64=c3c8bd3650d4725806f543fb8fe117ce75c42aa523441f426d71c42104e2f025
-ARG GUEST_AGENT_SHA256_AMD64=07bd0a393dc3416518154e8069705de247df642583f13a1f2983bf89b19ee933
+ARG GUEST_AGENT_SHA256_ARM64=a4f898ff21526e570ca64f4b9a8a6df35bfe8fb1ea4382ad78b4ed3343eb1063
+ARG GUEST_AGENT_SHA256_AMD64=02eaea8959efc17b021a405bc218bce844d4cc8f9a0dd8769e59151c311f0dd6
 COPY guest/rootfs/network/ /etc/systemd/network/
 COPY --from=helper /out/ /
 RUN --mount=type=bind,source=guest/rootfs/configure.sh,target=/tmp/configure.sh \

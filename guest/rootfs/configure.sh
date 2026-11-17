@@ -54,7 +54,7 @@ systemctl enable guest-agent.service systemd-networkd.service systemd-resolved.s
 #
 # The Executor reaches the guest only through the guest agent, over vsock,
 # so the agent must not wait for a network a Job may not need. The unit of
-# guest-agent 0.4.0 orders it after network.target alone; a drop-in cannot
+# guest-agent 0.5.0 orders it after network.target alone; a drop-in cannot
 # take an ordering away, so a release that adds one fails the build here.
 if grep -hE '^(After|Wants|Requires)=' /usr/lib/systemd/system/guest-agent.service | grep -qw network-online.target; then
 	echo "configure: guest-agent.service waits for network-online.target" >&2
