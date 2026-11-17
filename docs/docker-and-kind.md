@@ -149,9 +149,14 @@ The Pool also runs a last create command that drops the guest's page
 cache, so a waiting guest holds little more than its working set. The
 first Job then reads some files from disk again.
 The guest kernel has `CONFIG_VIRTIO_BALLOON` and `CONFIG_PAGE_REPORTING`
-already. This needs a flintlock and a battery that know the `balloon`
-field (flintlock#1414, battery#161). An older flintlock or battery drops
-the field, and the guest keeps its memory as before.
+already.
+
+The Hosts need flintlock v0.17.0 or later. On a cluster fleet, the Runner
+must be later than v1.0.0-rc.17, and battery-operator must be v0.7.0 or
+later. battery v0.7.0 checks that `flintlockd` keeps the balloon. On a
+Host with an older flintlock, battery deletes the MicroVM and the
+provision fails, so the Pool does not fill there. Move the Hosts to
+flintlock v0.17.0 before you set `free_page_reporting`.
 
 ### Where Docker's volumes go
 

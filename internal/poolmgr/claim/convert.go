@@ -231,6 +231,9 @@ func templateFromFlintlock(t *types.MicroVMSpec) batteryv1alpha1.MicroVMTemplate
 			KVMCapabilitiesToDisable: slices.Clone(c.GetKvmCapabilitiesToDisable()),
 		}
 	}
+	if b := t.GetBalloon(); b != nil {
+		out.Balloon = &batteryv1alpha1.Balloon{FreePageReporting: b.GetFreePageReporting()}
+	}
 	return out
 }
 
@@ -300,6 +303,9 @@ func templateToFlintlock(t batteryv1alpha1.MicroVMTemplate) *types.MicroVMSpec {
 			FeaturesToEnable:         slices.Clone(c.FeaturesToEnable),
 			KvmCapabilitiesToDisable: slices.Clone(c.KVMCapabilitiesToDisable),
 		}
+	}
+	if b := t.Balloon; b != nil {
+		out.Balloon = &types.Balloon{FreePageReporting: b.FreePageReporting}
 	}
 	return out
 }
