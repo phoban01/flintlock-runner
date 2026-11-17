@@ -91,12 +91,33 @@ func (specBuilder) Build(p config.Profile, in SpecInput) (PoolSpec, error) {
 		Size:                     int32(p.Pool.Size), //nolint:gosec // sizes are validated to be small and positive
 		FlintlockHosts:           append([]string(nil), in.Hosts...),
 		Replenishment:            strategy,
-		CreateCommands:           append([]string(nil), p.Pool.CreateHooks...),
+		CreateCommands:           createCommands(p),
 		PreLeaseCommands:         append([]string(nil), p.Pool.PreLeaseHooks...),
 		HookFailurePolicy:        policy,
 		HeartbeatInterval:        p.Pool.HeartbeatInterval,
 		HeartbeatExpiryThreshold: p.Pool.HeartbeatExpiry,
 	}, nil
+}
+
+// DropCachesCommand drops the guest's page cache. It runs in a shell, as the
+// guest agent runs every create command.
+const DropCachesCommand = "sync; echo 3 > /proc/sys/vm/drop_caches"
+
+//= docs/requirements/04-pool-manager.md#pool-declaration
+//# Where a Profile sets `free_page_reporting`, the Scheduler SHALL
+//# append to the Pool's create commands, after the Profile's create hooks, a
+//# command that drops the guest's page cache.
+
+// createCommands is the Profile's create hooks, then, with
+// free_page_reporting, DropCachesCommand. Most of a guest's memory after its
+// hooks is page cache, which free page reporting can return only once the
+// guest drops it (PL-018).
+func createCommands(p config.Profile) []string {
+	cmds := append([]string(nil), p.Pool.CreateHooks...)
+	if p.FreePageReporting {
+		cmds = append(cmds, DropCachesCommand)
+	}
+	return cmds
 }
 
 // poolRef is the Pool's identity: the configured Pool name or the Profile
@@ -135,6 +156,11 @@ func poolRef(p config.Profile, namespace string) PoolRef {
 //# spec so that flintlock generates the guest network configuration from
 //# the interfaces.
 
+//= docs/requirements/04-pool-manager.md#microvm-template
+//# Where a Profile sets `free_page_reporting`, the Scheduler SHALL
+//# add a `balloon` with `free_page_reporting` set to the Pool's MicroVM
+//# template.
+
 // buildTemplate renders the Profile as a flintlock MicroVMSpec. Its only
 // inputs are the Profile and the SpecInput, neither of which can carry a
 // Job: the template is instantiated by the Pool Manager long before a Job
@@ -142,7 +168,9 @@ func poolRef(p config.Profile, namespace string) PoolRef {
 // and the namespace is the Runner's (PL-021); allow_guest_agent is set so
 // that the exec Guest Transport has a channel into the guest (PL-012) and
 // add_network_config so that flintlock generates the guest network
-// configuration from the interfaces (PL-022).
+// configuration from the interfaces (PL-022). A Profile with
+// free_page_reporting gets a balloon, so its guests return the memory they
+// free (PL-027).
 func buildTemplate(p config.Profile, in SpecInput) (*types.MicroVMSpec, error) {
 	metadata, err := buildMetadata(p)
 	if err != nil {
@@ -185,6 +213,9 @@ func buildTemplate(p config.Profile, in SpecInput) (*types.MicroVMSpec, error) {
 	if p.Provider != "" {
 		provider := p.Provider
 		spec.Provider = &provider
+	}
+	if p.FreePageReporting {
+		spec.Balloon = &types.Balloon{FreePageReporting: true}
 	}
 	return spec, nil
 }

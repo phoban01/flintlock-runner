@@ -126,6 +126,33 @@ its compressed and its unpacked size.
   A pull into the cluster can fill it, and the pull then fails with no
   space left.
 
+### Host memory for kind guests
+
+A guest keeps every page it has touched until its MicroVM is deleted, the
+page cache included. A kind guest soon holds its full `memory_mb`, even
+with memory free inside. One Host with 32 GiB ran out of memory with four
+5 GiB kind guests and a few small ones on it. Each kind guest had over
+1 GiB free.
+
+So size a Host by the sum of its guests' `memory_mb`, not by what they
+use. Or set `free_page_reporting: true` on the Profile:
+
+```yaml
+- name: kind
+  memory_mb: 8192
+  free_page_reporting: true
+```
+
+The Pool's MicroVMs then get a balloon with free page reporting. Each
+guest reports the pages it frees, and the VMM returns them to the Host.
+The Pool also runs a last create command that drops the guest's page
+cache, so a waiting guest holds little more than its working set. The
+first Job then reads some files from disk again.
+The guest kernel has `CONFIG_VIRTIO_BALLOON` and `CONFIG_PAGE_REPORTING`
+already. This needs a flintlock and a battery that know the `balloon`
+field (flintlock#1414, battery#161). An older flintlock or battery drops
+the field, and the guest keeps its memory as before.
+
 ### Where Docker's volumes go
 
 `FLR_KIND_VOLUMES` chooses where Docker Engine keeps its volumes, and so

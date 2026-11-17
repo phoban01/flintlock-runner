@@ -17,6 +17,7 @@ profiles:
     arch: arm64
     vcpu: 4
     memory_mb: 8192
+    free_page_reporting: true
     kernel:
       image: ghcr.io/example/kernel@sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
       filename: boot/vmlinux

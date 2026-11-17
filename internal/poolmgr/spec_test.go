@@ -197,6 +197,30 @@ func TestTemplateCarriesTheRunnerAndProfileLabels(t *testing.T) {
 	}
 }
 
+//= docs/requirements/04-pool-manager.md#microvm-template
+//= type=test
+//# Where a Profile sets `free_page_reporting`, the Scheduler SHALL
+//# add a `balloon` with `free_page_reporting` set to the Pool's MicroVM
+//# template.
+
+// TestTemplateBalloonFollowsFreePageReporting checks that a Profile with
+// free_page_reporting gets a balloon with it, and that a Profile without it
+// gets no balloon at all.
+func TestTemplateBalloonFollowsFreePageReporting(t *testing.T) {
+	t.Parallel()
+	profile := testProfile("kind", 1)
+	profile.FreePageReporting = true
+	tmpl := templateOf(t, specFor(t, profile, "host-a"))
+	if !tmpl.GetBalloon().GetFreePageReporting() {
+		t.Errorf("balloon = %+v, want free_page_reporting", tmpl.GetBalloon())
+	}
+
+	tmpl = templateOf(t, specFor(t, testProfile("small", 1), "host-a"))
+	if tmpl.Balloon != nil {
+		t.Errorf("balloon = %+v, want none for a profile without free_page_reporting", tmpl.GetBalloon())
+	}
+}
+
 //= docs/requirements/04-pool-manager.md#pool-declaration
 //= type=test
 //# The Scheduler SHALL set the Pool's replenishment strategy to
@@ -308,6 +332,35 @@ func TestPoolSettingsReachTheSpec(t *testing.T) {
 	}
 	if spec.HeartbeatInterval != 7*time.Second || spec.HeartbeatExpiryThreshold != 21*time.Second {
 		t.Errorf("heartbeat interval/expiry = %s/%s, want 7s/21s", spec.HeartbeatInterval, spec.HeartbeatExpiryThreshold)
+	}
+}
+
+//= docs/requirements/04-pool-manager.md#pool-declaration
+//= type=test
+//# Where a Profile sets `free_page_reporting`, the Scheduler SHALL
+//# append to the Pool's create commands, after the Profile's create hooks, a
+//# command that drops the guest's page cache.
+
+// TestFreePageReportingDropsCachesLast checks that the drop-caches command
+// comes after every create hook, and only with free_page_reporting.
+func TestFreePageReportingDropsCachesLast(t *testing.T) {
+	t.Parallel()
+	profile := testProfile("kind", 1)
+	profile.Pool.CreateHooks = []string{"cloud-init status --wait", "flr-kind-cluster"}
+	profile.FreePageReporting = true
+
+	got := specFor(t, profile, "host-a").CreateCommands
+	want := []string{"cloud-init status --wait", "flr-kind-cluster", poolmgr.DropCachesCommand}
+	if strings.Join(got, "\n") != strings.Join(want, "\n") {
+		t.Errorf("create commands = %q, want %q", got, want)
+	}
+	if !strings.Contains(poolmgr.DropCachesCommand, "/proc/sys/vm/drop_caches") {
+		t.Errorf("DropCachesCommand = %q, want it to write /proc/sys/vm/drop_caches", poolmgr.DropCachesCommand)
+	}
+
+	profile.FreePageReporting = false
+	if got := specFor(t, profile, "host-a").CreateCommands; len(got) != 2 {
+		t.Errorf("create commands = %q, want only the profile's hooks", got)
 	}
 }
 

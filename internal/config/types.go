@@ -106,6 +106,9 @@ type Profile struct {
 	// VCPU and MemoryMB size the MicroVM template (PL-020).
 	VCPU     int `yaml:"vcpu"`
 	MemoryMB int `yaml:"memory_mb"`
+	// FreePageReporting gives the MicroVM template a balloon with free page
+	// reporting, so a guest returns the memory it frees to the Host (PL-027).
+	FreePageReporting bool `yaml:"free_page_reporting,omitempty"`
 	// Kernel is the kernel image and command line (PL-020, PL-022).
 	Kernel Kernel `yaml:"kernel"`
 	// Initrd is the optional initial ramdisk image (CF-021).

@@ -79,6 +79,7 @@ func TestLoadFull(t *testing.T) {
 		{"initrd", p.Initrd != nil && p.Initrd.Image == "ghcr.io/example/initrd:6.1"},
 		{"volumes", len(p.AdditionalVolumes) == 2 && p.AdditionalVolumes[1].SizeMB == 20480 && p.AdditionalVolumes[0].ReadOnly},
 		{"provider", p.Provider == "firecracker"},
+		{"free_page_reporting", p.FreePageReporting},
 		{"user_data", strings.HasPrefix(p.UserData, "#cloud-config")},
 		{"transport", p.Transport.Kind == TransportExec},
 		{"user", p.User == "root"},
